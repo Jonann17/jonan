@@ -1,0 +1,16 @@
+[Unit]
+Description=Descargador - baja todas las fotos del servidor a la carpeta local
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/raspberry-webcam-sync
+ExecStart=/usr/bin/python3 /home/pi/raspberry-webcam-sync/descargador/descargador.py
+# --- SELF CHECK ---
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
