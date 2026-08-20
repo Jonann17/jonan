@@ -10,33 +10,47 @@ sigue trabajando desde donde quedó, sin perder ni repetir fotos.
 
 ---
 
-## 🧩 Cómo funciona (las 3 partes)
+## 🧩 Cómo funciona (2 dispositivos)
+
+La cámara y el servidor van en el **mismo Raspberry** (Pi A). Ese Pi también crea
+su propia red WiFi (hotspot) y el **segundo Raspberry** (Pi B) se conecta a esa
+red para descargar las fotos.
 
 ```
-   ┌────────────────────┐        sube fotos        ┌──────────────────────┐
-   │  Raspberry #1      │  ─────────────────────▶  │   Servidor / "nube"  │
-   │  CÁMARA (webcam)   │      HTTP /subir          │  (página web)        │
-   │  foto cada 10 min  │                           │  guarda TODAS las    │
-   └────────────────────┘                           │  fotos               │
-                                                     └──────────┬───────────┘
-                                                                │ descarga
-                                                                ▼
-                                                     ┌──────────────────────┐
-                                                     │  Raspberry #2         │
-                                                     │  DESCARGADOR          │
-                                                     │  baja todas las fotos │
-                                                     └──────────────────────┘
+   ┌───────────────────────────────────────┐
+   │  Pi A  —  CÁMARA + SERVIDOR + HOTSPOT  │
+   │                                        │
+   │  camara.py                             │
+   │   • foto cada 10 min                   │
+   │   • la guarda en su directorio         │  ← fotos_camara  (su propio directorio)
+   │   • la sube por localhost ─────┐       │
+   │                                ▼       │
+   │  servidor.py (la "nube")               │
+   │   • guarda TODAS las fotos     ────────┼─→ nube_fotos     (su "nube")
+   │   • página web + descargas             │
+   │                                        │
+   │  crea la red WiFi "FotosPi"            │  ← hotspot (IP fija 192.168.50.1)
+   └────────────────────┬──────────────────┘
+                        │  Pi B se conecta a esa red WiFi
+                        ▼
+   ┌───────────────────────────────────────┐
+   │  Pi B  —  DESCARGADOR                  │
+   │   • baja todas las fotos a su carpeta  │  ← fotos_descargadas
+   └───────────────────────────────────────┘
 ```
 
-1. **Cámara** (`camara/camara.py`): saca la foto, la guarda en su carpeta local
-   (su propia "nube") y la sube al servidor.
-2. **Servidor** (`servidor/servidor.py`): recibe y guarda **todas** las fotos, y
-   muestra una página web para verlas y descargarlas (una por una o todas en ZIP).
-3. **Descargador** (`descargador/descargador.py`): el segundo Pi baja todas las
-   fotos a su propia carpeta.
+1. **Cámara** (`camara/camara.py`, en Pi A): saca la foto, la guarda en su
+   carpeta local (`fotos_camara`, su propio directorio) y la sube al servidor
+   por `localhost` (no depende del WiFi).
+2. **Servidor** (`servidor/servidor.py`, en Pi A): recibe y guarda **todas** las
+   fotos en `nube_fotos` (la "nube"), y muestra una página web para verlas y
+   descargarlas (una por una o todas en ZIP).
+3. **Descargador** (`descargador/descargador.py`, en Pi B): se conecta al hotspot
+   del Pi A y baja todas las fotos a su propia carpeta.
 
-El **servidor** puede correr en cualquiera de los dos Pi o en una PC de la red.
-Lo más simple: correr el servidor **en el mismo Pi del descargador**.
+Así, en el Pi A las fotos quedan en **su propio directorio** *y* en **su nube**;
+y cualquier celular o PC que se conecte a la red `FotosPi` también puede ver y
+descargar las fotos desde `http://192.168.50.1:8000`.
 
 ---
 
@@ -63,40 +77,38 @@ El número de padrón se configura en `config.ini`.
 
 ## ⚙️ Configuración
 
-Editá **`config.ini`** en cada Raspberry. Lo más importante:
+Editá **`config.ini`** en cada Raspberry. Ya viene listo para esta topología:
 
 - `padron` → tu número de padrón.
-- `[camara] url_servidor` y `[descargador] url_servidor` → la **IP del equipo
-  que corre el servidor**. Por ejemplo `http://192.168.1.100:8000`.
+- **Pi A** (cámara + servidor): `[camara] url_servidor = http://127.0.0.1:8000`
+  (localhost, porque la cámara y el servidor están en el mismo Pi).
+- **Pi B** (descargador): `[descargador] url_servidor = http://192.168.50.1:8000`
+  (la IP fija del hotspot del Pi A).
 - `carpeta_local` / `carpeta_nube` → dónde se guardan las fotos.
-
-Para averiguar la IP del servidor, en ese equipo ejecutá: `hostname -I`.
 
 ---
 
 ## 🚀 Instalación
 
-En cada Raspberry, cloná el repo en `/home/pi/raspberry-webcam-sync` y corré el
-script correspondiente. (Si lo ponés en otra ruta, ajustá las rutas de los
-archivos `.service` en `systemd/`.)
+En cada Raspberry, cloná el repo en `/home/pi/raspberry-webcam-sync`. (Si lo
+ponés en otra ruta, ajustá las rutas de los archivos `.service` en `systemd/`.)
 
-### Raspberry #1 — la cámara
+### Pi A — cámara + servidor + hotspot
 ```bash
-sudo bash scripts/instalar_camara.sh
+sudo bash scripts/configurar_hotspot.sh    # crea la red WiFi "FotosPi"
+sudo bash scripts/instalar_servidor.sh     # la nube (página web)
+sudo bash scripts/instalar_camara.sh       # saca y sube las fotos
 ```
 
-### Equipo servidor (la nube)
+### Pi B — descargador
 ```bash
-sudo bash scripts/instalar_servidor.sh
-```
-
-### Raspberry #2 — el descargador
-```bash
-sudo bash scripts/instalar_descargador.sh
+sudo bash scripts/conectar_a_hotspot.sh    # se conecta a la red "FotosPi"
+sudo bash scripts/instalar_descargador.sh  # baja todas las fotos
 ```
 
 Cada script instala las dependencias, activa el arranque automático al prender
-(`systemctl enable`) y deja el programa corriendo.
+(`systemctl enable`) y deja el programa corriendo. El hotspot y las conexiones
+WiFi también quedan configurados para levantarse solos al prender.
 
 ---
 
@@ -119,53 +131,25 @@ Así, tras un corte de luz o un reinicio, todo sigue funcionando solo.
 
 ---
 
-## 📡 Opción: el servidor como hotspot propio (sin router)
+## 📡 El hotspot (sin router)
 
-Si no querés depender de un router, el **Pi del servidor puede crear su propia
-red WiFi (hotspot)** y los demás dispositivos se conectan a esa red para subir y
-descargar las fotos.
+El **Pi A crea su propia red WiFi** (hotspot) para no depender de ningún router.
+El Pi B (y cualquier celular/PC) se conecta a esa red para descargar las fotos.
 
-```
-        ┌──────────────────────────────┐
-        │  Raspberry SERVIDOR           │
-        │  crea la red WiFi "FotosPi"   │   ← hotspot (IP fija 192.168.50.1)
-        │  + corre el servidor :8000    │
-        └───────────────┬──────────────┘
-        se conectan a esa red WiFi:
-          │                         │
-   ┌──────┴───────┐          ┌──────┴────────┐
-   │ Pi CÁMARA    │          │ Pi DESCARGADOR │
-   │ (sube fotos) │          │ (baja fotos)   │   ← también un celular/PC
-   └──────────────┘          └────────────────┘
-```
-
-**1) En el Pi servidor**, creá el hotspot:
+El hotspot lo crea `scripts/configurar_hotspot.sh` (ya incluido en los pasos de
+instalación de arriba). Podés personalizar el nombre, la clave y la IP:
 ```bash
-sudo bash scripts/configurar_hotspot.sh
-# o con tus datos:
 sudo SSID="FotosPi" PASSWORD="miclave123" IP_AP="192.168.50.1" \
      bash scripts/configurar_hotspot.sh
 ```
-Esto crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
-(NetworkManager le da DHCP a los que se conecten). Instalá también el servidor en
-este mismo Pi con `scripts/instalar_servidor.sh`.
-
-**2) En config.ini** (de los tres equipos) apuntá al hotspot:
-```ini
-url_servidor = http://192.168.50.1:8000
-```
-
-**3) En el Pi de la cámara y en el del descargador**, conectate a esa red:
-```bash
-sudo SSID="FotosPi" PASSWORD="miclave123" bash scripts/conectar_a_hotspot.sh
-```
-Queda guardada y se reconecta sola al prender.
+Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
+(NetworkManager le da DHCP a quien se conecte).
 
 **Notas:**
 - Cualquier celular o PC también puede conectarse a la red `FotosPi` y entrar a
   `http://192.168.50.1:8000` para ver y descargar las fotos.
-- Al usar el WiFi interno como hotspot, ese Pi **ya no se conecta a otra red WiFi**
-  por esa placa. Si además necesitás internet en el servidor, conectalo por
+- Al usar el WiFi interno como hotspot, el Pi A **ya no se conecta a otra red WiFi**
+  por esa placa. Si además necesitás internet en el Pi A, conectalo por
   **cable de red (Ethernet)**.
 - Para apagar el hotspot: `sudo nmcli connection down hotspot-fotos`.
 
@@ -173,10 +157,10 @@ Queda guardada y se reconecta sola al prender.
 
 ## 🖥️ Usar la página web
 
-Desde cualquier navegador de la red, entrá a:
+Conectate a la red WiFi `FotosPi` y, desde cualquier navegador, entrá a:
 
 ```
-http://IP_DEL_SERVIDOR:8000
+http://192.168.50.1:8000
 ```
 
 Vas a ver la lista de fotos, un botón para **descargar todas en un ZIP**, y un
