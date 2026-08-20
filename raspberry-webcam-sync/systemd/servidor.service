@@ -1,0 +1,16 @@
+[Unit]
+Description=Servidor web (nube) de fotos de la webcam
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/raspberry-webcam-sync
+ExecStart=/usr/bin/python3 /home/pi/raspberry-webcam-sync/servidor/servidor.py
+# --- SELF CHECK ---
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

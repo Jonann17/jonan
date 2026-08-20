@@ -1,0 +1,19 @@
+[Unit]
+Description=Camara webcam - saca una foto cada 10 minutos y la sube al servidor
+# Espera a tener red antes de arrancar (para poder subir las fotos)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/raspberry-webcam-sync
+ExecStart=/usr/bin/python3 /home/pi/raspberry-webcam-sync/camara/camara.py
+# --- SELF CHECK ---
+# Si el programa se cierra por un error, systemd lo vuelve a lanzar solo.
+Restart=always
+RestartSec=10
+
+[Install]
+# Hace que arranque SOLO cada vez que se prende el Raspberry.
+WantedBy=multi-user.target
