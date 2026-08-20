@@ -119,6 +119,58 @@ Así, tras un corte de luz o un reinicio, todo sigue funcionando solo.
 
 ---
 
+## 📡 Opción: el servidor como hotspot propio (sin router)
+
+Si no querés depender de un router, el **Pi del servidor puede crear su propia
+red WiFi (hotspot)** y los demás dispositivos se conectan a esa red para subir y
+descargar las fotos.
+
+```
+        ┌──────────────────────────────┐
+        │  Raspberry SERVIDOR           │
+        │  crea la red WiFi "FotosPi"   │   ← hotspot (IP fija 192.168.50.1)
+        │  + corre el servidor :8000    │
+        └───────────────┬──────────────┘
+        se conectan a esa red WiFi:
+          │                         │
+   ┌──────┴───────┐          ┌──────┴────────┐
+   │ Pi CÁMARA    │          │ Pi DESCARGADOR │
+   │ (sube fotos) │          │ (baja fotos)   │   ← también un celular/PC
+   └──────────────┘          └────────────────┘
+```
+
+**1) En el Pi servidor**, creá el hotspot:
+```bash
+sudo bash scripts/configurar_hotspot.sh
+# o con tus datos:
+sudo SSID="FotosPi" PASSWORD="miclave123" IP_AP="192.168.50.1" \
+     bash scripts/configurar_hotspot.sh
+```
+Esto crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
+(NetworkManager le da DHCP a los que se conecten). Instalá también el servidor en
+este mismo Pi con `scripts/instalar_servidor.sh`.
+
+**2) En config.ini** (de los tres equipos) apuntá al hotspot:
+```ini
+url_servidor = http://192.168.50.1:8000
+```
+
+**3) En el Pi de la cámara y en el del descargador**, conectate a esa red:
+```bash
+sudo SSID="FotosPi" PASSWORD="miclave123" bash scripts/conectar_a_hotspot.sh
+```
+Queda guardada y se reconecta sola al prender.
+
+**Notas:**
+- Cualquier celular o PC también puede conectarse a la red `FotosPi` y entrar a
+  `http://192.168.50.1:8000` para ver y descargar las fotos.
+- Al usar el WiFi interno como hotspot, ese Pi **ya no se conecta a otra red WiFi**
+  por esa placa. Si además necesitás internet en el servidor, conectalo por
+  **cable de red (Ethernet)**.
+- Para apagar el hotspot: `sudo nmcli connection down hotspot-fotos`.
+
+---
+
 ## 🖥️ Usar la página web
 
 Desde cualquier navegador de la red, entrá a:
