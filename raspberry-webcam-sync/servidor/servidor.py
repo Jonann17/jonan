@@ -26,13 +26,15 @@ import re
 import sys
 import time
 import zipfile
+import tempfile
+import subprocess
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from comun import cargar_config, configurar_logging, asegurar_carpeta
 
 from flask import (
-    Flask, request, send_from_directory, jsonify,
+    Flask, request, send_from_directory, send_file, jsonify,
     render_template_string, abort, Response,
 )
 from werkzeug.utils import secure_filename
@@ -45,6 +47,9 @@ PUERTO = config.getint("servidor", "puerto")
 # Umbrales para decidir si algo está "activo" (2 ciclos + un margen).
 INTERVALO_CAMARA = config.getint("camara", "intervalo_segundos", fallback=600)
 INTERVALO_DESCARGA = config.getint("descargador", "intervalo_segundos", fallback=300)
+# Para el "Ver en vivo": misma webcam que la cámara. Resolución baja = más fluido.
+DISPOSITIVO = config["camara"].get("dispositivo", "/dev/video0")
+RES_LIVE = config["camara"].get("resolucion_vivo", "640x480")
 
 app = Flask(__name__)
 
@@ -187,6 +192,7 @@ PAGINA = """
   </div>
 
   <div class="barra">
+    <a class="btn" style="background:#dc2626" href="/envivo">🔴 Ver en vivo</a>
     {% if fotos %}<a class="btn" href="/descargar_todo">⬇ Descargar todas (ZIP)</a>{% endif %}
   </div>
 
@@ -214,12 +220,86 @@ PAGINA = """
 """
 
 
+PAGINA_VIVO = """
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ver en vivo - Webcam Raspberry Pi</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin:1.5rem; background:#0f1115; color:#e6e6e6; text-align:center; }
+    a { color:#6cb6ff; }
+    img { max-width:100%; border-radius:12px; border:1px solid #2a2f3a; margin-top:1rem; background:#000; }
+    .btn { display:inline-block; background:#2563eb; color:#fff; padding:.5rem .9rem; border-radius:8px; text-decoration:none; }
+    .estado { color:#9aa4b2; font-size:.9rem; margin-top:.6rem; }
+    .vivo { color:#f87171; font-weight:bold; }
+  </style>
+</head>
+<body>
+  <h1>🔴 <span class="vivo">EN VIVO</span> — cámara</h1>
+  <p><a class="btn" href="/">← Volver a la nube</a></p>
+  <img id="cam" src="/vivo" alt="Cargando imagen de la cámara...">
+  <p class="estado" id="est">Actualizando cada 2 segundos...</p>
+  <script>
+    var img = document.getElementById('cam');
+    var est = document.getElementById('est');
+    function refrescar() {
+      var nueva = new Image();
+      nueva.onload = function() {
+        img.src = nueva.src;
+        est.textContent = "Última actualización: " + new Date().toLocaleTimeString();
+      };
+      nueva.onerror = function() {
+        est.textContent = "No se pudo tomar la imagen (¿webcam ocupada?). Reintentando...";
+      };
+      nueva.src = "/vivo?t=" + Date.now();
+    }
+    setInterval(refrescar, 2000);
+  </script>
+</body>
+</html>
+"""
+
+
+def capturar_live():
+    """Saca una foto del momento con la webcam y devuelve su ruta (o None)."""
+    salida = os.path.join(tempfile.gettempdir(), "vivo.jpg")
+    cmd = ["fswebcam", "-d", DISPOSITIVO, "-r", RES_LIVE, "--no-banner", salida]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as ex:
+        log.warning("Live view: %s", ex)
+        return None
+    if r.returncode == 0 and os.path.exists(salida) and os.path.getsize(salida) > 0:
+        return salida
+    return None
+
+
 @app.route("/")
 def inicio():
     fotos = listar_fotos()
     return render_template_string(
         PAGINA, fotos=fotos, e=estado_sistema(fotos), grupos=agrupar_por_dia(fotos)
     )
+
+
+@app.route("/envivo")
+def envivo():
+    """Página con la imagen en vivo que se refresca sola."""
+    return render_template_string(PAGINA_VIVO)
+
+
+@app.route("/vivo")
+def vivo():
+    """Devuelve una foto tomada en este instante (no se guarda en la nube)."""
+    ruta = capturar_live()
+    if not ruta:
+        abort(503, "No se pudo capturar la imagen en vivo "
+                   "(¿webcam ocupada o fswebcam no instalado?)")
+    resp = send_file(ruta, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 
 @app.route("/subir", methods=["POST"])
