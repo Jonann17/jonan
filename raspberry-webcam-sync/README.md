@@ -153,6 +153,42 @@ Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
   **cable de red (Ethernet)**.
 - Para apagar el hotspot: `sudo nmcli connection down hotspot-fotos`.
 
+### 🩹 Solución de problemas del hotspot (Pi 3 B)
+
+El WiFi del Pi 3 (chip `brcmfmac`) es quisquilloso en modo Access Point. Estos
+son los problemas reales que pueden aparecer y cómo se resuelven (el script
+`configurar_hotspot.sh` ya los contempla):
+
+- **`802.1X supplicant took too long to authenticate`** al crear el hotspot →
+  falta configurar el **país del WiFi**. Solución:
+  ```bash
+  sudo raspi-config nonint do_wifi_country PY   # tu país (PY = Paraguay)
+  sudo iw reg set PY
+  ```
+  Y conviene fijar un **canal** (el script usa el 6).
+
+- **Un cliente (celular/otro Pi) no conecta**: error `4way_handshake` /
+  `no secrets` / `Segredos foram requisitados` → suele ser la **clave que no
+  coincide**. Verificá la clave real que está transmitiendo el hotspot:
+  ```bash
+  sudo nmcli -s -g 802-11-wireless-security.psk connection show hotspot-fotos
+  ```
+  Tras cambiar la clave, reiniciá el hotspot de verdad (`down` + `up`), no solo
+  `up`:
+  ```bash
+  sudo nmcli connection down hotspot-fotos && sudo nmcli connection up hotspot-fotos
+  ```
+  Y en el cliente, borrá el perfil viejo antes de reconectar:
+  `sudo nmcli connection delete FotosPi`.
+
+- **Si aun con la clave correcta NO conecta ningún cliente** → el chip del Pi 3
+  no logra negociar WPA2. La solución práctica es dejar la red **abierta** (sin
+  contraseña), perfecto para un prototipo en una red local:
+  ```bash
+  sudo ABIERTO=1 bash scripts/configurar_hotspot.sh          # en el Pi A
+  sudo ABIERTO=1 bash scripts/conectar_a_hotspot.sh          # en el Pi B
+  ```
+
 ---
 
 ## 🖥️ Usar la página web
