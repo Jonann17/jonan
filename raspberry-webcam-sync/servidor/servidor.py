@@ -24,6 +24,7 @@ import io
 import os
 import re
 import sys
+import json
 import time
 import zipfile
 import tempfile
@@ -50,6 +51,30 @@ INTERVALO_DESCARGA = config.getint("descargador", "intervalo_segundos", fallback
 # Para el "Ver en vivo": misma webcam que la cámara. Resolución baja = más fluido.
 DISPOSITIVO = config["camara"].get("dispositivo", "/dev/video0")
 RES_LIVE = config["camara"].get("resolucion_vivo", "640x480")
+
+# --- Configuración en caliente (la IHM puede cambiar el intervalo) ---
+# Se guarda en un archivo para que sobreviva a reinicios del servidor.
+ARCHIVO_ESTADO = os.path.join(CARPETA_NUBE, ".config_runtime.json")
+INTERVALO_MIN = 5
+INTERVALO_MAX = 86400  # 1 día
+
+
+def leer_intervalo_camara():
+    """Intervalo actual de la cámara (segundos). Del archivo, o del config.ini."""
+    try:
+        with open(ARCHIVO_ESTADO, "r", encoding="utf-8") as f:
+            return int(json.load(f)["intervalo_camara"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return INTERVALO_CAMARA
+
+
+def guardar_intervalo_camara(valor):
+    """Guarda el nuevo intervalo (validado) en el archivo de estado."""
+    valor = max(INTERVALO_MIN, min(INTERVALO_MAX, int(valor)))
+    with open(ARCHIVO_ESTADO, "w", encoding="utf-8") as f:
+        json.dump({"intervalo_camara": valor}, f)
+    return valor
+
 
 app = Flask(__name__)
 
@@ -101,7 +126,8 @@ def estado_sistema(fotos):
         edad_foto = ahora - max(f["mtime"] for f in fotos)
     else:
         edad_foto = None
-    camara_ok = edad_foto is not None and edad_foto < INTERVALO_CAMARA * 2 + 60
+    intervalo = leer_intervalo_camara()
+    camara_ok = edad_foto is not None and edad_foto < intervalo * 2 + 60
 
     # Descargador: en base a su último latido.
     lat = ultimo_latido.get("descargador")
@@ -114,6 +140,8 @@ def estado_sistema(fotos):
         "camara_txt": hace_cuanto(edad_foto) if edad_foto is not None else "sin fotos aún",
         "desc_ok": desc_ok,
         "desc_txt": hace_cuanto(edad_lat) if edad_lat is not None else "sin conexión aún",
+        "intervalo_camara": intervalo,
+        "total_fotos": len(fotos),
     }
 
 
@@ -324,6 +352,29 @@ def latido():
     origen = request.form.get("origen", "desconocido")
     ultimo_latido[origen] = time.time()
     return jsonify({"ok": True})
+
+
+@app.route("/config", methods=["GET", "POST"])
+def config_runtime():
+    """Lee (GET) o cambia (POST) el intervalo de la cámara.
+
+    La cámara consulta esto en cada ciclo; la IHM (PyQt6) lo cambia con POST.
+    """
+    if request.method == "POST":
+        crudo = request.form.get("intervalo_camara", request.args.get("intervalo_camara"))
+        try:
+            nuevo = guardar_intervalo_camara(crudo)
+        except (TypeError, ValueError):
+            abort(400, "Falta o es inválido 'intervalo_camara' (segundos)")
+        log.info("Intervalo de la cámara cambiado a %d s (desde la IHM).", nuevo)
+        return jsonify({"ok": True, "intervalo_camara": nuevo})
+    return jsonify({"intervalo_camara": leer_intervalo_camara()})
+
+
+@app.route("/estado")
+def estado():
+    """Estado del sistema en JSON (lo usa la IHM PyQt6)."""
+    return jsonify(estado_sistema(listar_fotos()))
 
 
 @app.route("/lista")

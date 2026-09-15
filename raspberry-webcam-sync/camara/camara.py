@@ -113,6 +113,23 @@ def subir_pendientes(url_servidor, carpeta):
             marcar_subida(carpeta, nombre)
 
 
+def obtener_intervalo(url_servidor, por_defecto):
+    """Pregunta al servidor el intervalo configurado desde la IHM.
+
+    Así el usuario puede cambiar el intervalo desde la interfaz gráfica sin
+    reiniciar nada. Si el servidor no responde, usa el valor por defecto.
+    """
+    url = url_servidor.rstrip("/") + "/config"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            valor = int(r.json().get("intervalo_camara", por_defecto))
+            return max(5, valor)  # mínimo 5 s por seguridad
+    except (requests.RequestException, ValueError, TypeError):
+        pass
+    return por_defecto
+
+
 def main():
     config = cargar_config()
     padron = config["general"]["padron"]
@@ -144,11 +161,13 @@ def main():
         # Reintenta subir cualquier foto vieja que quedó pendiente.
         subir_pendientes(url_servidor, carpeta)
 
-        # Espera hasta completar el intervalo (descontando lo que ya tardó).
-        transcurrido = time.time() - inicio
-        espera = max(1, intervalo - transcurrido)
-        log.info("Esperando %d segundos hasta la próxima foto...", int(espera))
-        time.sleep(espera)
+        # Espera hasta completar el intervalo. Lo revisa en pasos cortos para
+        # tomar al vuelo un cambio hecho desde la IHM (sin reiniciar la cámara).
+        objetivo = obtener_intervalo(url_servidor, intervalo)
+        log.info("Próxima foto en ~%d segundos...", objetivo)
+        while (time.time() - inicio) < objetivo:
+            time.sleep(min(5, objetivo))
+            objetivo = obtener_intervalo(url_servidor, intervalo)
 
 
 if __name__ == "__main__":
