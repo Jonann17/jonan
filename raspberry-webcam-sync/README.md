@@ -100,15 +100,43 @@ sudo bash scripts/instalar_servidor.sh     # la nube (página web)
 sudo bash scripts/instalar_camara.sh       # saca y sube las fotos
 ```
 
-### Pi B — descargador
+### Pi B — descargador + IHM (interfaz gráfica)
 ```bash
 sudo bash scripts/conectar_a_hotspot.sh    # se conecta a la red "FotosPi"
 sudo bash scripts/instalar_descargador.sh  # baja todas las fotos
+bash scripts/instalar_ihm.sh               # interfaz gráfica PyQt6
 ```
 
 Cada script instala las dependencias, activa el arranque automático al prender
 (`systemctl enable`) y deja el programa corriendo. El hotspot y las conexiones
 WiFi también quedan configurados para levantarse solos al prender.
+
+---
+
+## 🖥️ IHM (interfaz gráfica en el Pi B)
+
+El Pi B tiene una **interfaz gráfica hecha en PyQt6** (`ihm/ihm.py`) que se abre
+sola al iniciar el escritorio. Desde ahí podés, sin tocar la terminal:
+
+- Ver el **estado** del sistema con luces 🟢/🔴 (servidor, cámara, descargador)
+  y el total de fotos.
+- Ver la **galería** de fotos descargadas, agrupadas por día; clic en una
+  miniatura para verla en grande.
+- **Ajustar el intervalo entre fotos** de la cámara: elegís los segundos y tocás
+  *Aplicar*. Se lo envía al servidor y la cámara lo toma en el próximo ciclo,
+  **sin reiniciar nada**.
+
+Cómo funciona el cambio de intervalo:
+
+```
+IHM (Pi B)  --POST /config-->  Servidor (Pi A)  --lo guarda-->  .config_runtime.json
+Cámara (Pi A)  --GET /config cada ciclo-->  usa el nuevo intervalo
+```
+
+Para abrir la IHM a mano:  `python3 ihm/ihm.py`
+
+> El nombre de cada foto ya incluye **hora, minuto y segundo**:
+> `padron<PADRON>_DDMMAAAA_HHMMSS.jpg` (los últimos 6 dígitos son HH-MM-SS).
 
 ---
 
