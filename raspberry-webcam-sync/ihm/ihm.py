@@ -26,13 +26,23 @@ import requests
 from PyQt6.QtCore import Qt, QThread, QObject, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QLabel, QPushButton, QSpinBox, QVBoxLayout,
+    QApplication, QWidget, QLabel, QPushButton, QComboBox, QVBoxLayout,
     QHBoxLayout, QGridLayout, QScrollArea, QFrame, QGroupBox, QDialog,
     QMessageBox,
 )
 
 # Cuántas miniaturas mostrar como máximo (para no saturar el Pi 3).
 MAX_MINIATURAS = 60
+
+# Opciones de intervalo entre fotos: (texto, segundos)
+OPCIONES_INTERVALO = [
+    ("1 minuto", 60),
+    ("5 minutos", 300),
+    ("10 minutos", 600),
+    ("20 minutos", 1200),
+    ("30 minutos", 1800),
+    ("1 hora", 3600),
+]
 
 
 # ------------------------------------------------------------------
@@ -130,7 +140,8 @@ class Ventana(QWidget):
             QGroupBox::title { subcontrol-origin: margin; left:10px; color:#9aa4b2; }
             QPushButton { background:#2563eb; color:#fff; border:none; padding:6px 12px; border-radius:8px; }
             QPushButton:hover { background:#1d4ed8; }
-            QSpinBox { background:#161a22; border:1px solid #2a2f3a; padding:4px; border-radius:6px; color:#e6e6e6; }
+            QComboBox { background:#161a22; border:1px solid #2a2f3a; padding:4px 8px; border-radius:6px; color:#e6e6e6; min-width:120px; }
+            QComboBox QAbstractItemView { background:#161a22; color:#e6e6e6; selection-background-color:#2563eb; }
         """)
         raiz = QVBoxLayout(self)
 
@@ -155,15 +166,11 @@ class Ventana(QWidget):
         caja_cfg = QGroupBox("Intervalo entre fotos")
         cfg = QHBoxLayout(caja_cfg)
         cfg.addWidget(QLabel("Sacar una foto cada"))
-        self.spin = QSpinBox()
-        self.spin.setRange(5, 86400)
-        self.spin.setValue(600)
-        self.spin.setSuffix(" seg")
-        self.spin.valueChanged.connect(self._actualizar_equivalencia)
-        cfg.addWidget(self.spin)
-        self.lbl_equiv = QLabel("(= 10 min)")
-        self.lbl_equiv.setStyleSheet("color:#9aa4b2;")
-        cfg.addWidget(self.lbl_equiv)
+        self.combo = QComboBox()
+        for texto, seg in OPCIONES_INTERVALO:
+            self.combo.addItem(texto, seg)
+        self.combo.setCurrentIndex(2)  # 10 minutos por defecto
+        cfg.addWidget(self.combo)
         self.btn_aplicar = QPushButton("Aplicar")
         self.btn_aplicar.clicked.connect(self._al_aplicar)
         cfg.addWidget(self.btn_aplicar)
@@ -192,8 +199,6 @@ class Ventana(QWidget):
         vg.addWidget(self.scroll)
         raiz.addWidget(caja_gal, stretch=1)
 
-        self._actualizar_equivalencia(self.spin.value())
-
     def _luz(self, texto):
         lbl = QLabel("⚪ " + texto)
         lbl.setStyleSheet("font-size:14px;")
@@ -203,14 +208,14 @@ class Ventana(QWidget):
         color = "🟢" if ok else "🔴"
         lbl.setText(f"{color} {texto}")
 
-    def _actualizar_equivalencia(self, seg):
-        if seg < 60:
-            txt = f"(= {seg} seg)"
-        elif seg % 60 == 0:
-            txt = f"(= {seg // 60} min)"
-        else:
-            txt = f"(= {seg // 60} min {seg % 60} s)"
-        self.lbl_equiv.setText(txt)
+    def _texto_intervalo(self, seg):
+        """Texto legible de un intervalo en segundos (para el 'actual: ...')."""
+        for texto, s in OPCIONES_INTERVALO:
+            if s == seg:
+                return texto
+        if seg % 60 == 0:
+            return f"{seg // 60} min"
+        return f"{seg} seg"
 
     # ---------- red (hilo aparte) ----------
     def _arrancar_red(self):
@@ -237,21 +242,25 @@ class Ventana(QWidget):
         self.lbl_total.setText(f"🖼️ {est.get('total_fotos', 0)} fotos")
         inter = est.get("intervalo_camara")
         if inter:
-            self.lbl_actual.setText(f"actual: {inter} seg")
+            self.lbl_actual.setText(f"actual: {self._texto_intervalo(inter)}")
+            # Si el intervalo actual coincide con una opción, la deja seleccionada.
+            idx = self.combo.findData(inter)
+            if idx >= 0 and not self.combo.hasFocus():
+                self.combo.setCurrentIndex(idx)
 
     def _al_aplicar(self):
         self.btn_aplicar.setEnabled(False)
         self.btn_aplicar.setText("Aplicando...")
-        self.sig_aplicar.emit(self.spin.value())
+        self.sig_aplicar.emit(int(self.combo.currentData()))
 
     def _al_aplicado(self, resp):
         self.btn_aplicar.setEnabled(True)
         self.btn_aplicar.setText("Aplicar")
         if resp and resp.get("ok"):
             nuevo = resp.get("intervalo_camara")
-            self.lbl_actual.setText(f"actual: {nuevo} seg")
+            self.lbl_actual.setText(f"actual: {self._texto_intervalo(nuevo)}")
             QMessageBox.information(self, "Listo",
-                                    f"Nuevo intervalo: {nuevo} segundos.\n"
+                                    f"Nuevo intervalo: {self._texto_intervalo(nuevo)}.\n"
                                     "La cámara lo toma en el próximo ciclo.")
         else:
             QMessageBox.warning(self, "Error",
