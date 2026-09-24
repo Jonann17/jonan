@@ -100,15 +100,43 @@ sudo bash scripts/instalar_servidor.sh     # la nube (página web)
 sudo bash scripts/instalar_camara.sh       # saca y sube las fotos
 ```
 
-### Pi B — descargador
+### Pi B — descargador + IHM (interfaz gráfica)
 ```bash
 sudo bash scripts/conectar_a_hotspot.sh    # se conecta a la red "FotosPi"
 sudo bash scripts/instalar_descargador.sh  # baja todas las fotos
+bash scripts/instalar_ihm.sh               # interfaz gráfica PyQt6
 ```
 
 Cada script instala las dependencias, activa el arranque automático al prender
 (`systemctl enable`) y deja el programa corriendo. El hotspot y las conexiones
 WiFi también quedan configurados para levantarse solos al prender.
+
+---
+
+## 🖥️ IHM (interfaz gráfica en el Pi B)
+
+El Pi B tiene una **interfaz gráfica hecha en PyQt6** (`ihm/ihm.py`) que se abre
+sola al iniciar el escritorio. Desde ahí podés, sin tocar la terminal:
+
+- Ver el **estado** del sistema con luces 🟢/🔴 (servidor, cámara, descargador)
+  y el total de fotos.
+- Ver la **galería** de fotos descargadas, agrupadas por día; clic en una
+  miniatura para verla en grande.
+- **Ajustar el intervalo entre fotos** de la cámara: elegís los segundos y tocás
+  *Aplicar*. Se lo envía al servidor y la cámara lo toma en el próximo ciclo,
+  **sin reiniciar nada**.
+
+Cómo funciona el cambio de intervalo:
+
+```
+IHM (Pi B)  --POST /config-->  Servidor (Pi A)  --lo guarda-->  .config_runtime.json
+Cámara (Pi A)  --GET /config cada ciclo-->  usa el nuevo intervalo
+```
+
+Para abrir la IHM a mano:  `python3 ihm/ihm.py`
+
+> El nombre de cada foto ya incluye **hora, minuto y segundo**:
+> `padron<PADRON>_DDMMAAAA_HHMMSS.jpg` (los últimos 6 dígitos son HH-MM-SS).
 
 ---
 
@@ -152,6 +180,42 @@ Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
   por esa placa. Si además necesitás internet en el Pi A, conectalo por
   **cable de red (Ethernet)**.
 - Para apagar el hotspot: `sudo nmcli connection down hotspot-fotos`.
+
+### 🩹 Solución de problemas del hotspot (Pi 3 B)
+
+El WiFi del Pi 3 (chip `brcmfmac`) es quisquilloso en modo Access Point. Estos
+son los problemas reales que pueden aparecer y cómo se resuelven (el script
+`configurar_hotspot.sh` ya los contempla):
+
+- **`802.1X supplicant took too long to authenticate`** al crear el hotspot →
+  falta configurar el **país del WiFi**. Solución:
+  ```bash
+  sudo raspi-config nonint do_wifi_country PY   # tu país (PY = Paraguay)
+  sudo iw reg set PY
+  ```
+  Y conviene fijar un **canal** (el script usa el 6).
+
+- **Un cliente (celular/otro Pi) no conecta**: error `4way_handshake` /
+  `no secrets` / `Segredos foram requisitados` → suele ser la **clave que no
+  coincide**. Verificá la clave real que está transmitiendo el hotspot:
+  ```bash
+  sudo nmcli -s -g 802-11-wireless-security.psk connection show hotspot-fotos
+  ```
+  Tras cambiar la clave, reiniciá el hotspot de verdad (`down` + `up`), no solo
+  `up`:
+  ```bash
+  sudo nmcli connection down hotspot-fotos && sudo nmcli connection up hotspot-fotos
+  ```
+  Y en el cliente, borrá el perfil viejo antes de reconectar:
+  `sudo nmcli connection delete FotosPi`.
+
+- **Si aun con la clave correcta NO conecta ningún cliente** → el chip del Pi 3
+  no logra negociar WPA2. La solución práctica es dejar la red **abierta** (sin
+  contraseña), perfecto para un prototipo en una red local:
+  ```bash
+  sudo ABIERTO=1 bash scripts/configurar_hotspot.sh          # en el Pi A
+  sudo ABIERTO=1 bash scripts/conectar_a_hotspot.sh          # en el Pi B
+  ```
 
 ---
 
