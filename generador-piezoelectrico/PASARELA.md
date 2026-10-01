@@ -5,6 +5,8 @@ largo). El Arduino sabe **qué baldosa pisas**, cuenta los pasos, calcula la
 **dirección** y la **velocidad** con la que cruzas, y mide la energía total
 generada.
 
+> 🛒 Lista de compras completa: [LISTA_DE_COMPRAS.md](LISTA_DE_COMPRAS.md)
+
 > 💡 **Primero arma y prueba UNA baldosa** con el sketch `generador_piezo`
 > (ver [README.md](README.md)). Cuando funcione, haz las otras 8 iguales.
 
