@@ -7,6 +7,10 @@ cada vez que alguien la pisa. Un **Arduino UNO** cuenta las pisadas, mide la
 tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
 **baterías 18650**.
 
+> 🚶 **¿Quieres la versión grande?** Ver [PASARELA.md](PASARELA.md): pasarela de
+> **9 baldosas** con mapa en vivo, dirección y velocidad de cruce. Esta placa
+> sirve como prototipo: es la baldosa que vas a repetir 9 veces.
+
 > ℹ️ No pude abrir el video desde este entorno, así que el circuito y el código
 > están armados a partir de la lista de componentes. Si en el video algo está
 > conectado distinto, avísame y lo ajusto.
