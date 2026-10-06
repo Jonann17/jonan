@@ -12,6 +12,13 @@ Qué hace:
       * botones para descargar una foto, o todas en un ZIP.
   - La página se auto-refresca sola cada 30 segundos.
   - Recibe "latidos" del descargador (/latido) para saber si está vivo.
+  - Controla si la cámara está CAPTURANDO o EN ESPERA (/captura). Al
+    prender el Pi siempre arranca EN ESPERA: recién saca fotos cuando la
+    IHM manda "Iniciar".
+  - Permite AJUSTAR LA FECHA Y HORA del Pi desde la IHM (/hora), porque
+    el Pi no tiene internet ni pila de reloj.
+  - Guarda la medición del piranómetro (Arduino) de cada foto en
+    mediciones.csv (descargable en /mediciones.csv).
 
 Requisitos en el equipo servidor:
     sudo apt install python3-flask
@@ -24,6 +31,7 @@ import io
 import os
 import re
 import sys
+import csv
 import json
 import time
 import zipfile
@@ -52,34 +60,127 @@ INTERVALO_DESCARGA = config.getint("descargador", "intervalo_segundos", fallback
 DISPOSITIVO = config["camara"].get("dispositivo", "/dev/video0")
 RES_LIVE = config["camara"].get("resolucion_vivo", "640x480")
 
-# --- Configuración en caliente (la IHM puede cambiar el intervalo) ---
+# --- Configuración en caliente (la IHM puede cambiar intervalo y captura) ---
 # Se guarda en un archivo para que sobreviva a reinicios del servidor.
 ARCHIVO_ESTADO = os.path.join(CARPETA_NUBE, ".config_runtime.json")
 INTERVALO_MIN = 5
 INTERVALO_MAX = 86400  # 1 día
 
+# Mediciones del piranómetro: una fila por foto.
+ARCHIVO_MEDICIONES = os.path.join(CARPETA_NUBE, "mediciones.csv")
+COLUMNAS_MEDICIONES = [
+    "nombre", "fecha_hora",
+    "g_now", "g_avg", "g_min", "g_max", "g_std", "p_avg_mw", "i_avg_ma",
+    "v_now", "v_avg", "v_min", "v_max", "v_std",
+    "adc_now", "n_samples", "window_s", "sat", "vcc", "arduino_ok",
+]
+
+# Año mínimo aceptado al ajustar la hora (evita mandar una fecha basura).
+EPOCH_MINIMO = 1704067200  # 01/01/2024
+
+
+def id_arranque():
+    """Identificador único de ESTE encendido del Pi (cambia en cada reinicio)."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return "desconocido"
+
+
+def leer_runtime():
+    """Estado en caliente completo (dict). Nunca falla: si no hay, vacío."""
+    try:
+        with open(ARCHIVO_ESTADO, "r", encoding="utf-8") as f:
+            datos = json.load(f)
+            return datos if isinstance(datos, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def guardar_runtime(**cambios):
+    """Actualiza solo las claves indicadas del estado en caliente."""
+    datos = leer_runtime()
+    datos.update(cambios)
+    with open(ARCHIVO_ESTADO, "w", encoding="utf-8") as f:
+        json.dump(datos, f)
+    return datos
+
 
 def leer_intervalo_camara():
     """Intervalo actual de la cámara (segundos). Del archivo, o del config.ini."""
     try:
-        with open(ARCHIVO_ESTADO, "r", encoding="utf-8") as f:
-            return int(json.load(f)["intervalo_camara"])
-    except (OSError, ValueError, KeyError, TypeError):
+        return int(leer_runtime()["intervalo_camara"])
+    except (KeyError, ValueError, TypeError):
         return INTERVALO_CAMARA
 
 
 def guardar_intervalo_camara(valor):
     """Guarda el nuevo intervalo (validado) en el archivo de estado."""
     valor = max(INTERVALO_MIN, min(INTERVALO_MAX, int(valor)))
-    with open(ARCHIVO_ESTADO, "w", encoding="utf-8") as f:
-        json.dump({"intervalo_camara": valor}, f)
+    guardar_runtime(intervalo_camara=valor)
     return valor
 
+
+def leer_capturando():
+    """True si la cámara tiene que sacar fotos; False si está en espera."""
+    return bool(leer_runtime().get("capturando", False))
+
+
+def hora_ajustada():
+    """True si la hora se ajustó desde la IHM en ESTE encendido del Pi."""
+    return leer_runtime().get("hora_ajustada_arranque") == id_arranque()
+
+
+def ajustar_hora_sistema(epoch):
+    """Pone el reloj del Pi en 'epoch' (segundos UTC).
+
+    Necesita la regla de sudo que instala scripts/instalar_servidor.sh
+    (solo permite 'date' y 'fake-hwclock', sin contraseña).
+    """
+    subprocess.run(["sudo", "-n", "date", "-u", "-s", f"@{epoch:.0f}"],
+                   check=True, capture_output=True, text=True, timeout=10)
+    # fake-hwclock guarda la hora en disco: tras un reinicio el reloj
+    # vuelve al menos a esta hora (igual conviene volver a ajustarlo).
+    subprocess.run(["sudo", "-n", "fake-hwclock", "save", "force"],
+                   capture_output=True, timeout=10)
+
+
+def nombres_con_medicion():
+    """Nombres de fotos que ya tienen su fila en mediciones.csv."""
+    try:
+        with open(ARCHIVO_MEDICIONES, "r", encoding="utf-8", newline="") as f:
+            return {fila.get("nombre") for fila in csv.DictReader(f)}
+    except OSError:
+        return set()
+
+
+def guardar_medicion(nombre, medicion):
+    """Agrega la fila de la foto a mediciones.csv (sin duplicar)."""
+    if nombre in nombres_con_medicion():
+        return
+    nuevo = not os.path.exists(ARCHIVO_MEDICIONES)
+    fila = dict(medicion)
+    fila["nombre"] = nombre
+    with open(ARCHIVO_MEDICIONES, "a", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNAS_MEDICIONES,
+                           restval="", extrasaction="ignore")
+        if nuevo:
+            w.writeheader()
+        w.writerow(fila)
+
+
+# Al arrancar el servidor (o sea, al prender el Pi) la cámara queda EN
+# ESPERA: no saca fotos hasta que la IHM mande "Iniciar".
+guardar_runtime(capturando=False)
 
 app = Flask(__name__)
 
 # Guarda cuándo fue el último "latido" de cada componente (en memoria).
 ultimo_latido = {}
+
+# Última lectura "en vivo" del piranómetro que mandó la cámara.
+sensor_vivo = {"datos": None, "cuando": None}
 
 RE_FECHA = re.compile(r"_(\d{8})_")
 
@@ -121,27 +222,45 @@ def estado_sistema(fotos):
     """Calcula el estado de servidor / cámara / descargador para el panel."""
     ahora = time.time()
 
-    # Cámara: en base a la foto más nueva.
+    # Fotos: en base a la foto más nueva.
     if fotos:
         edad_foto = ahora - max(f["mtime"] for f in fotos)
     else:
         edad_foto = None
     intervalo = leer_intervalo_camara()
-    camara_ok = edad_foto is not None and edad_foto < intervalo * 2 + 60
+    capturando = leer_capturando()
+
+    # Cámara: el programa consulta /config cada pocos segundos (latido).
+    lat_cam = ultimo_latido.get("camara")
+    camara_viva = lat_cam is not None and (ahora - lat_cam) < 60
+    if capturando:
+        camara_ok = edad_foto is not None and edad_foto < intervalo * 2 + 60
+    else:
+        camara_ok = camara_viva   # en espera: alcanza con que esté corriendo
 
     # Descargador: en base a su último latido.
     lat = ultimo_latido.get("descargador")
     edad_lat = (ahora - lat) if lat else None
     desc_ok = edad_lat is not None and edad_lat < INTERVALO_DESCARGA * 2 + 60
 
+    # Piranómetro: última lectura en vivo (si es vieja, se considera caído).
+    sv = sensor_vivo["datos"] if sensor_vivo["cuando"] and \
+        ahora - sensor_vivo["cuando"] < 60 else None
+
     return {
         "servidor_ok": True,  # si estás viendo la página, el servidor anda
         "camara_ok": camara_ok,
+        "camara_viva": camara_viva,
+        "capturando": capturando,
         "camara_txt": hace_cuanto(edad_foto) if edad_foto is not None else "sin fotos aún",
         "desc_ok": desc_ok,
         "desc_txt": hace_cuanto(edad_lat) if edad_lat is not None else "sin conexión aún",
         "intervalo_camara": intervalo,
         "total_fotos": len(fotos),
+        "hora_pi": ahora,
+        "hora_pi_txt": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+        "hora_ajustada": hora_ajustada(),
+        "sensor": sv,
     }
 
 
@@ -214,6 +333,23 @@ PAGINA = """
       <div class="titulo" style="margin-top:.3rem">último aviso {{ e.desc_txt }}</div>
     </div>
     <div class="tarjeta">
+      <div class="titulo">Captura</div>
+      <div class="valor"><span class="dot {{ 'ok' if e.capturando else 'mal' }}"></span>
+        {{ 'Capturando' if e.capturando else 'En espera' }}</div>
+      <div class="titulo" style="margin-top:.3rem">se inicia desde la IHM</div>
+    </div>
+    <div class="tarjeta">
+      <div class="titulo">Radiación (piranómetro)</div>
+      <div class="valor"><span class="dot {{ 'ok' if e.sensor else 'mal' }}"></span>
+        {% if e.sensor %}{{ e.sensor.g_now }} W/m² · {{ e.sensor.v_now }} V{% else %}Sin datos{% endif %}</div>
+    </div>
+    <div class="tarjeta">
+      <div class="titulo">Hora del Pi</div>
+      <div class="valor"><span class="dot {{ 'ok' if e.hora_ajustada else 'mal' }}"></span>
+        {{ e.hora_pi_txt }}</div>
+      <div class="titulo" style="margin-top:.3rem">{{ 'ajustada' if e.hora_ajustada else 'sin ajustar desde que prendió' }}</div>
+    </div>
+    <div class="tarjeta">
       <div class="titulo">Total fotos</div>
       <div class="valor">🖼️ {{ fotos|length }}</div>
     </div>
@@ -222,6 +358,7 @@ PAGINA = """
   <div class="barra">
     <a class="btn" style="background:#dc2626" href="/envivo">🔴 Ver en vivo</a>
     {% if fotos %}<a class="btn" href="/descargar_todo">⬇ Descargar todas (ZIP)</a>{% endif %}
+    {% if hay_mediciones %}<a class="btn" style="background:#16a34a" href="/mediciones.csv">⬇ Mediciones (CSV)</a>{% endif %}
   </div>
 
   {% if fotos %}
@@ -308,7 +445,8 @@ def capturar_live():
 def inicio():
     fotos = listar_fotos()
     return render_template_string(
-        PAGINA, fotos=fotos, e=estado_sistema(fotos), grupos=agrupar_por_dia(fotos)
+        PAGINA, fotos=fotos, e=estado_sistema(fotos), grupos=agrupar_por_dia(fotos),
+        hay_mediciones=os.path.exists(ARCHIVO_MEDICIONES),
     )
 
 
@@ -342,6 +480,15 @@ def subir():
     destino = os.path.join(CARPETA_NUBE, nombre)
     archivo.save(destino)
     ultimo_latido["camara"] = time.time()
+
+    # Medición del piranómetro que acompaña a la foto (campo opcional).
+    crudo = request.form.get("medicion")
+    if crudo:
+        try:
+            guardar_medicion(nombre, json.loads(crudo))
+        except (ValueError, TypeError, OSError) as ex:
+            log.warning("Medición inválida para %s: %s", nombre, ex)
+
     log.info("Foto recibida: %s (%d bytes)", nombre, os.path.getsize(destino))
     return jsonify({"ok": True, "nombre": nombre})
 
@@ -358,7 +505,8 @@ def latido():
 def config_runtime():
     """Lee (GET) o cambia (POST) el intervalo de la cámara.
 
-    La cámara consulta esto en cada ciclo; la IHM (PyQt6) lo cambia con POST.
+    La cámara consulta esto en cada ciclo (con ?origen=camara, que sirve
+    también de latido); la IHM (PyQt6) lo cambia con POST.
     """
     if request.method == "POST":
         crudo = request.form.get("intervalo_camara", request.args.get("intervalo_camara"))
@@ -368,7 +516,72 @@ def config_runtime():
             abort(400, "Falta o es inválido 'intervalo_camara' (segundos)")
         log.info("Intervalo de la cámara cambiado a %d s (desde la IHM).", nuevo)
         return jsonify({"ok": True, "intervalo_camara": nuevo})
-    return jsonify({"intervalo_camara": leer_intervalo_camara()})
+    if request.args.get("origen") == "camara":
+        ultimo_latido["camara"] = time.time()
+    return jsonify({"intervalo_camara": leer_intervalo_camara(),
+                    "capturando": leer_capturando()})
+
+
+@app.route("/captura", methods=["POST"])
+def captura():
+    """Inicia o detiene la captura de fotos (lo usa la IHM).
+
+    Formulario: accion = iniciar | detener
+    """
+    accion = request.form.get("accion", "")
+    if accion not in ("iniciar", "detener"):
+        abort(400, "accion debe ser 'iniciar' o 'detener'")
+    capturando = accion == "iniciar"
+    guardar_runtime(capturando=capturando)
+    log.info("Captura %s (desde la IHM).", "INICIADA" if capturando else "DETENIDA")
+    return jsonify({"ok": True, "capturando": capturando})
+
+
+@app.route("/hora", methods=["POST"])
+def hora():
+    """Ajusta la fecha y hora del Pi (lo usa la IHM).
+
+    Formulario: epoch = segundos desde 1970 (UTC), ej. 1760000000
+    """
+    try:
+        epoch = float(request.form["epoch"])
+    except (KeyError, ValueError):
+        abort(400, "Falta o es inválido 'epoch'")
+    if epoch < EPOCH_MINIMO:
+        abort(400, "Fecha anterior a 2024: no se acepta")
+    try:
+        ajustar_hora_sistema(epoch)
+    except subprocess.CalledProcessError as ex:
+        log.error("No se pudo ajustar la hora: %s", ex.stderr)
+        return jsonify({"ok": False, "error": "sudo date falló (¿falta la regla de "
+                        "sudoers? correr scripts/instalar_servidor.sh)"}), 500
+    except (FileNotFoundError, subprocess.TimeoutExpired) as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 500
+    guardar_runtime(hora_ajustada_arranque=id_arranque())
+    ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    log.info("Hora del Pi ajustada a %s (desde la IHM).", ahora)
+    return jsonify({"ok": True, "hora_pi": time.time(), "hora_pi_txt": ahora})
+
+
+@app.route("/sensor", methods=["POST"])
+def sensor():
+    """La cámara manda la lectura "en vivo" del piranómetro (JSON)."""
+    datos = request.get_json(silent=True)
+    if not isinstance(datos, dict):
+        abort(400, "Se espera un JSON")
+    sensor_vivo["datos"] = datos
+    sensor_vivo["cuando"] = time.time()
+    return jsonify({"ok": True})
+
+
+@app.route("/mediciones.csv")
+def mediciones():
+    """Todas las mediciones del piranómetro (una fila por foto)."""
+    if not os.path.exists(ARCHIVO_MEDICIONES):
+        abort(404, "Todavía no hay mediciones")
+    resp = send_file(ARCHIVO_MEDICIONES, mimetype="text/csv")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/estado")
@@ -401,6 +614,8 @@ def descargar_todo():
             # Dentro del ZIP van ordenadas por día: 21082026/padron....jpg
             zf.write(os.path.join(CARPETA_NUBE, f["nombre"]),
                      os.path.join(f["dia"], f["nombre"]))
+        if os.path.exists(ARCHIVO_MEDICIONES):
+            zf.write(ARCHIVO_MEDICIONES, "mediciones.csv")
     buffer.seek(0)
     nombre_zip = "fotos_" + datetime.now().strftime("%d%m%Y_%H%M%S") + ".zip"
     return Response(
