@@ -304,11 +304,11 @@ void sendReport(Stream &out, bool reset) {
   // potencia promedio = radiación promedio × área  [mW]
   out.print(F(",\"p_avg_mw\":"));  out.print(gAvg / CAL_K * AREA_M2 * 1000.0, 4);
 #endif
-  out.print(F(",\"g_now\":"));     out.print(lastG, 2);
-  out.print(F(",\"g_avg\":"));     out.print(gAvg, 2);
-  out.print(F(",\"g_min\":"));     out.print(sG.mn, 2);
-  out.print(F(",\"g_max\":"));     out.print(sG.mx, 2);
-  out.print(F(",\"g_std\":"));     out.print(gStd, 2);
+  out.print(F(",\"g_now\":"));     out.print(lastG, 4);
+  out.print(F(",\"g_avg\":"));     out.print(gAvg, 4);
+  out.print(F(",\"g_min\":"));     out.print(sG.mn, 4);
+  out.print(F(",\"g_max\":"));     out.print(sG.mx, 4);
+  out.print(F(",\"g_std\":"));     out.print(gStd, 4);
   out.print(F(",\"n_samples\":")); out.print(nSamples);
   out.print(F(",\"window_s\":"));  out.print(windowS, 1);
   out.print(F(",\"sat\":"));       out.print(nSaturated);
