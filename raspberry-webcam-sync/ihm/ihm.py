@@ -36,7 +36,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QVBoxLayout,
-    QHBoxLayout, QGridLayout, QScrollArea, QFrame, QGroupBox, QDialog,
+    QHBoxLayout, QGridLayout, QScrollArea, QGroupBox, QDialog,
     QMessageBox, QTabWidget, QDateTimeEdit,
 )
 
