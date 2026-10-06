@@ -5,8 +5,8 @@ Claude** (o por otra persona). Resume qué es, cómo está armado, cómo se inst
 qué problemas resolvimos y qué quedó pendiente.
 
 - **Repositorio:** `Jonann17/jonan`
-- **Rama de trabajo:** `claude/pi-webcam-image-sync-h8iusk`
-- **Pull Request activo:** #2 → https://github.com/Jonann17/jonan/pull/2
+- **Rama de trabajo:** `claude/trusting-lamport-hd05q6`
+- **Pull Request activo:** #3 → https://github.com/Jonann17/jonan/pull/3 (reemplaza al #2, cerrado). Cuando se mergee, todo queda en `main`.
 - **Carpeta del proyecto:** `raspberry-webcam-sync/`
 
 > Para continuar en otra cuenta: cloná el repo, abrí esta rama y leé este archivo.
@@ -88,7 +88,7 @@ bash scripts/instalar_ihm.sh               # interfaz gráfica PyQt6
 ### Actualizar a la última versión (en cada Pi)
 ```bash
 cd ~/jonan/raspberry-webcam-sync
-git pull origin claude/pi-webcam-image-sync-h8iusk
+git pull origin claude/trusting-lamport-hd05q6
 # Pi A:
 sudo systemctl restart servidor camara
 # Pi B:
@@ -217,7 +217,7 @@ descarga OK (ping a 192.168.50.1 responde, fotos bajan a subcarpetas por día).
    (o hacelo público un rato para clonar).
 2. En una sesión nueva, pedile a Claude que clone la rama y lea este archivo:
    ```
-   git clone -b claude/pi-webcam-image-sync-h8iusk https://github.com/Jonann17/jonan.git
+   git clone -b claude/trusting-lamport-hd05q6 https://github.com/Jonann17/jonan.git
    ```
    y "leé `raspberry-webcam-sync/HANDOFF.md` para retomar el proyecto".
 3. Con eso, Claude tiene todo el contexto para seguir.
