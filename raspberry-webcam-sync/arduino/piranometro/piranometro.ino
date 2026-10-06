@@ -121,8 +121,8 @@ const float RESISTENCIA_OHM = 10000.0;
 
 // ── Tamaño de la celda [mm] (PANEL_LENGTH y PANEL_WIDTH del artículo) ──
 // Medí con una regla SOLO la parte que capta luz.
-const float CELDA_LARGO_MM = 60.0;
-const float CELDA_ANCHO_MM = 20.0;
+const float CELDA_LARGO_MM = 110.0;   // placa de 11 x 6 cm
+const float CELDA_ANCHO_MM = 60.0;
 
 // ── Solo para MODO_SHUNT: Isc de la etiqueta de la celda [A] ──
 const float ISC_STC_A = 0.50;

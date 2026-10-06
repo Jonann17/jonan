@@ -189,7 +189,7 @@ descarga OK (ping a 192.168.50.1 responde, fotos bajan a subcarpetas por día).
 - **Arduino:** UART `/dev/serial0` (GPIO 14/15) con conversor de nivel;
   `instalar_camara.sh` habilita la UART y agrega el usuario a `dialout`
   (requiere reiniciar). Sección `[arduino]` en `config.ini`.
-- **Ojo:** el método del artículo da un índice (~2 W/m² con 5 V/10 kΩ/60×20 mm),
+- **Ojo:** el método del artículo da un índice (~0,4 W/m² con 5 V/10 kΩ/110×60 mm),
   no irradiancia real → calibrar `CAL_K`. `MODO_SHUNT 1` = alternativa lineal.
 
 ## 8. Pendiente / próximos pasos sugeridos
