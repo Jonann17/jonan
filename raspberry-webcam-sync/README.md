@@ -193,8 +193,8 @@ el sketch (el área daba 0 por división entera y además mm²→m² es /10⁶; 
 
 > ⚠ Aun corregida, la fórmula **no da la irradiancia real**: con la resistencia
 > en serie hacia A0 casi no circula corriente (se mide la tensión en vacío de
-> la celda) y la celda convierte ~15 % de la luz. Con 5 V, 10 kΩ y 60×20 mm da
-> ≈2 W/m². Es un **índice** que sube y baja con el sol; para W/m² reales hay
+> la celda) y la celda convierte ~15 % de la luz. Con 5 V, 10 kΩ y 110×60 mm (placa de 11×6 cm) da
+> ≈0,4 W/m². Es un **índice** que sube y baja con el sol; para W/m² reales hay
 > que calibrar `CAL_K` contra una referencia (otro piranómetro o una estación
 > meteorológica cercana). Alternativa más lineal: `#define MODO_SHUNT 1`
 > (resistencia de ~1 Ω en paralelo con la celda, mide la corriente de
