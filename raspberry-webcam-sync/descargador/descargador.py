@@ -11,9 +11,11 @@ Qué hace:
      Así nunca se mezclan las fotos nuevas con las viejas.
   3. No vuelve a descargar las que ya bajó (compara por nombre, en
      cualquier subcarpeta).
-  4. Le avisa al servidor que está vivo (un "latido"), para que la página
+  4. Baja también mediciones.csv (la medición del piranómetro de cada
+     foto) a la carpeta local, para el gráfico de la IHM.
+  5. Le avisa al servidor que está vivo (un "latido"), para que la página
      web muestre en verde que el descargador está funcionando.
-  5. "Self-check": si el Pi se apaga y se prende, systemd lo vuelve a lanzar
+  6. "Self-check": si el Pi se apaga y se prende, systemd lo vuelve a lanzar
      solo y sigue descargando lo que falte.
 
 Requisitos en el Pi:
@@ -76,6 +78,23 @@ def descargar(url_servidor, nombre, carpeta):
     log.info("Descargada: %s/%s", fecha_de_nombre(nombre), nombre)
 
 
+def descargar_mediciones(url_servidor, carpeta):
+    """Baja mediciones.csv completo (es chico: una fila por foto)."""
+    url = url_servidor.rstrip("/") + "/mediciones.csv"
+    destino = os.path.join(carpeta, "mediciones.csv")
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code == 404:
+            return  # todavía no hay mediciones
+        r.raise_for_status()
+        temporal = destino + ".parcial"
+        with open(temporal, "wb") as f:
+            f.write(r.content)
+        os.replace(temporal, destino)
+    except requests.RequestException as e:
+        log.warning("No se pudo bajar mediciones.csv: %s", e)
+
+
 def enviar_latido(url_servidor):
     """Le avisa al servidor que el descargador está vivo (para el panel web)."""
     url = url_servidor.rstrip("/") + "/latido"
@@ -103,6 +122,7 @@ def sincronizar(url_servidor, carpeta):
             nuevas += 1
         except requests.RequestException as e:
             log.warning("Error al descargar %s: %s", nombre, e)
+    descargar_mediciones(url_servidor, carpeta)
     return nuevas
 
 

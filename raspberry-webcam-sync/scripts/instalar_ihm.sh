@@ -4,11 +4,11 @@
 # Uso:  bash scripts/instalar_ihm.sh   (sin sudo; pide sudo cuando hace falta)
 set -e
 
-echo ">> Instalando PyQt6 y requests..."
+echo ">> Instalando PyQt6, requests y matplotlib..."
 sudo apt-get update
-if ! sudo apt-get install -y python3-pyqt6 python3-requests; then
+if ! sudo apt-get install -y python3-pyqt6 python3-requests python3-matplotlib; then
   echo ">> El paquete apt no está disponible, probando con pip..."
-  pip3 install --break-system-packages PyQt6 requests
+  pip3 install --break-system-packages PyQt6 requests matplotlib
 fi
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"

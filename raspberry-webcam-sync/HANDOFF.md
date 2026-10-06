@@ -50,7 +50,9 @@ Pi A  =  CÁMARA + SERVIDOR + HOTSPOT WiFi        Pi B  =  DESCARGADOR + IHM
 | `camara/camara.py` | Saca la foto, la guarda local y la sube. Consulta el intervalo al servidor en cada ciclo (se puede cambiar en caliente). Reintenta subir pendientes tras reinicio. |
 | `servidor/servidor.py` | Flask. Recibe/guarda fotos, página web con panel de estado + galería por día, "Ver en vivo", ZIP, y API (`/lista`, `/subir`, `/config`, `/estado`, `/latido`, `/vivo`). |
 | `descargador/descargador.py` | Baja las fotos que faltan a subcarpetas por día; manda "latido" al servidor. |
-| `ihm/ihm.py` | Interfaz gráfica PyQt6 (Pi B): estado con luces, galería, selector de intervalo. |
+| `ihm/ihm.py` | Interfaz gráfica PyQt6 (Pi B), 3 pestañas: Control (estado, Iniciar/Detener, intervalo, fecha/hora, piranómetro en vivo), Fotos (galería), Gráfico (mediciones.csv). |
+| `arduino/piranometro/piranometro.ino` | Piranómetro casero (Hackster/Jeffrey, sin Ethernet shield, bugs corregidos). Responde JSON a `GET`/`NOW` por SoftwareSerial D8/D9. |
+| `arduino/esquematico_conexion.svg` | Cableado Pi A ↔ conversor de nivel ↔ Arduino ↔ celda. |
 | `systemd/*.service` | Servicios de arranque automático + reinicio (self-check). |
 | `scripts/instalar_*.sh` | Instaladores (cámara, servidor, descargador, IHM). |
 | `scripts/configurar_hotspot.sh` | Convierte al Pi A en Access Point WiFi. |
@@ -165,11 +167,38 @@ descarga OK (ping a 192.168.50.1 responde, fotos bajan a subcarpetas por día).
 | `/latido` | POST | El descargador avisa que está vivo. |
 | `/vivo` | GET | Foto del momento (para "Ver en vivo"). |
 | `/envivo` | GET | Página que refresca la imagen cada 2 s. |
+| `/captura` | POST | `accion=iniciar` o `accion=detener`. La cámara arranca SIEMPRE en espera tras reiniciar. |
+| `/hora` | POST | `epoch=<seg UTC>` → `sudo date` (regla en `/etc/sudoers.d/webcam-hora`). |
+| `/sensor` | POST | La cámara manda la lectura "en vivo" del Arduino (JSON). |
+| `/mediciones.csv` | GET | Medición del piranómetro de cada foto. |
 
 ---
 
+## 7b. Captura bajo demanda, hora y piranómetro (2026-10)
+
+- **Captura bajo demanda:** `camara.py` corre desde el arranque pero queda EN
+  ESPERA; consulta `GET /config?origen=camara` cada 5 s (también es su latido)
+  y saca fotos solo si `capturando=true`. El servidor pone `capturando=false`
+  cada vez que arranca (o sea, en cada reinicio del Pi A).
+- **Intervalos con `time.monotonic()`**: ajustar la hora en medio de una
+  captura no adelanta ni atrasa la próxima foto.
+- **Fecha/hora:** la IHM manda la hora del Pi B (o la que se elija) a
+  `POST /hora`. `hora_ajustada` se compara con el `boot_id` del kernel, así
+  que vuelve a "sin ajustar" en cada reinicio. `instalar_servidor.sh` crea la
+  regla sudoers y apaga NTP.
+- **Arduino:** UART `/dev/serial0` (GPIO 14/15) con conversor de nivel;
+  `instalar_camara.sh` habilita la UART y agrega el usuario a `dialout`
+  (requiere reiniciar). Sección `[arduino]` en `config.ini`.
+- **Ojo:** el método del artículo da un índice (~2 W/m² con 5 V/10 kΩ/60×20 mm),
+  no irradiancia real → calibrar `CAL_K`. `MODO_SHUNT 1` = alternativa lineal.
+
 ## 8. Pendiente / próximos pasos sugeridos
 
+- [ ] **Probar en los Pi reales** lo nuevo: Iniciar/Detener, ajustar hora
+      (re-correr `instalar_servidor.sh` para la regla sudoers), UART del
+      Arduino (re-correr `instalar_camara.sh` + reboot), gráfico en la IHM
+      (re-correr `instalar_ihm.sh` para matplotlib).
+- [ ] Medir la celda real (tamaño, tensión a pleno sol ≤ 5 V) y calibrar `CAL_K`.
 - [ ] **Probar el reinicio** de ambos Pi para confirmar el self-check
       (que hotspot, cámara, servidor y descargador levanten solos al prender).
 - [ ] Ajustar fino la resolución fisheye si 1600x1200 no la soporta la webcam
