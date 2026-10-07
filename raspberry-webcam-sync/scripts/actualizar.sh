@@ -105,7 +105,8 @@ main() {
   # ── Comando corto "actualizar" para la próxima vez ──
   sudo ln -sf "$DIR/scripts/actualizar.sh" /usr/local/bin/actualizar
   sudo ln -sf "$DIR/scripts/verificar.sh" /usr/local/bin/verificar
-  sudo chmod +x "$DIR/scripts/actualizar.sh" "$DIR/scripts/verificar.sh"
+  sudo ln -sf "$DIR/scripts/probar_serie.sh" /usr/local/bin/probar_serie
+  sudo chmod +x "$DIR/scripts/actualizar.sh" "$DIR/scripts/verificar.sh" "$DIR/scripts/probar_serie.sh"
 
   echo ""
   echo "========================================================"
