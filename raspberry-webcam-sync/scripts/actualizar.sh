@@ -91,12 +91,14 @@ main() {
 
   # ── Comando corto "actualizar" para la próxima vez ──
   sudo ln -sf "$DIR/scripts/actualizar.sh" /usr/local/bin/actualizar
-  sudo chmod +x "$DIR/scripts/actualizar.sh"
+  sudo ln -sf "$DIR/scripts/verificar.sh" /usr/local/bin/verificar
+  sudo chmod +x "$DIR/scripts/actualizar.sh" "$DIR/scripts/verificar.sh"
 
   echo ""
   echo "========================================================"
   echo " Listo: actualizado a $(git log -1 --format='%h %s')"
   echo " La próxima vez escribí solo:  actualizar"
+  echo " Para revisar que todo ande:    verificar"
   echo " Reiniciando en 10 s (Ctrl+C para cancelar)..."
   echo "========================================================"
   sleep 10
