@@ -1,0 +1,96 @@
+From 84a4f430c1a389bf1ba4b9f6b05acb67afa5eafc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:24:31 +0000
+Subject: [PATCH 17/17] Qt6: splash sempre emite pronta e --smoke relata
+ backend que nao carregou
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/main.py  | 23 +++++++++++++++++++----
+ tests/test_qt_main.py | 23 +++++++++++++++++++++++
+ 2 files changed, 42 insertions(+), 4 deletions(-)
+
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index 1757b81..e130213 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -235,9 +235,16 @@ class SplashScreen(QWidget):
+             print(f"Erro ao carregar {exibido}: {erro}")
+             interface.na_interface(self.status.setText, f"Erro em {exibido}")
+ 
+-        backends.carregar_todos(ao_progredir=progredir, ao_falhar=falhar)
+-        interface.na_interface(self.status.setText, f"Concluído em {time.time() - inicio:.1f}s")
+-        interface.na_interface(self.pronta.emit)
++        try:
++            backends.carregar_todos(ao_progredir=progredir, ao_falhar=falhar)
++            interface.na_interface(self.status.setText, f"Concluído em {time.time() - inicio:.1f}s")
++        except BaseException:  # noqa: BLE001 -- inclui SystemExit de um backend no import
++            traceback.print_exc()
++        finally:
++            # Sempre segue adiante: a splash que não some deixa o processo vivo
++            # e sem janela. Tela com backend ausente mostra o motivo sozinha
++            # (`backends.falhas`).
++            interface.na_interface(self.pronta.emit)
+ 
+ 
+ def _preparar_qt() -> QApplication:
+@@ -276,15 +283,23 @@ def main() -> None:
+ 
+ def _smoke() -> int:
+     """Monta a janela principal e sai, sem laço de eventos (para o CI)."""
++    avisos: list[str] = []
+     try:
+         _preparar_qt()
+-        backends.carregar_todos()
++        backends.carregar_todos(
++            ao_falhar=lambda nome, erro: avisos.append(
++                f"[smoke] AVISO: o backend '{nome}' nao carregou: "
++                f"{type(erro).__name__}: {erro}"))
+         janela = SIG_FT_App()
+         janela.close()
+     except Exception as erro:  # noqa: BLE001 -- é o que se quer relatar
++        for aviso in avisos:
++            print(aviso)
+         print(f"[smoke] FALHOU: {type(erro).__name__}: {erro}")
+         traceback.print_exc()
+         return 1
++    for aviso in avisos:
++        print(aviso)
+     print("[smoke] a janela principal Qt montou e fechou sem erro.")
+     return 0
+ 
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index ba8a00e..4da2661 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -61,3 +61,26 @@ def test_smoke_monta_e_sai_com_zero(qt_interface, monkeypatch, tmp_path):
+     monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
+     monkeypatch.setattr(qmain.backends, "carregar_todos", lambda **k: None)
+     assert qmain._smoke() == 0
++
++
++def test_smoke_relata_backend_que_nao_carregou(qt_interface, monkeypatch, tmp_path, capsys):
++    monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
++
++    def carregar(ao_falhar=None, **_):
++        ao_falhar("Teste", ImportError("x"))
++
++    monkeypatch.setattr(qmain.backends, "carregar_todos", carregar)
++    assert qmain._smoke() == 0
++    assert "[smoke] AVISO: o backend 'Teste' nao carregou: ImportError: x" in capsys.readouterr().out
++
++
++@pytest.mark.parametrize("erro", [SystemExit(1), RuntimeError("quebrou")])
++def test_splash_sempre_emite_pronta_mesmo_se_o_carregamento_morre(qt_interface, qtbot, monkeypatch, erro):
++    def carregar(**_):
++        raise erro
++
++    monkeypatch.setattr(qmain.backends, "carregar_todos", carregar)
++    splash = qmain.SplashScreen()
++    qtbot.addWidget(splash)
++    with qtbot.waitSignal(splash.pronta, timeout=3000):
++        splash.carregar()
+-- 
+2.43.0
+

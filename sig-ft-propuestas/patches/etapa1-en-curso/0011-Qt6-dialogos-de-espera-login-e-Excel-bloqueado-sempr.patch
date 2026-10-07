@@ -1,7 +1,7 @@
 From f5fdba95e00063765c3f8c44bbce7eefb1cdbda2 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:44:04 +0000
-Subject: [PATCH 11/15] Qt6: dialogos de espera (login e Excel bloqueado)
+Subject: [PATCH 11/17] Qt6: dialogos de espera (login e Excel bloqueado)
  sempre na thread da interface
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
