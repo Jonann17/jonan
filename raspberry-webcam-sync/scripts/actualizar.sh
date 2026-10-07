@@ -80,6 +80,19 @@ main() {
     sed -i "s#^padron *=.*#padron = $PADRON#" config.ini
   fi
 
+  # ── apt sano antes de instalar ──
+  # Si el Pi se apagó de golpe, la lista de paquetes puede quedar dañada
+  # ("package cache file is corrupted" / "unable to parse package file").
+  # En ese caso se borra y se baja de nuevo.
+  echo ">> Revisando el instalador de paquetes (apt)..."
+  sudo dpkg --configure -a || true
+  if ! sudo apt-get update; then
+    echo ">> La lista de paquetes estaba dañada: reparándola..."
+    sudo rm -rf /var/lib/apt/lists/*
+    sudo apt-get clean
+    sudo apt-get update
+  fi
+
   # ── Reinstalar lo de este Pi ──
   if [ "$ROL" = a ]; then
     sudo bash scripts/instalar_servidor.sh
