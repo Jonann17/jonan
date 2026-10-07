@@ -1,0 +1,171 @@
+From 094d0686cf48d70fa0e9460464769b37fb24c5d7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 19:39:32 +0000
+Subject: [PATCH 10/10] Qt6: console com escrita em lote e limite de linhas
+
+ConsoleFrame (QPlainTextEdit somente leitura) junta as linhas que chegam de
+qualquer thread e escreve em lote a cada 50 ms; guarda no maximo 20.000 linhas.
+O prefixo "> " continua igual ao da interface atual, coberto por teste.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/__init__.py |  1 +
+ sigft/app_qt/widgets/console.py  | 71 ++++++++++++++++++++++++++++++++
+ tests/test_qt_console.py         | 58 ++++++++++++++++++++++++++
+ 3 files changed, 130 insertions(+)
+ create mode 100644 sigft/app_qt/widgets/__init__.py
+ create mode 100644 sigft/app_qt/widgets/console.py
+ create mode 100644 tests/test_qt_console.py
+
+diff --git a/sigft/app_qt/widgets/__init__.py b/sigft/app_qt/widgets/__init__.py
+new file mode 100644
+index 0000000..280ead6
+--- /dev/null
++++ b/sigft/app_qt/widgets/__init__.py
+@@ -0,0 +1 @@
++"""Widgets reutilizáveis da interface Qt (um por responsabilidade)."""
+diff --git a/sigft/app_qt/widgets/console.py b/sigft/app_qt/widgets/console.py
+new file mode 100644
+index 0000000..827650e
+--- /dev/null
++++ b/sigft/app_qt/widgets/console.py
+@@ -0,0 +1,71 @@
++"""Console de log das telas, rápido e seguro para chamar de qualquer thread.
++
++O `CTkTextbox` reescrevia e rolava a cada linha; num lote de milhares de linhas
++isso pesava. Aqui as linhas que chegam são juntadas e escritas em LOTE a cada
++`INTERVALO_MS` (medido no protótipo: 10.000 linhas em ~0,1 s), e o console
++guarda no máximo `MAX_LINHAS` -- as mais antigas saem.
++"""
++from __future__ import annotations
++
++import threading
++from collections import deque
++
++from PySide6.QtCore import QTimer
++from PySide6.QtWidgets import QPlainTextEdit
++
++from sigft.app import theme
++from sigft.app_qt import interface
++
++PREFIXO_LINHA = "> "
++INTERVALO_MS = 50
++MAX_LINHAS = 20_000
++
++
++def formatar_linha(msg: object) -> str:
++    """A linha como as telas escrevem: ``"> {msg}"``. Aceita qualquer objeto."""
++    return f"{PREFIXO_LINHA}{msg}"
++
++
++class ConsoleFrame(QPlainTextEdit):
++    def __init__(self, parent=None, *, altura: int | None = theme.ALTURA_CONSOLE) -> None:
++        super().__init__(parent)
++        self.setObjectName("console")
++        self.setReadOnly(True)
++        self.setMaximumBlockCount(MAX_LINHAS)
++        if altura is not None:
++            self.setFixedHeight(altura)
++        self._pendentes: deque[str] = deque()
++        self._trava = threading.Lock()
++        self._agendado = False
++
++    def log(self, msg: object, nivel: str = "info", contexto: object | None = None) -> None:
++        """Assinatura do protocolo `core/callbacks.py`. Qualquer thread."""
++        with self._trava:
++            self._pendentes.append(formatar_linha(msg))
++            if self._agendado:
++                return
++            self._agendado = True
++        try:
++            interface.na_interface(self._agendar)
++        except RuntimeError:
++            pass  # app fechando: perder a linha é o certo, derrubar o worker não
++
++    def _agendar(self) -> None:
++        try:
++            QTimer.singleShot(INTERVALO_MS, self._descarregar)
++        except RuntimeError:
++            pass  # widget destruído
++
++    def _descarregar(self) -> None:
++        with self._trava:
++            linhas = list(self._pendentes)
++            self._pendentes.clear()
++            self._agendado = False
++        if not linhas:
++            return
++        try:
++            self.appendPlainText("\n".join(linhas))
++            barra = self.verticalScrollBar()
++            barra.setValue(barra.maximum())
++        except RuntimeError:
++            pass  # widget destruído entre o agendamento e a escrita
+diff --git a/tests/test_qt_console.py b/tests/test_qt_console.py
+new file mode 100644
+index 0000000..64c5364
+--- /dev/null
++++ b/tests/test_qt_console.py
+@@ -0,0 +1,58 @@
++import ast
++import threading
++from pathlib import Path
++
++from sigft.app_qt.widgets import console as qconsole
++
++# Caminho a partir deste arquivo, não do cwd: outro teste da suíte faz os.chdir
++# (test_llm_comparacao.py) sem restaurar, e o cwd não é a raiz quando este roda.
++RAIZ = Path(__file__).resolve().parents[1]
++
++
++def test_prefixo_igual_ao_da_interface_atual():
++    arvore = ast.parse((RAIZ / "sigft/app/widgets/console.py").read_text(encoding="utf-8"))
++    atual = next(n.value.value for n in arvore.body
++                 if isinstance(n, ast.Assign) and n.targets[0].id == "PREFIXO_LINHA")
++    assert qconsole.PREFIXO_LINHA == atual
++
++
++def test_linhas_de_thread_chegam_em_ordem(qt_interface, qtbot):
++    c = qconsole.ConsoleFrame()
++    qtbot.addWidget(c)
++
++    def worker():
++        for i in range(500):
++            c.log(f"linha {i}")
++
++    t = threading.Thread(target=worker)
++    t.start()
++    t.join()
++    qtbot.waitUntil(lambda: c.blockCount() >= 500, timeout=3000)
++    linhas = c.toPlainText().splitlines()
++    assert linhas[0] == "> linha 0" and linhas[-1] == "> linha 499" and len(linhas) == 500
++
++
++def test_aceita_qualquer_objeto(qt_interface, qtbot):
++    c = qconsole.ConsoleFrame()
++    qtbot.addWidget(c)
++    c.log(ValueError("x"))
++    c.log(42)
++    qtbot.waitUntil(lambda: c.blockCount() >= 2, timeout=2000)
++    assert c.toPlainText().splitlines() == ["> x", "> 42"]
++
++
++def test_somente_leitura_e_altura(qt_interface, qtbot):
++    c = qconsole.ConsoleFrame(altura=120)
++    qtbot.addWidget(c)
++    assert c.isReadOnly() and c.height() == 120
++    livre = qconsole.ConsoleFrame(altura=None)
++    qtbot.addWidget(livre)
++    assert livre.maximumHeight() > 120
++
++
++def test_widget_destruido_nao_derruba_o_worker(qt_interface, qtbot):
++    c = qconsole.ConsoleFrame()
++    c.log("antes")
++    c.deleteLater()
++    qtbot.wait(100)
++    c.log("depois")  # não pode levantar
+-- 
+2.43.0
+
