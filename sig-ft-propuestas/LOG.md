@@ -27,4 +27,7 @@ _(todavía sin cambios aplicados al código de SIG-FT)_
 
 - `specs/2026-10-07-migracao-qt6-design.md` — diseño de la migración de la interfaz
   de CustomTkinter a Qt6 (PySide6), autorizada por Luan. Pendiente de aprobación de
-  Jonathan antes de entrar a SIG-FT (irá a `docs/superpowers/specs/`).
+  Jonathan antes de entrar a SIG-FT (irá a `docs/superpowers/specs/`). **Aprobado por
+  Jonathan el 2026-10-07**, con el prototipo de la Home (`specs/prototipo/`).
+- `planos/2026-10-07-qt6-etapa1-base.md` — plan de implementación de la etapa 1
+  (base de la interfaz Qt). Las etapas 2 a 6 tendrán su propio plan.
