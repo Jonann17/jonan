@@ -1,7 +1,7 @@
 From 39025ab02cab512e2c0ea110dbc50bda7c964b6c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:25:56 +0000
-Subject: [PATCH 07/12] Qt6: na_interface, o unico caminho de uma thread ate um
+Subject: [PATCH 07/13] Qt6: na_interface, o unico caminho de uma thread ate um
  widget
 
 Sinal Qt com conexao em fila entrega a funcao na thread da interface.
