@@ -21,4 +21,10 @@ Cada cambio se guarda también como parche en `patches/` (se aplica con `git am`
 - Parche: patches/000N-....patch
 -->
 
-_(todavía sin cambios)_
+_(todavía sin cambios aplicados al código de SIG-FT)_
+
+## Borradores en revisión
+
+- `specs/2026-10-07-migracao-qt6-design.md` — diseño de la migración de la interfaz
+  de CustomTkinter a Qt6 (PySide6), autorizada por Luan. Pendiente de aprobación de
+  Jonathan antes de entrar a SIG-FT (irá a `docs/superpowers/specs/`).
