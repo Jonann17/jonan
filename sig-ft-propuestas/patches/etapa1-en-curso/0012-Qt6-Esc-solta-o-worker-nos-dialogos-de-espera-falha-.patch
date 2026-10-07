@@ -1,7 +1,7 @@
 From 952522a8171950813ba4d36fd170021d1ad48cc7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 20:01:06 +0000
-Subject: [PATCH 12/14] Qt6: Esc solta o worker nos dialogos de espera; falha
+Subject: [PATCH 12/15] Qt6: Esc solta o worker nos dialogos de espera; falha
  ao construir tambem solta
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

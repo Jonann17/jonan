@@ -1,7 +1,7 @@
 From 7e75724bca1e2d72e5c6a9dc7a85ef86968c6062 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 20:04:47 +0000
-Subject: [PATCH 13/14] Qt6: ModuleFrame com backend() que avisa e
+Subject: [PATCH 13/15] Qt6: ModuleFrame com backend() que avisa e
  iniciar_tarefa() que trava o botao no clique
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

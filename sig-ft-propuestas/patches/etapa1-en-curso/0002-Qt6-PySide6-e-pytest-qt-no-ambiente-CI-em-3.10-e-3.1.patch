@@ -1,7 +1,7 @@
 From 6acc60feeefe249489cce2866f3c5dde43a81cbc Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:07:23 +0000
-Subject: [PATCH 02/14] Qt6: PySide6 e pytest-qt no ambiente, CI em 3.10 e 3.12
+Subject: [PATCH 02/15] Qt6: PySide6 e pytest-qt no ambiente, CI em 3.10 e 3.12
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij

@@ -1,7 +1,7 @@
 From 26a4e5c741401fe457526e7bfe7069930a67522f Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:14:10 +0000
-Subject: [PATCH 04/14] Conferir Python 3.10+ na abertura, com mensagem clara
+Subject: [PATCH 04/15] Conferir Python 3.10+ na abertura, com mensagem clara
 
 Com Python 3.9 o app abria pela metade e a pessoa nao tinha como saber que
 o problema era a versao. A conferencia roda antes de qualquer import pesado
