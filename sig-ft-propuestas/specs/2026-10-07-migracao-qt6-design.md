@@ -115,12 +115,27 @@ pasta inicial e o `remember_dir` continuam sendo os de hoje.
   na fonte padrão e a app mudaria de cara. Os dois `.ttf` vão para `assets/fonts/`, com a
   licença (Apache 2.0), e são registrados com `QFontDatabase.addApplicationFont` antes da
   primeira janela. `Consolas` do console tem `Menlo` como alternativa no macOS.
+- **Ícones em preto e branco.** Os ícones dos botões são emojis no texto (📋 🤖 💰 🔑 🔄 🏠).
+  O Tk os desenha monocromáticos; o Qt usa a fonte de emoji COLORIDA do sistema (Apple no
+  Mac, Segoe no Windows). Decisão do Jonathan (2026-10-07): **continuam em preto e branco.**
+  Mecanismo, validado no protótipo: `assets/fonts/NotoEmoji-Regular.ttf` (Google, licença
+  OFL, ~870 KB) registrada no início, e `estilo.mono(texto)` acrescenta o seletor U+FE0E
+  ("apresentação de texto") depois de cada emoji. Só a fonte, ou só o seletor, NÃO bastam
+  — testado: sem o seletor o Qt continua escolhendo a fonte colorida.
+- **Espaçamento igual ao de hoje:** botões da barra lateral com 35 px de altura e 4 px
+  entre eles, rótulo de seção com 20 px acima e 5 abaixo, botões da barra da Home com
+  40 px — os valores que o CustomTkinter aplica hoje.
+- **Cards da Home mais compactos** (decisão do Jonathan, 2026-10-07): a descrição ocupa a
+  largura do card, sem o `wraplength=380` de hoje. Os 12 cards cabem sem rolar a tela em
+  1280x850. É a única mudança visual deliberada; o resto segue a decisão nº 3.
 - **Cantos arredondados, bordas e hover:** QSS (`border-radius`, `:hover`, `:disabled`),
   com os mesmos raios e cores que o CustomTkinter usa por padrão no tema `dark-blue`.
 - **DPI:** o Qt 6 trata tela de alta resolução sozinho (Windows com escala 125/150% e
   Retina no Mac) — some o `check_dpi_scaling` que hoje solta aviso no console.
 - **Conferência:** capturas lado a lado, com as de `docs/superpowers/specs/prints-janelas/`
   como referência dos diálogos.
+- **Protótipo aprovado:** a Home em PySide6 foi prototipada fora do repositório e comparada
+  lado a lado com a atual; o Jonathan aprovou o aspecto com os três ajustes acima.
 
 ## 6. Threads e interface
 
