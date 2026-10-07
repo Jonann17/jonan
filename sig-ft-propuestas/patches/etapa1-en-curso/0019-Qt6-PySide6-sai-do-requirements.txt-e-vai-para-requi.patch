@@ -1,0 +1,71 @@
+From 1d1ef221f767f0968500f8064d9c56884cd23038 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:36:07 +0000
+Subject: [PATCH 19/26] Qt6: PySide6 sai do requirements.txt e vai para
+ requirements-qt.txt
+
+O SIG-FT.bat reinstala o requirements.txt quando o hash muda e aborta se o
+pip falhar: todo usuario baixaria ~650 MB por uma UI que ninguem usa ainda.
+requirements-qt.txt usa PySide6-Essentials>=6.9 e o requirements-dev.txt o inclui.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ requirements-dev.txt |  4 +++-
+ requirements-qt.txt  | 15 +++++++++++++++
+ requirements.txt     |  3 ---
+ 3 files changed, 18 insertions(+), 4 deletions(-)
+ create mode 100644 requirements-qt.txt
+
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+index 5d142db..1210aed 100644
+--- a/requirements-dev.txt
++++ b/requirements-dev.txt
+@@ -10,7 +10,9 @@
+ pytest
+ # Fixture `qtbot`: monta widgets Qt de verdade, sem display (offscreen).
+ pytest-qt
+-PySide6
++# PySide6 (so a UI Qt em migracao) fica em arquivo proprio: nao entra no
++# requirements.txt de producao ate o corte (Etapa 6).
++-r requirements-qt.txt
+ 
+ # lxml — desde 2026-10-05 é dependência de PRODUÇÃO (está no requirements.txt:
+ # o editor cirúrgico que grava nos `_STATUS_PMIB`). Fica aqui também porque o CI
+diff --git a/requirements-qt.txt b/requirements-qt.txt
+new file mode 100644
+index 0000000..6e11733
+--- /dev/null
++++ b/requirements-qt.txt
+@@ -0,0 +1,15 @@
++# Interface Qt (PySide6) -- a UI em migração, pacote sigft/app_qt/.
++#
++# Este arquivo é SEPARADO do requirements.txt de propósito: o app oficial ainda é
++# o CustomTkinter, e o SIG-FT.bat reinstala o requirements.txt quando o hash dele
++# muda (e aborta se o pip falhar). Pôr o PySide6 lá faria todo usuário baixar
++# ~650 MB por uma interface que ninguém usa ainda. Ele entra no requirements.txt
++# só no corte (Etapa 6 da migração).
++#
++# Uso (desenvolvimento): python -m pip install -r requirements-qt.txt
++# (o requirements-dev.txt já inclui este arquivo).
++#
++# PySide6-Essentials = QtCore, QtGui, QtWidgets e QtTest (o que usamos), sem o
++# metapacote completo. >=6.9 porque `QFontDatabase.setApplicationEmojiFontFamilies`,
++# usado em sigft/app_qt/estilo.py, só existe a partir do Qt 6.9.
++PySide6-Essentials>=6.9
+diff --git a/requirements.txt b/requirements.txt
+index 4009cb4..d837833 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,8 +1,5 @@
+ # Interface
+ customtkinter
+-# Interface Qt (migração em andamento: sigft/app_qt/). LGPL -- ver
+-# docs/superpowers/specs/2026-10-07-migracao-qt6-design.md, decisões.
+-PySide6
+ pillow
+ 
+ # Dados / Excel
+-- 
+2.43.0
+

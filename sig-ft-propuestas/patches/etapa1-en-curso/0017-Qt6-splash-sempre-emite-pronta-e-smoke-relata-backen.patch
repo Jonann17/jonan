@@ -1,7 +1,7 @@
 From 84a4f430c1a389bf1ba4b9f6b05acb67afa5eafc Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 20:24:31 +0000
-Subject: [PATCH 17/17] Qt6: splash sempre emite pronta e --smoke relata
+Subject: [PATCH 17/26] Qt6: splash sempre emite pronta e --smoke relata
  backend que nao carregou
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

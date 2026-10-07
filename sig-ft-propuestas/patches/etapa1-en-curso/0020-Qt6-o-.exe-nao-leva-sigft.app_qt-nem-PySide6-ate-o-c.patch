@@ -1,0 +1,88 @@
+From 8c7a34b44fd9e20fb2f2329807c37f4356d3728f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:36:26 +0000
+Subject: [PATCH 20/26] Qt6: o .exe nao leva sigft.app_qt nem PySide6 ate o
+ corte
+
+collect_submodules(sigft) filtra sigft.app_qt e PySide6/shiboken6 entram nos
+excludes do Analysis; teste confere as duas protecoes (sai na Etapa 6).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ SIG-FT.spec                  | 15 +++++++++++++--
+ tests/test_qt_fora_do_exe.py | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 42 insertions(+), 2 deletions(-)
+ create mode 100644 tests/test_qt_fora_do_exe.py
+
+diff --git a/SIG-FT.spec b/SIG-FT.spec
+index 6d46ddb..01386ef 100644
+--- a/SIG-FT.spec
++++ b/SIG-FT.spec
+@@ -171,7 +171,13 @@ hiddenimports = [
+ 
+ # O pacote `sigft` inteiro: as views são importadas pelo `main.py`, mas os
+ # serviços entram por aqueles shims dinâmicos acima.
+-hiddenimports += collect_submodules("sigft")
++#
++# `sigft.app_qt` (a UI Qt em migração) fica DE FORA: até o corte (Etapa 6) o
++# .exe é o app CustomTkinter, e coletar o pacote arrastaria PySide6 + as DLLs e
++# plugins do Qt (50 MB ou mais) para um .exe que nem abre essa interface.
++# A Etapa 6 remove este filtro (e o "PySide6"/"shiboken6" dos `excludes`).
++hiddenimports += collect_submodules(
++    "sigft", filter=lambda nome: not nome.startswith("sigft.app_qt"))
+ 
+ # Provedores de IA são importados PREGUIÇOSAMENTE dentro das funções
+ # (`core/llm/client.py`), de propósito — mesma razão dos backends: o
+@@ -232,7 +238,12 @@ a = Analysis(
+     # `ctranslate2.converters` tenta importá-los dentro de try/except, e numa
+     # máquina de build que os tenha instalados a análise levaria ~800 MB de
+     # torch para o instalador.
+-    excludes=["pytest", "_pytest", "mypy", "ruff", "torch", "transformers"],
++    #
++    # `PySide6` e `shiboken6`: a UI Qt ainda não é a oficial (ver o filtro do
++    # `collect_submodules("sigft")` acima). Se o ambiente de build os tiver, a
++    # análise não pode puxá-los para o .exe. Sai no corte (Etapa 6).
++    excludes=["pytest", "_pytest", "mypy", "ruff", "torch", "transformers",
++              "PySide6", "shiboken6"],
+     noarchive=False,
+ )
+ 
+diff --git a/tests/test_qt_fora_do_exe.py b/tests/test_qt_fora_do_exe.py
+new file mode 100644
+index 0000000..2600261
+--- /dev/null
++++ b/tests/test_qt_fora_do_exe.py
+@@ -0,0 +1,29 @@
++"""O .exe do SIG-FT ainda e o app CustomTkinter: o Qt nao pode entrar nele.
++
++`SIG-FT.spec` faz `collect_submodules("sigft")`, que sem filtro pegaria
++`sigft.app_qt.*` e arrastaria PySide6 + DLLs/plugins do Qt (50 MB ou mais)
++para um instalador que nem abre essa interface. Duas protecoes, as duas
++conferidas aqui como texto (o PyInstaller nao roda na suite):
++
++1. o `collect_submodules("sigft")` filtra `sigft.app_qt`;
++2. `PySide6` e `shiboken6` estao nos `excludes` do Analysis.
++
++REMOVER ESTE TESTE NO CORTE (Etapa 6 da migracao para Qt): ali o .exe passa a
++ser o app Qt e as duas protecoes saem do spec.
++"""
++from pathlib import Path
++
++SPEC = (Path(__file__).resolve().parent.parent / "SIG-FT.spec").read_text(
++    encoding="utf-8")
++
++
++def test_collect_submodules_de_sigft_filtra_app_qt():
++    assert 'collect_submodules(\n    "sigft", filter=lambda nome: '\
++           'not nome.startswith("sigft.app_qt"))' in SPEC
++
++
++def test_excludes_do_analysis_tem_pyside6_e_shiboken6():
++    inicio = SPEC.index("excludes=[")
++    lista = SPEC[inicio:SPEC.index("]", inicio)]
++    assert '"PySide6"' in lista
++    assert '"shiboken6"' in lista
+-- 
+2.43.0
+

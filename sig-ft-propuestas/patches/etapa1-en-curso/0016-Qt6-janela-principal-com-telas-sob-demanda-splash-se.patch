@@ -1,7 +1,7 @@
 From 1714cca65324231c65b0c54c604e70ec53ec91fd Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 20:19:31 +0000
-Subject: [PATCH 16/17] Qt6: janela principal com telas sob demanda, splash sem
+Subject: [PATCH 16/26] Qt6: janela principal com telas sob demanda, splash sem
  pausas e --smoke
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

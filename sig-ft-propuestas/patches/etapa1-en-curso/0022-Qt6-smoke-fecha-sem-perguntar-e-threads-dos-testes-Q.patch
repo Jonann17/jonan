@@ -1,0 +1,192 @@
+From 4ebe79c74e8fd9aee88d687def07ea8a7c138ef8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:37:08 +0000
+Subject: [PATCH 22/26] Qt6: --smoke fecha sem perguntar e threads dos testes
+ Qt sao daemon
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/main.py       |  6 +++++-
+ tests/test_qt_console.py   |  2 +-
+ tests/test_qt_espera.py    | 18 +++++++++---------
+ tests/test_qt_interface.py |  4 ++--
+ tests/test_qt_main.py      | 21 +++++++++++++++++++++
+ 5 files changed, 38 insertions(+), 13 deletions(-)
+
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index e130213..848b1a7 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -63,6 +63,9 @@ class SIG_FT_App(QMainWindow):  # noqa: N801 -- mesmo nome da interface atual
+         if os.path.exists(icone):
+             self.setWindowIcon(QIcon(icone))
+ 
++        # Só o --smoke liga: ele fecha a janela sem ninguém para responder a
++        # pergunta de "tarefa em andamento" (offscreen, no CI).
++        self.fechar_sem_perguntar = False
+         self.api_keys: dict = {}
+         self.load_keys()
+ 
+@@ -176,7 +179,7 @@ class SIG_FT_App(QMainWindow):  # noqa: N801 -- mesmo nome da interface atual
+ 
+     # -- fechar -------------------------------------------------------------------
+     def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
+-        if instancia.tarefas_em_andamento():
++        if not self.fechar_sem_perguntar and instancia.tarefas_em_andamento():
+             resposta = QMessageBox.question(
+                 self, "Fechar o SIG-FT", catalogo.MSG_TAREFA_EM_ANDAMENTO,
+                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+@@ -291,6 +294,7 @@ def _smoke() -> int:
+                 f"[smoke] AVISO: o backend '{nome}' nao carregou: "
+                 f"{type(erro).__name__}: {erro}"))
+         janela = SIG_FT_App()
++        janela.fechar_sem_perguntar = True
+         janela.close()
+     except Exception as erro:  # noqa: BLE001 -- é o que se quer relatar
+         for aviso in avisos:
+diff --git a/tests/test_qt_console.py b/tests/test_qt_console.py
+index 64c5364..1c84b72 100644
+--- a/tests/test_qt_console.py
++++ b/tests/test_qt_console.py
+@@ -24,7 +24,7 @@ def test_linhas_de_thread_chegam_em_ordem(qt_interface, qtbot):
+         for i in range(500):
+             c.log(f"linha {i}")
+ 
+-    t = threading.Thread(target=worker)
++    t = threading.Thread(target=worker, daemon=True)
+     t.start()
+     t.join()
+     qtbot.waitUntil(lambda: c.blockCount() >= 500, timeout=3000)
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+index bb643e4..f92a41f 100644
+--- a/tests/test_qt_espera.py
++++ b/tests/test_qt_espera.py
+@@ -19,7 +19,7 @@ def test_worker_espera_o_login_e_e_solto(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     terminou = []
+-    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("Faça login"), terminou.append(True)))
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("Faça login"), terminou.append(True)), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
+     assert terminou == []
+@@ -32,7 +32,7 @@ def test_fechar_no_x_tambem_solta_o_worker(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     terminou = []
+-    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
+     _abertos(qd.PausaLoginDialog)[0].close()
+@@ -44,7 +44,7 @@ def test_retry_excel_devolve_a_escolha(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     respostas = []
+-    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel("C:/a.xlsx")))
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel("C:/a.xlsx")), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
+     dialogo = _abertos(qd.RetryLockDialog)[0]
+@@ -58,7 +58,7 @@ def test_retry_excel_fechar_no_x_e_cancelar(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     respostas = []
+-    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
+     _abertos(qd.RetryLockDialog)[0].close()
+@@ -69,7 +69,7 @@ def test_retry_excel_fechar_no_x_e_cancelar(qt_interface, qtbot):
+ def test_janela_nasce_na_thread_da_interface(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+-    t = threading.Thread(target=lambda: tela.pausar_e_esperar("x"))
++    t = threading.Thread(target=lambda: tela.pausar_e_esperar("x"), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
+     dialogo = _abertos(qd.PausaLoginDialog)[0]
+@@ -85,7 +85,7 @@ def test_esc_solta_o_login(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     terminou = []
+-    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
+     QTest.keyClick(_abertos(qd.PausaLoginDialog)[0], Qt.Key.Key_Escape)
+@@ -101,7 +101,7 @@ def test_esc_no_retry_excel_e_cancelar(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     respostas = []
+-    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()), daemon=True)
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
+     QTest.keyClick(_abertos(qd.RetryLockDialog)[0], Qt.Key.Key_Escape)
+@@ -140,8 +140,8 @@ def test_falha_ao_construir_o_dialogo_solta_o_worker(qt_interface, qtbot, monkey
+     qtbot.addWidget(tela)
+     terminou = []
+     respostas = []
+-    t1 = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
+-    t2 = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t1 = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)), daemon=True)
++    t2 = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()), daemon=True)
+     t1.start()
+     t2.start()
+     # a thread principal precisa seguir processando eventos (join travaria a fila)
+diff --git a/tests/test_qt_interface.py b/tests/test_qt_interface.py
+index 6009fe0..6169dc2 100644
+--- a/tests/test_qt_interface.py
++++ b/tests/test_qt_interface.py
+@@ -8,7 +8,7 @@ from sigft.app_qt import interface
+ def test_funcao_roda_na_thread_da_interface(qt_interface, qtbot):
+     vistas = []
+     t = threading.Thread(target=lambda: interface.na_interface(
+-        lambda: vistas.append(threading.get_ident())))
++        lambda: vistas.append(threading.get_ident())), daemon=True)
+     t.start()
+     t.join()
+     qtbot.waitUntil(lambda: len(vistas) == 1, timeout=2000)
+@@ -33,7 +33,7 @@ def test_argumentos_sao_repassados(qt_interface, qtbot):
+ def test_sabe_em_que_thread_esta(qt_interface):
+     assert interface.na_thread_da_interface()
+     fora = []
+-    t = threading.Thread(target=lambda: fora.append(interface.na_thread_da_interface()))
++    t = threading.Thread(target=lambda: fora.append(interface.na_thread_da_interface()), daemon=True)
+     t.start()
+     t.join()
+     assert fora == [False]
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index 4da2661..0f9865b 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -84,3 +84,24 @@ def test_splash_sempre_emite_pronta_mesmo_se_o_carregamento_morre(qt_interface,
+     qtbot.addWidget(splash)
+     with qtbot.waitSignal(splash.pronta, timeout=3000):
+         splash.carregar()
++
++
++def test_smoke_nao_pergunta_nada_mesmo_com_thread_comum_viva(qt_interface, monkeypatch, tmp_path):
++    """Offscreen ninguem responde o "Fechar o SIG-FT?": o --smoke travava (exit 124)."""
++    import threading
++
++    monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
++    monkeypatch.setattr(qmain.backends, "carregar_todos", lambda **k: None)
++
++    def nao_deve_perguntar(*a, **k):
++        raise AssertionError("o --smoke nao pode abrir o QMessageBox.question")
++
++    monkeypatch.setattr(qmain.QMessageBox, "question", nao_deve_perguntar)
++    liberar = threading.Event()
++    viva = threading.Thread(target=liberar.wait, name="tarefa:presa")  # comum, de proposito
++    viva.start()
++    try:
++        assert qmain._smoke() == 0
++    finally:
++        liberar.set()
++        viva.join(3)
+-- 
+2.43.0
+

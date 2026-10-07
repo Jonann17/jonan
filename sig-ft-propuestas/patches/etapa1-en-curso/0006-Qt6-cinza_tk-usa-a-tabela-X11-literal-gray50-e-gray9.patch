@@ -1,7 +1,7 @@
 From 754deb9f0e5db9c519dfcc185002562d2d63dda0 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:22:30 +0000
-Subject: [PATCH 06/17] Qt6: cinza_tk usa a tabela X11 literal (gray50 e gray90
+Subject: [PATCH 06/26] Qt6: cinza_tk usa a tabela X11 literal (gray50 e gray90
  arredondam para baixo)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

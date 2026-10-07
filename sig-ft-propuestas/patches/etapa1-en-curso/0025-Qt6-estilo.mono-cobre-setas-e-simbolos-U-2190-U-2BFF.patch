@@ -1,0 +1,124 @@
+From 177fea15b9751978542dc27627ba267d808ae9a8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:39:04 +0000
+Subject: [PATCH 25/26] =?UTF-8?q?Qt6:=20estilo.mono()=20cobre=20setas=20e?=
+ =?UTF-8?q?=20simbolos=20(U+2190-U+2BFF,=20=E2=84=B9)=20e=20nao=20duplica?=
+ =?UTF-8?q?=20seletor?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+O seletor U+FE0E passa a ser escrito como escape; um U+FE0F existente e trocado
+pelo de texto. Testes por simbolo, idempotencia e texto comum.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py  | 27 ++++++++++++++++++++++-----
+ tests/test_qt_estilo.py | 35 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 56 insertions(+), 6 deletions(-)
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 57351e8..36035a3 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -20,7 +20,8 @@ ALTURA_BOTAO_MENU = 35
+ ESPACO_MENU = 4
+ ALTURA_BOTAO_BARRA = 40
+ 
+-_SELETOR_TEXTO = "︎"
++_SELETOR_TEXTO = "\ufe0e"   # U+FE0E: pede a forma de texto (preto e branco)
++_SELETOR_EMOJI = "\ufe0f"   # U+FE0F: pede a forma de emoji (colorida)
+ 
+ 
+ # Nível (0-255) de "grayNN" no Tk, índice = NN. Vem da tabela X11 (rgb.txt), que NÃO
+@@ -52,17 +53,33 @@ def cinza_tk(nome: str) -> str:
+     return f"#{valor:02X}{valor:02X}{valor:02X}"
+ 
+ 
++def _parece_emoji(codigo: int) -> bool:
++    """Plano dos emoji (U+1F000+), setas/técnicos/formas/dingbats (U+2190-U+2BFF) e o ℹ."""
++    return codigo >= 0x1F000 or 0x2190 <= codigo <= 0x2BFF or codigo == 0x2139
++
++
+ def mono(texto: str) -> str:
+     """Pede a versão PRETO E BRANCO de cada emoji (seletor U+FE0E).
+ 
+     Só a fonte Noto Emoji não basta: sem o seletor, o Qt escolhe a fonte de
+     emoji colorida do sistema (testado no protótipo de 2026-10-07).
++
++    Cobre também os símbolos que viram emoji colorido sem ser do plano dos
++    emoji (⬇ ⏭ ▶ ℹ e o resto de U+2190-U+2BFF). Se o texto já traz um seletor
++    depois do símbolo, não se duplica: o de texto fica, e o de emoji (U+FE0F)
++    é TROCADO pelo de texto. Aplicar duas vezes dá o mesmo resultado.
+     """
+-    saida = []
+-    for caractere in texto:
++    saida: list[str] = []
++    i = 0
++    while i < len(texto):
++        caractere = texto[i]
+         saida.append(caractere)
+-        if ord(caractere) >= 0x1F000 or 0x2600 <= ord(caractere) <= 0x27BF:
+-            saida.append(_SELETOR_TEXTO)
++        i += 1
++        if not _parece_emoji(ord(caractere)):
++            continue
++        saida.append(_SELETOR_TEXTO)
++        if i < len(texto) and texto[i] in (_SELETOR_TEXTO, _SELETOR_EMOJI):
++            i += 1  # o seletor que já estava foi absorvido pelo de texto
+     return "".join(saida)
+ 
+ 
+diff --git a/tests/test_qt_estilo.py b/tests/test_qt_estilo.py
+index efc9dbc..7984d20 100644
+--- a/tests/test_qt_estilo.py
++++ b/tests/test_qt_estilo.py
+@@ -33,10 +33,43 @@ def test_cinza_tk_bate_com_a_tabela_x11_inteira():
+ 
+ 
+ def test_mono_pede_versao_texto_de_cada_emoji():
+-    assert estilo.mono("\U0001F4CB  Atividades") == "\U0001F4CB︎  Atividades"
++    assert estilo.mono("\U0001F4CB  Atividades") == "\U0001F4CB\ufe0e  Atividades"
+     assert estilo.mono("Upload Condições – ok") == "Upload Condições – ok"
+ 
+ 
++@pytest.mark.parametrize("simbolo", [
++    "\u2b07",      # seta para baixo
++    "\u23ed",      # proxima faixa
++    "\u25b6",      # triangulo de play
++    "\u2139",      # i de informacao
++    "\u2190",      # inicio do bloco de setas
++    "\u2bff",      # fim da faixa U+2190-U+2BFF
++    "\u2600",      # simbolos diversos
++    "\u27bf",      # dingbats
++    "\U0001F4CB",  # emoji do plano 1F000
++])
++def test_mono_cobre_os_simbolos_usados_como_emoji(simbolo):
++    assert estilo.mono(f"{simbolo} x") == f"{simbolo}\ufe0e x"
++
++
++def test_mono_nao_mexe_em_texto_comum():
++    assert estilo.mono("A \u2013 b \u00e7 \u2018") == "A \u2013 b \u00e7 \u2018"
++
++
++def test_mono_nao_duplica_o_seletor_de_texto():
++    assert estilo.mono("\u25b6\ufe0e x") == "\u25b6\ufe0e x"
++
++
++def test_mono_troca_o_seletor_de_emoji_pelo_de_texto():
++    assert estilo.mono("\u2b07\ufe0f x") == "\u2b07\ufe0e x"
++    assert estilo.mono("\U0001F4CB\ufe0f x") == "\U0001F4CB\ufe0e x"
++
++
++def test_mono_e_idempotente():
++    uma_vez = estilo.mono("\u2139\ufe0f \u23ed \U0001F3E0 oi")
++    assert estilo.mono(uma_vez) == uma_vez
++
++
+ def test_fontes_existem_com_licenca():
+     for nome in ("Roboto-Regular.ttf", "Roboto-Medium.ttf", "NotoEmoji-Regular.ttf",
+                  "LICENSE-Roboto.txt", "OFL-NotoEmoji.txt"):
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
 From ddafd2ec72eefccca236b7c19cdc4eb68c983788 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:10:09 +0000
-Subject: [PATCH 03/17] Qt6: check.sh nao compila o .venv do repo (template
+Subject: [PATCH 03/26] Qt6: check.sh nao compila o .venv do repo (template
  Jinja do PySide6)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

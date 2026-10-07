@@ -1,7 +1,7 @@
 From 094d0686cf48d70fa0e9460464769b37fb24c5d7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:39:32 +0000
-Subject: [PATCH 10/17] Qt6: console com escrita em lote e limite de linhas
+Subject: [PATCH 10/26] Qt6: console com escrita em lote e limite de linhas
 
 ConsoleFrame (QPlainTextEdit somente leitura) junta as linhas que chegam de
 qualquer thread e escreve em lote a cada 50 ms; guarda no maximo 20.000 linhas.

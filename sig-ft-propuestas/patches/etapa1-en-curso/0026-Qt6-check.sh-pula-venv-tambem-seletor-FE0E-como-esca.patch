@@ -1,0 +1,51 @@
+From a734d596229c0c2bce331df50260fba3645207a9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:39:17 +0000
+Subject: [PATCH 26/26] Qt6: check.sh pula venv/ tambem; seletor FE0E como
+ escape no teste da Home
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ scripts/check.sh      | 4 ++--
+ tests/test_qt_home.py | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/scripts/check.sh b/scripts/check.sh
+index 912962b..8893612 100755
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -5,7 +5,7 @@
+ # importação").
+ #
+ # Roda, nesta ordem, a partir da raiz do repositório:
+-#   1) `"$PY" -m compileall -q -x '[/\\]\.venv[/\\]' .`
++#   1) `"$PY" -m compileall -q -x '[/\\]\.?venv[/\\]' .`
+ #      Verificação de SINTAXE de TODA a árvore do repositório — inclui
+ #      frontend.py, que fica de fora do passo 2 (não é seguro IMPORTAR
+ #      frontend.py neste ambiente: ele importa customtkinter/tkinter e o
+@@ -86,7 +86,7 @@ echo "=================================================================="
+ # `deploy_lib/` um template Jinja com extensao `.py` (`{% for ... %}`) que nao e
+ # Python valido -- o compileall morria nele. O regex aceita `/` e `\` porque o
+ # script tambem roda no Git Bash do Windows.
+-"$PY" -m compileall -q -x '[/\\]\.venv[/\\]' .
++"$PY" -m compileall -q -x '[/\\]\.?venv[/\\]' .
+ echo "OK: compileall não encontrou erro de sintaxe."
+ echo
+ 
+diff --git a/tests/test_qt_home.py b/tests/test_qt_home.py
+index c56c533..2b27453 100644
+--- a/tests/test_qt_home.py
++++ b/tests/test_qt_home.py
+@@ -31,7 +31,7 @@ def test_clique_no_card_inteiro_navega(qt_interface, qtbot):
+ def test_icones_da_barra_em_preto_e_branco(qt_interface, qtbot):
+     home = HomeView(controller=Controller())
+     qtbot.addWidget(home)
+-    assert "︎" in home.botoes_barra["atividades"].text()
++    assert "\ufe0e" in home.botoes_barra["atividades"].text()
+ 
+ 
+ def test_canal_de_testes_lembra_a_escolha(qt_interface, qtbot, monkeypatch):
+-- 
+2.43.0
+
