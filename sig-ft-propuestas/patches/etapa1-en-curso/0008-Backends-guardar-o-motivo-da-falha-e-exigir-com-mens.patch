@@ -1,7 +1,7 @@
 From e76b0b6266ef91f4cc1223336bb6761e6a1073fb Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:29:47 +0000
-Subject: [PATCH 08/13] Backends: guardar o motivo da falha e exigir() com
+Subject: [PATCH 08/14] Backends: guardar o motivo da falha e exigir() com
  mensagem clara
 
 Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
