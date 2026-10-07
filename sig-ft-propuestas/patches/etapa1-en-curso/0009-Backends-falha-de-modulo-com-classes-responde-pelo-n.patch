@@ -1,7 +1,7 @@
 From 252c065b37cc86f38aec15915fe6bde4d4866e10 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 7 Oct 2026 19:33:19 +0000
-Subject: [PATCH 09/10] Backends: falha de modulo com classes responde pelo
+Subject: [PATCH 09/12] Backends: falha de modulo com classes responde pelo
  nome da classe
 
 Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>

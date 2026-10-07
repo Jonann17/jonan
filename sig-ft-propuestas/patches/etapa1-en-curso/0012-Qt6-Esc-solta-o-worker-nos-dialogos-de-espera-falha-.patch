@@ -1,0 +1,150 @@
+From 952522a8171950813ba4d36fd170021d1ad48cc7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:01:06 +0000
+Subject: [PATCH 12/12] Qt6: Esc solta o worker nos dialogos de espera; falha
+ ao construir tambem solta
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/dialogs.py |  8 ++++
+ sigft/app_qt/widgets/espera.py  | 14 +++++--
+ tests/test_qt_espera.py         | 74 +++++++++++++++++++++++++++++++++
+ 3 files changed, 93 insertions(+), 3 deletions(-)
+
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 090b0d0..1e3f2f0 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -30,6 +30,14 @@ class _DialogoDeAcaoManual(QDialog):
+     def _ao_fechar_sem_decidir(self) -> None:
+         raise NotImplementedError
+ 
++    def reject(self) -> None:
++        """Esc (e qualquer `reject()`) esconde o diálogo SEM passar pelo
++        `closeEvent`; sem isto o worker ficaria preso. Só responde se ainda
++        ninguém decidiu -- os botões já responderam antes de chamar `reject()`."""
++        if not self._decidido:
++            self._ao_fechar_sem_decidir()
++        super().reject()
++
+     def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
+         if not self._decidido:
+             self._ao_fechar_sem_decidir()
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+index 0a64860..418b58e 100644
+--- a/sigft/app_qt/widgets/espera.py
++++ b/sigft/app_qt/widgets/espera.py
+@@ -9,6 +9,7 @@ Mesma API e mesma regra da versão CustomTkinter:
+ from __future__ import annotations
+ 
+ import threading
++import traceback
+ 
+ from sigft.app.widgets.dialogs import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
+ from sigft.app_qt import interface
+@@ -25,9 +26,16 @@ class DialogosDeEspera:
+             return resultado
+ 
+         def abrir() -> None:
+-            dialogo = construir_dialogo(evento, resultado)
+-            self._dialogo_aberto = dialogo  # segura a referência enquanto está aberto
+-            dialogo.show()
++            try:
++                dialogo = construir_dialogo(evento, resultado)
++                self._dialogo_aberto = dialogo  # segura a referência enquanto está aberto
++                dialogo.show()
++            except Exception:  # noqa: BLE001 -- o worker não pode ficar preso
++                # `interface._rodar` engole a exceção; sem o `set()` o worker
++                # esperaria para sempre. Resposta segura: login segue, Excel
++                # não repete (`resultado` fica sem "retry").
++                traceback.print_exc()
++                evento.set()
+ 
+         interface.na_interface(abrir)
+         evento.wait()
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+index 6d5757a..bb643e4 100644
+--- a/tests/test_qt_espera.py
++++ b/tests/test_qt_espera.py
+@@ -76,3 +76,77 @@ def test_janela_nasce_na_thread_da_interface(qt_interface, qtbot):
+     assert dialogo.thread() is tela.thread()
+     dialogo.botao.click()
+     t.join(3)
++
++
++def test_esc_solta_o_login(qt_interface, qtbot):
++    from PySide6.QtCore import Qt
++    from PySide6.QtTest import QTest
++
++    tela = Tela()
++    qtbot.addWidget(tela)
++    terminou = []
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
++    QTest.keyClick(_abertos(qd.PausaLoginDialog)[0], Qt.Key.Key_Escape)
++    t.join(3)
++    assert not t.is_alive()
++    assert terminou == [True]
++
++
++def test_esc_no_retry_excel_e_cancelar(qt_interface, qtbot):
++    from PySide6.QtCore import Qt
++    from PySide6.QtTest import QTest
++
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
++    QTest.keyClick(_abertos(qd.RetryLockDialog)[0], Qt.Key.Key_Escape)
++    t.join(3)
++    assert not t.is_alive()
++    assert respostas == [False]
++
++
++def test_botoes_continuam_respondendo_como_antes(qt_interface, qtbot):
++    evento = threading.Event()
++    resultado = {}
++    dialogo = qd.RetryLockDialog(None, evento_espera=evento, resultado=resultado)
++    qtbot.addWidget(dialogo)
++    dialogo.show()
++    dialogo.botao_repetir.click()
++    assert resultado == {"retry": True}  # o reject() do Esc/X nao sobrescreve
++    assert evento.is_set()
++
++    evento2 = threading.Event()
++    resultado2 = {}
++    dialogo2 = qd.RetryLockDialog(None, evento_espera=evento2, resultado=resultado2)
++    qtbot.addWidget(dialogo2)
++    dialogo2.show()
++    dialogo2.botao_cancelar.click()
++    assert resultado2 == {"retry": False}
++    assert evento2.is_set()
++
++
++def test_falha_ao_construir_o_dialogo_solta_o_worker(qt_interface, qtbot, monkeypatch, capsys):
++    def quebrado(*a, **k):
++        raise RuntimeError("falha de construcao")
++
++    monkeypatch.setattr(qd, "PausaLoginDialog", quebrado)
++    monkeypatch.setattr(qd, "RetryLockDialog", quebrado)
++    tela = Tela()
++    qtbot.addWidget(tela)
++    terminou = []
++    respostas = []
++    t1 = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
++    t2 = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t1.start()
++    t2.start()
++    # a thread principal precisa seguir processando eventos (join travaria a fila)
++    qtbot.waitUntil(lambda: not t1.is_alive() and not t2.is_alive(), timeout=3000)
++    assert not t1.is_alive() and not t2.is_alive()
++    assert terminou == [True]
++    assert respostas == [False]
++    assert "falha de construcao" in capsys.readouterr().err
+-- 
+2.43.0
+
