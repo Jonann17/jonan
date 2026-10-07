@@ -56,8 +56,13 @@ main() {
   fi
   cd "$DIR"
 
-  PADRON="$(sed -n 's/^padron *= *//p' config.ini 2>/dev/null | head -1)"
-  cp config.ini "$HOME/config.ini.respaldo" 2>/dev/null || true
+  # Si venimos de la re-ejecución (ver abajo), el padrón ya viene guardado.
+  if [ -z "${ACTUALIZAR_NUEVO:-}" ]; then
+    PADRON="$(sed -n 's/^padron *= *//p' config.ini 2>/dev/null | head -1)"
+    cp config.ini "$HOME/config.ini.respaldo" 2>/dev/null || true
+  else
+    PADRON="${ACTUALIZAR_PADRON:-}"
+  fi
 
   echo ">> Bajando la última versión de GitHub..."
   if ! git fetch origin "$RAMA"; then
@@ -71,6 +76,14 @@ main() {
   # a aplicar abajo; config.ini quedó respaldado en ~/config.ini.respaldo.
   git reset -q --hard
   git checkout -q -B "$RAMA" "origin/$RAMA"
+
+  # Lo que está corriendo es la versión VIEJA de este script (bash ya la
+  # tenía cargada). Se vuelve a arrancar con la versión recién bajada, así
+  # cualquier paso nuevo (por ejemplo, un comando nuevo) se aplica ya.
+  if [ -z "${ACTUALIZAR_NUEVO:-}" ]; then
+    ACTUALIZAR_NUEVO=1 ACTUALIZAR_PADRON="$PADRON" \
+      exec bash "$DIR/scripts/actualizar.sh" "$ROL"
+  fi
 
   # ── Rutas y usuario de ESTE Pi ──
   echo ">> Ajustando rutas para el usuario $(whoami)..."
