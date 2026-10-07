@@ -11,8 +11,17 @@ apt-get install -y fswebcam python3-requests python3-serial
 # Se habilita la UART y se desactiva la consola de Linux por ese puerto
 # (si no, Linux "le habla" al Arduino y ensucia las mediciones).
 echo ">> Habilitando la UART (GPIO 14/15) para el Arduino..."
-raspi-config nonint do_serial_cons 1   # 1 = consola serie APAGADA
-raspi-config nonint do_serial_hw 0     # 0 = UART ENCENDIDA
+raspi-config nonint do_serial_cons 1 || true   # 1 = consola serie APAGADA
+raspi-config nonint do_serial_hw 0 || true     # 0 = UART ENCENDIDA
+# Respaldo por si raspi-config es viejo o no aplicó el cambio: se escribe
+# directo en los archivos de arranque (Bookworm: /boot/firmware; antes: /boot).
+BOOT=/boot/firmware
+[ -f "$BOOT/config.txt" ] || BOOT=/boot
+if ! grep -q "^enable_uart=1" "$BOOT/config.txt"; then
+  sed -i '/^enable_uart=/d' "$BOOT/config.txt"
+  echo "enable_uart=1" >> "$BOOT/config.txt"
+fi
+sed -i 's/console=serial0,[0-9]* //; s/console=ttyAMA0,[0-9]* //; s/console=ttyS0,[0-9]* //' "$BOOT/cmdline.txt"
 DIR_TMP="$(cd "$(dirname "$0")/.." && pwd)"
 USUARIO="$(sed -n 's/^User=//p' "$DIR_TMP/systemd/camara.service")"
 usermod -aG dialout,video "${USUARIO:-pi}"
