@@ -60,8 +60,8 @@ En Linux, el Qt necesita estas bibliotecas del sistema (el CI ya las instala):
     `etapa1_app_qt_nao_migrada.png`. `frontend.py` (CustomTkinter) también abre igual.
   - Cada una de las 11 tareas de código pasó revisión independiente; revisión final
     de toda la etapa con 9 correcciones, verificadas.
-  - **Probado por Jonathan en macOS** (Python 3.14, 2026-10-07): parches aplicados con
-    `git am` sobre `3395788`, app Qt abierta y revisada, `frontend.py` igual: todo OK.
+  - Prueba en macOS por Jonathan: **pendiente** (la primera intención no llegó a aplicar
+    los parches; ver instrucciones de "Cómo aplicar").
   - No se probó: PyInstaller/`.exe` en Windows (el CI de Release lo hará), ni el portal.
 - **Medición** (`--smoke`, Xvfb, 3 corridas, mismos módulos cargados):
   CustomTkinter ≈ 3,75 s · Qt ≈ 3,34 s → ~0,4 s más rápido, **sin contar** los ~1,9 s
