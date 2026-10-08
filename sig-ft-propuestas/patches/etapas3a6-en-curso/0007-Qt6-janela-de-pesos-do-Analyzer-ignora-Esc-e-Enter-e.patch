@@ -1,0 +1,92 @@
+From 683148d68d254a7946406ca9ae6e052aa1c67312 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 18:30:14 +0000
+Subject: [PATCH 7/8] Qt6: janela de pesos do Analyzer ignora Esc e Enter e nao
+ abre duas vezes
+
+Esc fechava e perdia os pesos digitados; Enter num campo salvava (botao
+autoDefault). No Tk nenhuma das duas teclas fazia nada. Segundo clique em
+configurar traz a janela aberta para a frente em vez de abrir outra.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/analyzer.py | 16 ++++++++++++++++
+ tests/test_qt_tela_analyzer.py | 26 ++++++++++++++++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/sigft/app_qt/views/analyzer.py b/sigft/app_qt/views/analyzer.py
+index e17ec4c..a56d82f 100644
+--- a/sigft/app_qt/views/analyzer.py
++++ b/sigft/app_qt/views/analyzer.py
+@@ -108,10 +108,20 @@ class JanelaPesos(QDialog):
+ 
+         self.btn_salvar = blocos.botao("Salvar Pesos", largura=estilo.LARGURA_BOTAO_CTK, altura=28,
+                                        cor_fundo=COLORS["primary"])
++        # Enter num campo não salva: no Tk o Enter não fazia nada aqui.
++        self.btn_salvar.setAutoDefault(False)
++        self.btn_salvar.setDefault(False)
+         self.btn_salvar.clicked.connect(lambda: tela._salvar_pesos(self))
+         raiz.addWidget(self.btn_salvar, alignment=Qt.AlignmentFlag.AlignHCenter)
+         raiz.addSpacing(10)
+ 
++    def keyPressEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        # Esc fecharia e perderia os pesos digitados; no Tk não havia tecla nenhuma.
++        if evento.key() == Qt.Key.Key_Escape:
++            evento.accept()
++            return
++        super().keyPressEvent(evento)
++
+     @staticmethod
+     def _linha(corpo, texto, valor, *, folga: int = 2):
+         """`CTkFrame(fill="x", pady=folga)` com rótulo de 250 à esquerda e campo de
+@@ -299,6 +309,12 @@ class ModuloAnalyzer(ModuleFrame):
+         modulo = self.backend("analyzer_backend")
+         if modulo is None:
+             return
++        # Já aberta: traz para a frente em vez de abrir outra, que salvaria
++        # pelos campos da mais nova.
++        if self.janela_pesos is not None and self.janela_pesos.isVisible():
++            self.janela_pesos.raise_()
++            self.janela_pesos.activateWindow()
++            return
+         # Pega o mapa padrão do backend
+         self.janela_pesos = JanelaPesos(self, modulo.CONFIG_MAP)
+         self.janela_pesos.show()
+diff --git a/tests/test_qt_tela_analyzer.py b/tests/test_qt_tela_analyzer.py
+index 603afd7..8ab0977 100644
+--- a/tests/test_qt_tela_analyzer.py
++++ b/tests/test_qt_tela_analyzer.py
+@@ -472,3 +472,29 @@ def test_medidas_da_janela_de_pesos(qt_interface, qtbot, monkeypatch):
+         assert r(t.entry_max_vars)[1] == r(win.rotulos[-1])[1] + 121
+     finally:
+         qt_interface.setStyleSheet(anterior)
++
++
++def test_esc_e_enter_nao_fecham_nem_salvam_a_janela_de_pesos(tela, qtbot, monkeypatch):
++    # No Tk, nem Esc nem Enter faziam nada: o que foi digitado só sai pelo "Salvar".
++    from PySide6.QtCore import Qt
++    _backend(monkeypatch)
++    tela.btn_config.click()
++    win = tela.janela_pesos
++    qtbot.addWidget(win)
++    campo = tela.entries_pesos["texto_breve_material"]
++    campo.setText("9")
++    qtbot.keyClick(campo, Qt.Key.Key_Return)
++    qtbot.keyClick(win, Qt.Key.Key_Escape)
++    assert win.isVisible()
++    assert campo.text() == "9"
++    assert tela.caixas == []
++    assert "texto_breve_material" not in tela.custom_weights
++
++
++def test_segundo_clique_traz_a_mesma_janela_de_pesos(tela, qtbot, monkeypatch):
++    _backend(monkeypatch)
++    tela.btn_config.click()
++    primeira = tela.janela_pesos
++    qtbot.addWidget(primeira)
++    tela.btn_config.click()
++    assert tela.janela_pesos is primeira
+-- 
+2.43.0
+
