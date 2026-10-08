@@ -1,7 +1,7 @@
 From 4b95a439cb85ab2b532359003e14ec52aba371c3 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:16:07 +0000
-Subject: [PATCH 4/4] Qt6: tela PMIB Manager
+Subject: [PATCH 4/6] Qt6: tela PMIB Manager
 
 Gestao de Sobressalentes na interface Qt: quadros de gestao e de
 autorizacoes de Itaipu, barra de progresso so pela thread da interface,
