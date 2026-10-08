@@ -1,0 +1,317 @@
+From 5ebc91198077753f5956663ef7f41eb7cff4f5e7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 11:55:29 +0000
+Subject: [PATCH] Qt6: robustez para as telas reais e dialogos do Qt em
+ portugues
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app/backends.py                | 15 ++++-
+ sigft/app_qt/interface.py            | 18 ++++--
+ sigft/app_qt/main.py                 | 29 ++++++++-
+ sigft/app_qt/views/nao_migrada.py    | 16 +++++
+ sigft/app_qt/widgets/console.py      |  6 +-
+ sigft/app_qt/widgets/module_frame.py | 10 ++-
+ tests/test_qt_robustez.py            | 96 ++++++++++++++++++++++++++++
+ 7 files changed, 181 insertions(+), 9 deletions(-)
+ create mode 100644 tests/test_qt_robustez.py
+
+diff --git a/sigft/app/backends.py b/sigft/app/backends.py
+index 0fa0837..9a1d223 100644
+--- a/sigft/app/backends.py
++++ b/sigft/app/backends.py
+@@ -145,6 +145,14 @@ def esta_carregado(nome: str) -> bool:
+     return globals().get(nome) is not None
+ 
+ 
++def _modulo_de(nome: str) -> str | None:
++    """O módulo Python por trás de `nome` (destino ou classe), ou None."""
++    for nome_modulo, destino, classes, _exibido in MODULOS:
++        if nome == destino or nome in (classes or []):
++            return nome_modulo
++    return None
++
++
+ def motivo_da_falha(nome: str) -> str | None:
+     erro = falhas.get(nome)
+     return None if erro is None else f"{type(erro).__name__}: {erro}"
+@@ -152,6 +160,11 @@ def motivo_da_falha(nome: str) -> str | None:
+ 
+ def exigir(nome: str):
+     """O backend `nome`, ou `BackendIndisponivel` com o motivo em português."""
++    nome_modulo = _modulo_de(nome)
++    if nome_modulo is None:
++        # Nome errado é defeito de programação, não do computador da pessoa:
++        # sem isto, "pdm_backnd" respondia "espere a abertura terminar".
++        raise KeyError(f"backend desconhecido: {nome!r}")
+     objeto = globals().get(nome)
+     if objeto is not None:
+         return objeto
+@@ -160,5 +173,5 @@ def exigir(nome: str):
+         raise BackendIndisponivel(
+             f"O módulo '{nome}' ainda não foi carregado. Espere a abertura terminar.")
+     raise BackendIndisponivel(
+-        f"Este módulo não carregou: {motivo}\n\n"
++        f"Este módulo não carregou (módulo {nome_modulo}): {motivo}\n\n"
+         "O detalhe está em Documentos\\SIG-FT\\logs\\sigft.log.")
+diff --git a/sigft/app_qt/interface.py b/sigft/app_qt/interface.py
+index 18c4851..1939ba8 100644
+--- a/sigft/app_qt/interface.py
++++ b/sigft/app_qt/interface.py
+@@ -35,11 +35,21 @@ _thread_da_interface: int | None = None
+ 
+ 
+ def instalar() -> None:
+-    """Cria a ponte na thread atual (a da interface). Chamar uma vez, cedo."""
++    """Cria a ponte na thread atual (a da interface). Chamar uma vez, cedo,
++    DEPOIS do `QApplication` existir: a ponte vive na thread em que nasce, e
++    é para lá que o Qt entrega as chamadas."""
+     global _ponte, _thread_da_interface
+-    if _ponte is None:
+-        _ponte = _Ponte()
+-        _thread_da_interface = threading.get_ident()
++    if _ponte is not None:
++        return
++    from PySide6.QtCore import QCoreApplication, QThread
++
++    app = QCoreApplication.instance()
++    if app is None or QThread.currentThread() is not app.thread():
++        raise RuntimeError(
++            "interface.instalar() precisa rodar na thread da interface, "
++            "depois do QApplication existir.")
++    _ponte = _Ponte()
++    _thread_da_interface = threading.get_ident()
+ 
+ 
+ def na_thread_da_interface() -> bool:
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index 6fc4e06..ca1205a 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -32,7 +32,7 @@ from sigft import _build_info
+ from sigft.app import backends, theme
+ from sigft.app_qt import catalogo, estilo, interface
+ from sigft.app_qt.views.home import HomeView
+-from sigft.app_qt.views.nao_migrada import TelaNaoMigrada
++from sigft.app_qt.views.nao_migrada import TelaComErro, TelaNaoMigrada
+ from sigft.core import instancia
+ from sigft.core.saida_log import desviar_saida_para_arquivo
+ 
+@@ -144,7 +144,17 @@ class SIG_FT_App(QMainWindow):  # noqa: N801 -- mesmo nome da interface atual
+         tela = self.telas.get(nome)
+         if tela is None:
+             fabrica = TELAS.get(nome)
+-            tela = fabrica(self.pilha, self) if fabrica else TelaNaoMigrada(nome)
++            if fabrica is None:
++                tela = TelaNaoMigrada(nome)
++            else:
++                try:
++                    tela = fabrica(self.pilha, self)
++                except Exception as erro:  # noqa: BLE001 -- vira tela de erro
++                    traceback.print_exc()
++                    erro_tela = TelaComErro(nome, erro)
++                    self.pilha.addWidget(erro_tela)
++                    self.pilha.setCurrentWidget(erro_tela)
++                    return  # sem cache: a próxima visita tenta montar de novo
+             self.telas[nome] = tela
+             self.pilha.addWidget(tela)
+         self.pilha.setCurrentWidget(tela)
+@@ -260,8 +270,23 @@ class SplashScreen(QWidget):
+             interface.na_interface(self.pronta.emit)
+ 
+ 
++def _instalar_traducao(app) -> bool:
++    """Botões dos diálogos do Qt em português ("Sim", "Não", "Cancelar").
++    Sem isto o QMessageBox mostra "Yes"/"No"/"Cancel"."""
++    from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
++
++    tradutor = QTranslator(app)
++    pasta = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
++    if tradutor.load(QLocale("pt_BR"), "qtbase", "_", pasta):
++        app.installTranslator(tradutor)
++        app._tradutor_qt = tradutor  # segura a referência
++        return True
++    return False
++
++
+ def _preparar_qt() -> QApplication:
+     app = QApplication.instance() or QApplication(sys.argv)
++    _instalar_traducao(app)
+     interface.instalar()
+     estilo.carregar_fontes()
+     app.setStyleSheet(estilo.folha_de_estilo())
+diff --git a/sigft/app_qt/views/nao_migrada.py b/sigft/app_qt/views/nao_migrada.py
+index 2eb2a21..ded97f9 100644
+--- a/sigft/app_qt/views/nao_migrada.py
++++ b/sigft/app_qt/views/nao_migrada.py
+@@ -16,3 +16,19 @@ class TelaNaoMigrada(QWidget):
+         self.mensagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+         self.mensagem.setStyleSheet("font-size: 16px; color: #B3B3B3;")
+         layout.addWidget(self.mensagem)
++
++
++class TelaComErro(QWidget):
++    """A tela existe mas não montou. Mostra o porquê em vez de sumir."""
++
++    def __init__(self, nome: str, erro: BaseException, parent=None) -> None:
++        super().__init__(parent)
++        self.setObjectName("tela")
++        layout = QVBoxLayout(self)
++        self.mensagem = QLabel(
++            f"A tela \"{nome}\" não conseguiu abrir.\n\n{type(erro).__name__}: {erro}\n\n"
++            "O detalhe está em Documentos\\SIG-FT\\logs\\sigft.log.")
++        self.mensagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.mensagem.setWordWrap(True)
++        self.mensagem.setStyleSheet("font-size: 15px; color: #E0E0E0;")
++        layout.addWidget(self.mensagem)
+diff --git a/sigft/app_qt/widgets/console.py b/sigft/app_qt/widgets/console.py
+index 827650e..38a5cc3 100644
+--- a/sigft/app_qt/widgets/console.py
++++ b/sigft/app_qt/widgets/console.py
+@@ -48,7 +48,11 @@ class ConsoleFrame(QPlainTextEdit):
+         try:
+             interface.na_interface(self._agendar)
+         except RuntimeError:
+-            pass  # app fechando: perder a linha é o certo, derrubar o worker não
++            # Canal fechado (app fechando) ou ainda não instalado: a linha fica
++            # na fila e a PRÓXIMA chamada tenta agendar de novo -- sem isto o
++            # `_agendado` ficaria preso em True e o console, mudo para sempre.
++            with self._trava:
++                self._agendado = False
+ 
+     def _agendar(self) -> None:
+         try:
+diff --git a/sigft/app_qt/widgets/module_frame.py b/sigft/app_qt/widgets/module_frame.py
+index d2b38d5..e97eee5 100644
+--- a/sigft/app_qt/widgets/module_frame.py
++++ b/sigft/app_qt/widgets/module_frame.py
+@@ -24,6 +24,14 @@ from sigft.app_qt.widgets.console import ConsoleFrame
+ from sigft.app_qt.widgets.espera import DialogosDeEspera
+ 
+ 
++def _reabilitar(botao) -> None:
++    """Devolve o botão. A tela pode ter sido fechada antes de a tarefa acabar."""
++    try:
++        botao.setEnabled(True)
++    except RuntimeError:
++        pass  # widget já destruído pelo Qt: nada a devolver
++
++
+ class ModuleFrame(DialogosDeEspera, QWidget):
+     def __init__(
+         self,
+@@ -125,7 +133,7 @@ class ModuleFrame(DialogosDeEspera, QWidget):
+                 traceback.print_exc()
+             finally:
+                 if botao is not None:
+-                    interface.na_interface(botao.setEnabled, True)
++                    interface.na_interface(_reabilitar, botao)
+ 
+         thread = threading.Thread(target=rodar, name=f"tarefa:{type(self).__name__}")
+         thread.start()
+diff --git a/tests/test_qt_robustez.py b/tests/test_qt_robustez.py
+new file mode 100644
+index 0000000..2cdafe8
+--- /dev/null
++++ b/tests/test_qt_robustez.py
+@@ -0,0 +1,96 @@
++import threading
++
++import pytest
++from PySide6.QtWidgets import QPushButton
++
++from sigft.app import backends
++from sigft.app_qt import interface
++
++
++def test_instalar_fora_da_thread_da_interface_recusa(qt_interface, monkeypatch):
++    monkeypatch.setattr(interface, "_ponte", None)
++    erros = []
++
++    def tentar():
++        try:
++            interface.instalar()
++        except RuntimeError as erro:
++            erros.append(str(erro))
++
++    t = threading.Thread(target=tentar, daemon=True)
++    t.start()
++    t.join(3)
++    assert erros and "thread da interface" in erros[0]
++
++
++def test_console_volta_a_agendar_depois_de_falha(qt_interface, qtbot, monkeypatch):
++    from sigft.app_qt.widgets.console import ConsoleFrame
++    c = ConsoleFrame()
++    qtbot.addWidget(c)
++    original = interface.na_interface
++
++    def falha_uma_vez(*a, **k):
++        monkeypatch.setattr(interface, "na_interface", original)
++        raise RuntimeError("canal fechado")
++
++    monkeypatch.setattr(interface, "na_interface", falha_uma_vez)
++    c.log("perdida")
++    c.log("chega")
++    qtbot.waitUntil(lambda: "chega" in c.toPlainText(), timeout=2000)
++
++
++def test_botao_destruido_no_fim_da_tarefa_nao_vira_traceback(qt_interface, qtbot, capsys):
++    from sigft.app_qt.widgets.module_frame import ModuleFrame
++
++    class Tela(ModuleFrame):
++        def _build_ui(self):
++            pass
++
++    tela = Tela(titulo="x")
++    qtbot.addWidget(tela)
++    botao = QPushButton("Rodar")
++    liberar = threading.Event()
++    thread = tela.iniciar_tarefa(liberar.wait, 5, botao=botao)
++    botao.deleteLater()
++    qtbot.wait(50)
++    liberar.set()
++    thread.join(3)
++    qtbot.wait(100)
++    assert "Traceback" not in capsys.readouterr().err
++
++
++def test_exigir_nome_desconhecido_e_erro_de_programacao():
++    with pytest.raises(KeyError, match="pdm_backnd"):
++        backends.exigir("pdm_backnd")
++
++
++def test_mensagem_nomeia_o_modulo(monkeypatch):
++    monkeypatch.setattr(backends, "falhas", {"lmr_backend": TypeError("x")})
++    monkeypatch.setattr(backends, "lmr_backend", None)
++    with pytest.raises(backends.BackendIndisponivel, match=r"\(módulo lmr_backend\)"):
++        backends.exigir("lmr_backend")
++
++
++def test_traducao_pt_br_instalada(qt_interface):
++    from PySide6.QtWidgets import QApplication
++
++    from sigft.app_qt import main as qmain
++    assert qmain._instalar_traducao(QApplication.instance()) is True
++    assert QApplication.translate("QPlatformTheme", "Cancel") == "Cancelar"
++
++
++def test_tela_que_falha_ao_montar_vira_tela_de_erro(qt_interface, qtbot, tmp_path, monkeypatch):
++    from sigft.app_qt import main as qmain
++    from sigft.app_qt.views.nao_migrada import TelaComErro
++    monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
++
++    def quebra(parent, controller):
++        raise ValueError("faltou coluna")
++
++    monkeypatch.setitem(qmain.TELAS, "Analyzer", quebra)
++    janela = qmain.SIG_FT_App()
++    qtbot.addWidget(janela)
++    janela.show_frame("Analyzer")
++    assert isinstance(janela.pilha.currentWidget(), TelaComErro)
++    assert "faltou coluna" in janela.pilha.currentWidget().mensagem.text()
++    assert "Analyzer" not in janela.telas  # a próxima visita tenta de novo
+-- 
+2.43.0
+
