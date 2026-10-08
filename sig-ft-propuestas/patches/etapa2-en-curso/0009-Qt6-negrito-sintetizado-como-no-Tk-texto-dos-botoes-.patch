@@ -1,0 +1,401 @@
+From 66b4cc545cc2f11d91578f3208fc5f747eb5a900 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 13:10:53 +0000
+Subject: [PATCH 09/14] Qt6: negrito sintetizado como no Tk, texto dos botoes
+ #DCE4EE e barra lateral com a largura do CTk
+
+Paridade visual medida nas capturas reais (Xvfb, 1280x850) contra o
+CustomTkinter:
+
+- Negrito ~10% mais estreito. Experimento: tirar so o Roboto-Medium NAO
+  resolve no Linux (Qt sintetizado do Regular: 218 px; com Medium: 221;
+  Tk: 237 no "ATENCAO: ACAO DESTRUTIVA"). A causa no Linux e o hinting:
+  o padrao do Qt usa largura "de projeto", que ignora o engrossamento;
+  com PreferFullHinting as larguras viram as do Tk (titulo 257->276/280,
+  aviso 221->240/237, botao 110->123/122). No Windows, a 100% de escala,
+  o hinting completo ja e o padrao do Qt; la a diferenca e a FACE: o
+  DirectWrite do Qt registra o Medium como "Roboto" peso 500 e o negrito
+  vira Medium + simulacao, enquanto o GDI do Tk ve "Roboto Medium" como
+  outra familia e engrossa o Regular. Por isso o Medium deixa de ser
+  registrado (o arquivo fica em assets/fonts).
+- Texto dos botoes: CTkButton sem text_color pinta #DCE4EE (tema
+  dark-blue), nao o #E0E0E0. Menu, Home e glossario continuam text_light
+  (o CTk escrevia). A barra da Home era branca no Qt e #DCE4EE no CTk.
+- Barra da Home com a largura do CTkButton (140, ou texto + 7 de cada
+  lado): com o negrito na largura certa ela passava da area e surgia
+  rolagem lateral.
+- Barra lateral com 277 px (260 + 16 da rolagem + 1), sem desenhar o
+  traco cinza da rolagem do CTk; os modulos comecam em x=317 como la.
+- QLineEdit global = CTkEntry: 28 px, fonte 13, dica gray62, texto no
+  mesmo x/y do CTk. Sai a folha propria do campo do Apagar LMR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py            | 71 ++++++++++++++++++++++++++-----
+ sigft/app_qt/main.py              | 10 ++++-
+ sigft/app_qt/views/apagar_lmr.py  | 12 +-----
+ tests/test_qt_estilo.py           | 17 ++++++++
+ tests/test_qt_estilo_controles.py | 65 ++++++++++++++++++++++++++++
+ tests/test_qt_home.py             | 22 ++++++++++
+ tests/test_qt_main.py             | 21 +++++++++
+ 7 files changed, 194 insertions(+), 24 deletions(-)
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 041a2d5..b4a4b7a 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -13,12 +13,31 @@ from sigft.app import theme
+ _RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ PASTA_FONTES = os.path.join(_RAIZ, "assets", "fonts")
+ 
+-ARQUIVOS_DE_FONTE = ("Roboto-Regular.ttf", "Roboto-Medium.ttf", "NotoEmoji-Regular.ttf")
++# SEM o Roboto-Medium, de propósito: o negrito tem de ser SINTETIZADO a partir do
++# Regular, como no Tk. O CustomTkinter registra Regular e Medium (no Windows, com
++# AddFontResourceEx), mas o GDI lê o nome de família "antigo" de cada arquivo, e o
++# do Medium é "Roboto Medium": uma família à parte. Para o Tk, "Roboto" negrito só
++# tem o Regular, e o GDI o engrossa (e alarga cada letra). O Qt lê o nome
++# tipográfico ("Roboto", estilo Medium): com o Medium registrado, o negrito virava
++# Medium + engrossamento -- outra letra, que não é a do app antigo. Nada no app
++# pede peso 500; o arquivo continua em assets/fonts, só não é registrado.
++ARQUIVOS_DE_FONTE = ("Roboto-Regular.ttf", "NotoEmoji-Regular.ttf")
++
++# Largura total da barra lateral do CustomTkinter: CTkScrollableFrame(width=260)
++# mais a barra de rolagem dele, sempre visível (16 px), e 1 px de borda. Medido na
++# captura: o fundo do conteúdo começa em x=277. Os módulos começam no mesmo x.
++LARGURA_BARRA_LATERAL = 277
+ 
+ # Medidas que o CustomTkinter aplica hoje (decisão: espaçamento igual ao atual).
+ ALTURA_BOTAO_MENU = 35
+ ESPACO_MENU = 4
+ ALTURA_BOTAO_BARRA = 40
++# CTkButton: `width` padrão 140, e o texto que não cabe alarga o botão com 7 px de
++# folga de cada lado (coluna de 6 = corner_radius, mais 1 do padx do Label do Tk).
++# Com a folga de 16 que a barra da Home tinha, os botões saíam de 143 a 171 px
++# (lá: 140 a 148) e, com o negrito na largura do Tk, a linha passava da tela.
++LARGURA_BOTAO_CTK = 140
++FOLGA_TEXTO_BOTAO_CTK = 7
+ 
+ # Tema "dark-blue" do CustomTkinter (customtkinter/assets/themes/dark-blue.json),
+ # o que `sigft/app/main.py` usa: é o que pinta tudo o que as telas antigas não
+@@ -29,6 +48,18 @@ AZUL_CTK_HOVER = "#14375E"
+ # `border_width` e sem `border_color`, e texto de um botão desabilitado (gray60).
+ BORDA_CTK = "#949A9F"
+ TEXTO_DESABILITADO_CTK = "gray60"
++# Texto de um CTkButton (e das abas e do CTkOptionMenu) que não diz `text_color`:
++# o do tema, que NÃO é o text_light (#E0E0E0) de theme.py. Botão que lá passava
++# text_color=COLORS["text_light"] (menu e Home da barra lateral, glossário) diz
++# isso aqui também, com a cor explícita.
++TEXTO_BOTAO_CTK = "#DCE4EE"
++# CTkEntry do mesmo tema: altura 28 (borda incluída), borda 2 #565B5E, fundo
++# #343638, texto gray84, dica (placeholder) gray62, fonte 13. Lá o Entry do Tk vai
++# na grade com padx=6 e pady=(2, 3): a caixa do texto tem 23 px, 1 px mais perto
++# do topo. Aqui: borda 2 + padding (0, 3, 1, 3) + 23 de conteúdo = 28, e o texto
++# começa no mesmo x (medido: 8 px da borda de fora, nas duas capturas).
++ALTURA_CAMPO_CTK = 28
++BORDA_CAMPO_CTK = 2
+ 
+ # Espessura da borda (px) de cada variante de botão que tem borda. `blocos.botao`
+ # desconta isto da altura: no Qt o `min-height` da folha NÃO inclui a borda, e no
+@@ -120,6 +151,13 @@ def carregar_fontes() -> list[str]:
+         QFontDatabase.setApplicationEmojiFontFamilies(["Noto Emoji"])
+     fonte = QFont()
+     fonte.setFamilies(["Roboto", "Noto Emoji"])
++    # Hinting completo = largura de cada letra arredondada ao pixel, como o Tk
++    # desenha (GDI no Windows, Xft no Linux). No Linux o padrão do Qt usa a largura
++    # "de projeto", que ignora o engrossamento do negrito sintetizado: o negrito
++    # saía ~10% mais estreito que o do app antigo (medido: 221 x 237 px no
++    # "ATENÇÃO: AÇÃO DESTRUTIVA"). No Windows a 100% de escala este já é o padrão
++    # do Qt (métricas compatíveis com o GDI); escrito, vale também com escala.
++    fonte.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+     QApplication.setFont(fonte)
+     return familias
+ 
+@@ -131,7 +169,14 @@ def folha_de_estilo() -> str:
+     # Notas que não cabem dentro da folha (comentário nela vazaria "gray" no QSS):
+     # * variante "contorno": o "Ignorar e Continuar" de sigft/app/widgets/dialogs.py
+     #   (borda #555 e texto COR_TEXTO_APOIO, escritos à mão); "contorno_padrao": botão
+-    #   transparente com border_width=1 e sem border_color/text_color -- o do tema;
++    #   transparente com border_width=1, sem border_color (a do tema) e com
++    #   text_color=text_light escrito à mão -- o glossário do Tradutor;
++    # * texto dos botões: TEXTO_BOTAO_CTK (o do tema) na regra geral; text_light só
++    #   onde o CTk o escrevia (menu, Home, contorno_padrao). A barra da Home não o
++    #   escreve: lá é #DCE4EE (medido na captura), e não branco; e a largura dos
++    #   botões dela é a do CTkButton (LARGURA_BOTAO_CTK);
++    # * QLineEdit: o CTkEntry do tema (ver ALTURA_CAMPO_CTK). min/max-height não
++    #   contam borda nem padding: 28 - 2*2 - 1;
+     # * #console: CTkTextbox do tema dark-blue -- fg gray20, border_width 0, texto gray84.
+     return f"""
+ QMainWindow, #conteudo, #tela {{ background: {c['background']}; }}
+@@ -140,21 +185,22 @@ QWidget {{ font-family: {fam}; color: {c['text_light']}; }}
+ #sidebar, #sidebar_interno {{ background: {c['sidebar']}; border: none; }}
+ #secao {{ color: {cinza_tk('gray50')}; font-size: 11px; font-weight: bold; padding-left: 10px; }}
+ #app_nome {{ color: {cinza_tk('gray60')}; font-size: 13px; }}
+-QPushButton {{ border-radius: 6px; color: {c['text_light']}; background: {AZUL_CTK};
++QPushButton {{ border-radius: 6px; color: {TEXTO_BOTAO_CTK}; background: {AZUL_CTK};
+                border: none; padding: 0 14px; min-height: 28px; font-size: 13px; }}
+ QPushButton:hover {{ background: {AZUL_CTK_HOVER}; }}
+ QPushButton[variante="primario"] {{ background: {c['primary']}; }}
+ QPushButton[variante="primario"]:hover {{ background: {c['primary_hover']}; }}
+ QPushButton:disabled {{ color: {cinza_tk(TEXTO_DESABILITADO_CTK)}; }}
+ QPushButton[menu="true"] {{ background: transparent; text-align: left; padding: 0 10px;
+-    min-height: {ALTURA_BOTAO_MENU}px; max-height: {ALTURA_BOTAO_MENU}px; font-size: 12px; }}
++    color: {c['text_light']}; min-height: {ALTURA_BOTAO_MENU}px; max-height: {ALTURA_BOTAO_MENU}px; font-size: 12px; }}
+ QPushButton[menu="true"]:hover {{ background: {c['primary']}; }}
+ QPushButton[menu="true"]:disabled {{ color: {cinza_tk('gray45')}; }}
+ #home {{ background: transparent; text-align: left; font-weight: bold;
+-         border: 1px solid {cinza_tk('gray30')}; }}
++         color: {c['text_light']}; border: 1px solid {cinza_tk('gray30')}; }}
+ #home:hover {{ background: {c['primary']}; }}
+-QPushButton[barra="true"] {{ min-height: {ALTURA_BOTAO_BARRA}px; padding: 0 16px;
+-    font-weight: bold; color: {c['text_white']}; }}
++QPushButton[barra="true"] {{ min-height: {ALTURA_BOTAO_BARRA}px;
++    min-width: {LARGURA_BOTAO_CTK - 2 * FOLGA_TEXTO_BOTAO_CTK}px; padding: 0 {FOLGA_TEXTO_BOTAO_CTK}px;
++    font-weight: bold; }}
+ QPushButton[variante="acento"] {{ background: {c['accent']}; }}
+ QPushButton[variante="acento"]:hover {{ background: {c['accent_hover']}; }}
+ QPushButton[variante="neutro"] {{ background: #3A3A3A; }}
+@@ -183,13 +229,16 @@ QCheckBox::indicator {{ width: 20px; height: 20px; border: 3px solid #949A9F;
+ QCheckBox::indicator:checked {{ background: {AZUL_CTK}; border-color: {AZUL_CTK}; }}
+ QProgressBar {{ background: #333333; border: none; border-radius: 5px; max-height: 12px; }}
+ QProgressBar::chunk {{ background: {c['primary']}; border-radius: 5px; }}
+-QLineEdit {{ background: #343638; border: 2px solid #565B5E; border-radius: 6px;
+-             color: {cinza_tk('gray84')}; padding: 4px 8px; min-height: 22px; }}
++QLineEdit {{ background: #343638; border: {BORDA_CAMPO_CTK}px solid #565B5E; border-radius: 6px;
++             color: {cinza_tk('gray84')}; placeholder-text-color: {cinza_tk('gray62')};
++             font-size: 13px; padding: 0 3px 1px 3px;
++             min-height: {ALTURA_CAMPO_CTK - 2 * BORDA_CAMPO_CTK - 1}px;
++             max-height: {ALTURA_CAMPO_CTK - 2 * BORDA_CAMPO_CTK - 1}px; }}
+ QLineEdit:disabled {{ color: {cinza_tk('gray45')}; }}
+ QComboBox {{ background: {AZUL_CTK}; border-radius: 6px; padding: 4px 10px;
+-             color: #DCE4EE; min-height: 22px; }}
++             color: {TEXTO_BOTAO_CTK}; min-height: 22px; }}
+ QTabWidget::pane {{ border: none; background: {cinza_tk('gray16')}; border-radius: 6px; }}
+-QTabBar::tab {{ background: {cinza_tk('gray29')}; color: #DCE4EE; padding: 6px 14px;
++QTabBar::tab {{ background: {cinza_tk('gray29')}; color: {TEXTO_BOTAO_CTK}; padding: 6px 14px;
+                 margin: 0 1px; border-radius: 6px; }}
+ QTabBar::tab:selected {{ background: {AZUL_CTK}; }}
+ QTabBar::tab:hover:!selected {{ background: {cinza_tk('gray41')}; }}
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index ca1205a..cfc2001 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -94,12 +94,18 @@ class SIG_FT_App(QMainWindow):  # noqa: N801 -- mesmo nome da interface atual
+     # -- barra lateral --------------------------------------------------------
+     def _montar_sidebar(self) -> QScrollArea:
+         area = QScrollArea(objectName="sidebar")
+-        area.setFixedWidth(270)
++        # A largura total da barra do CustomTkinter (277), para os módulos
++        # começarem no mesmo x. Lá, 17 desses px são a faixa da barra de rolagem,
++        # SEMPRE visível (um traço cinza que não rola nada quando tudo cabe).
++        # Aqui a faixa fica vazia -- margem direita maior --, e a barra do Qt só
++        # aparece quando há o que rolar: a mesma largura sem o traço inútil, e os
++        # botões com a largura que já tinham (246).
++        area.setFixedWidth(estilo.LARGURA_BARRA_LATERAL)
+         area.setWidgetResizable(True)
+         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+         interno = QWidget(objectName="sidebar_interno")
+         lay = QVBoxLayout(interno)
+-        lay.setContentsMargins(12, 26, 12, 12)
++        lay.setContentsMargins(12, 26, 19, 12)  # 19 = 12 + os 7 px da faixa vazia
+         lay.setSpacing(estilo.ESPACO_MENU)
+ 
+         logo = QLabel()
+diff --git a/sigft/app_qt/views/apagar_lmr.py b/sigft/app_qt/views/apagar_lmr.py
+index d2eacec..c82629d 100644
+--- a/sigft/app_qt/views/apagar_lmr.py
++++ b/sigft/app_qt/views/apagar_lmr.py
+@@ -17,12 +17,6 @@ from sigft.app_qt import estilo
+ from sigft.app_qt.widgets import blocos, pickers
+ from sigft.app_qt.widgets.module_frame import ModuleFrame
+ 
+-# CTkEntry do tema dark-blue: 28 px de altura (borda incluída), texto gray84 e
+-# placeholder gray62. A folha do app dá ao QLineEdit outra altura (min-height
+-# + padding), então a do campo vai na folha DELE, como em `blocos.botao`.
+-ALTURA_CAMPO = 28
+-_BORDA_CAMPO = 2
+-
+ 
+ class ModuloApagarLMR(ModuleFrame):
+     def __init__(self, parent=None, controller=None, *, embutida=False, console_externo=None) -> None:
+@@ -95,13 +89,9 @@ class ModuloApagarLMR(ModuleFrame):
+         self._rotulos["pmib"] = rotulo
+         linha.addWidget(rotulo)
+         linha.addSpacing(20)                            # rótulo (…, 10) + campo (10, …)
+-        self.entry_pmib = QLineEdit()
++        self.entry_pmib = QLineEdit()  # o visual (28 px, cores, fonte) é o do CTkEntry, na folha do app
+         self.entry_pmib.setFixedWidth(250)
+         self.entry_pmib.setPlaceholderText("Ex: 4500063671.1234")
+-        interna = ALTURA_CAMPO - 2 * _BORDA_CAMPO
+-        self.entry_pmib.setStyleSheet(
+-            f"QLineEdit {{ min-height: {interna}px; max-height: {interna}px; padding: 0 4px;"
+-            f" font-size: 13px; placeholder-text-color: {estilo.cinza_tk('gray62')}; }}")
+         linha.addWidget(self.entry_pmib)
+         linha.addStretch()
+         return linha
+diff --git a/tests/test_qt_estilo.py b/tests/test_qt_estilo.py
+index d859a8f..45c2115 100644
+--- a/tests/test_qt_estilo.py
++++ b/tests/test_qt_estilo.py
+@@ -82,6 +82,23 @@ def test_carregar_fontes_registra_as_familias(qapp):
+     assert "Roboto" in familias and "Noto Emoji" in familias
+ 
+ 
++def test_negrito_e_sintetizado_do_regular_como_no_tk():
++    # O Tk (GDI no Windows) não acha um "Roboto" negrito e engrossa o Regular:
++    # o Medium registrado fazia o Qt usar OUTRA letra no negrito (ver estilo.py).
++    assert "Roboto-Regular.ttf" in estilo.ARQUIVOS_DE_FONTE
++    assert not any("Medium" in nome or "Bold" in nome for nome in estilo.ARQUIVOS_DE_FONTE)
++
++
++def test_fonte_do_app_usa_hinting_completo_como_o_tk(qapp):
++    # Larguras arredondadas ao pixel, com o engrossamento do negrito sintetizado
++    # contando -- sem isto o negrito saía ~10% mais estreito que o do Tk no Linux.
++    from PySide6.QtGui import QFont
++    from PySide6.QtWidgets import QApplication
++
++    estilo.carregar_fontes()
++    assert QApplication.font().hintingPreference() == QFont.HintingPreference.PreferFullHinting
++
++
+ def test_folha_usa_a_paleta_do_theme():
+     qss = estilo.folha_de_estilo()
+     for cor in (theme.COLORS["background"], theme.COLORS["sidebar"],
+diff --git a/tests/test_qt_estilo_controles.py b/tests/test_qt_estilo_controles.py
+index 7c67d12..b8b21bd 100644
+--- a/tests/test_qt_estilo_controles.py
++++ b/tests/test_qt_estilo_controles.py
+@@ -34,3 +34,68 @@ def test_home_e_dialogos_usam_primario_onde_o_ctk_pintava_primary():
+     from sigft.app_qt.views import home
+     variantes = {chave: variante for chave, _t, variante in home.BARRA}
+     assert variantes["modelos"] == "primario" and variantes["gastos"] == "primario"
++
++
++# --- Aplicada a widgets de verdade (paridade medida nas capturas de 2026-10-08) ---
++
++def _sob_a_folha(qtbot, *filhos):
++    """Põe os widgets num recipiente com a folha do app e devolve o recipiente."""
++    from PySide6.QtWidgets import QVBoxLayout, QWidget
++
++    recipiente = QWidget()
++    recipiente.setStyleSheet(_qss())
++    layout = QVBoxLayout(recipiente)
++    for filho in filhos:
++        layout.addWidget(filho)
++    qtbot.addWidget(recipiente)
++    recipiente.show()
++    qtbot.waitExposed(recipiente)
++    return recipiente
++
++
++def _cor_do_texto(botao) -> str:
++    from PySide6.QtGui import QPalette
++
++    return botao.palette().color(QPalette.ColorRole.ButtonText).name().upper()
++
++
++def test_texto_do_botao_comum_e_o_do_tema_do_ctk(qt_interface, qtbot):
++    # CTkButton sem text_color pinta #DCE4EE (dark-blue.json), e não o
++    # text_light (#E0E0E0) do theme.py. Medido: seletor de arquivo e barra da Home.
++    from PySide6.QtWidgets import QPushButton
++
++    comum, barra = QPushButton("Selecionar"), QPushButton("Chaves de API")
++    barra.setProperty("barra", True)
++    recipiente = _sob_a_folha(qtbot, comum, barra)  # noqa: F841 -- segura os filhos vivos
++    assert estilo.TEXTO_BOTAO_CTK == "#DCE4EE"
++    assert _cor_do_texto(comum) == "#DCE4EE"
++    assert _cor_do_texto(barra) == "#DCE4EE"
++
++
++def test_menu_home_e_glossario_mantem_o_text_light_que_o_ctk_escrevia(qt_interface, qtbot):
++    from PySide6.QtWidgets import QPushButton
++
++    menu, home = QPushButton("  1. Cria Fichas PMIB"), QPushButton("Home", objectName="home")
++    menu.setProperty("menu", True)
++    glossario = QPushButton("Abrir glossário")
++    glossario.setProperty("variante", "contorno_padrao")
++    recipiente = _sob_a_folha(qtbot, menu, home, glossario)  # noqa: F841 -- segura os filhos vivos
++    for botao in (menu, home, glossario):
++        assert _cor_do_texto(botao) == theme.COLORS["text_light"].upper(), botao.text()
++
++
++def test_campo_de_texto_e_o_ctkentry_do_tema(qt_interface, qtbot):
++    # CTkEntry: 28 px de altura com a borda, fonte 13, dica gray62. Sem folha
++    # própria no campo: é a regra global que dá isso.
++    from PySide6.QtGui import QPalette
++    from PySide6.QtWidgets import QLineEdit
++
++    campo = QLineEdit()
++    campo.setPlaceholderText("Ex: 4500063671.1234")
++    recipiente = _sob_a_folha(qtbot, campo)  # noqa: F841 -- segura os filhos vivos
++    assert campo.height() == estilo.ALTURA_CAMPO_CTK == 28
++    assert campo.sizeHint().height() == 28
++    assert campo.font().pixelSize() == 13
++    paleta = campo.palette()
++    assert paleta.color(QPalette.ColorRole.PlaceholderText).name().upper() == estilo.cinza_tk("gray62")
++    assert paleta.color(QPalette.ColorRole.Text).name().upper() == estilo.cinza_tk("gray84")
+diff --git a/tests/test_qt_home.py b/tests/test_qt_home.py
+index 2b27453..fcadad8 100644
+--- a/tests/test_qt_home.py
++++ b/tests/test_qt_home.py
+@@ -49,3 +49,25 @@ def test_tela_nao_migrada_diz_o_nome(qt_interface, qtbot):
+     t = TelaNaoMigrada("AutoSpec")
+     qtbot.addWidget(t)
+     assert "AutoSpec" in t.mensagem.text()
++
++
++def test_barra_com_a_largura_do_ctkbutton_e_sem_rolagem_lateral(qt_interface, qtbot):
++    # CTkButton: 140 px, ou o texto + 7 de cada lado quando não cabe (lá: 148 no
++    # "Atividades do dia" e 140 nos outros). Com a folga antiga (16 px) e o negrito
++    # na largura do Tk, a linha passava dos 1003 px da área e surgia rolagem lateral.
++    from sigft.app_qt import estilo
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        estilo.carregar_fontes()
++        home = HomeView(controller=Controller())
++        qtbot.addWidget(home)
++        home.resize(1280 - estilo.LARGURA_BARRA_LATERAL, 850)
++        home.show()
++        qtbot.waitExposed(home)
++        for botao in home.botoes_barra.values():
++            assert botao.width() >= estilo.LARGURA_BOTAO_CTK, botao.text()
++        assert home.horizontalScrollBar().maximum() == 0  # nada a rolar de lado
++    finally:
++        qt_interface.setStyleSheet(anterior)
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index b5a7434..f87063f 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -32,6 +32,27 @@ def test_tela_bloqueada_nao_abre_e_botao_desabilitado(app_qt):
+     assert not app_qt.botoes_menu["CorrecaoPDM"].isEnabled()
+ 
+ 
++def test_barra_lateral_tem_a_largura_total_da_do_customtkinter(qt_interface, app_qt, qtbot):
++    # CTkScrollableFrame(width=260) + barra de rolagem (16) + 1 de borda: o
++    # conteúdo começa em x=277 na captura do CTk. Os botões ficam com os 246 de
++    # antes: os 7 px a mais são a faixa (vazia) onde o CTk desenha a rolagem.
++    from sigft.app_qt import estilo
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())  # sem ela a área ganha moldura de 1 px
++    try:
++        app_qt.resize(1280, 850)
++        app_qt.show()
++        qtbot.waitExposed(app_qt)
++        barra = app_qt.centralWidget().layout().itemAt(0).widget()
++        assert estilo.LARGURA_BARRA_LATERAL == 277
++        assert barra.width() == 277
++        assert app_qt.pilha.mapTo(app_qt, app_qt.pilha.rect().topLeft()).x() == 277
++        assert app_qt.botoes_menu["CriaFichas"].width() == 246
++    finally:
++        qt_interface.setStyleSheet(anterior)
++
++
+ def test_titulo_com_versao(app_qt):
+     from sigft import _build_info
+     assert f"v{_build_info.VERSAO}" in app_qt.windowTitle()
+-- 
+2.43.0
+

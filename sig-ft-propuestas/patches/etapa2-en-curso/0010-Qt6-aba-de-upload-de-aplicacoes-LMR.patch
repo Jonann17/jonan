@@ -1,0 +1,1331 @@
+From 9b0da5fdd172659f8d0e1d2df9696431e2abb882 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 17:11:53 +0000
+Subject: [PATCH 10/14] Qt6: aba de upload de aplicacoes LMR
+
+ModuloLMR (aba Upload da Aplicacao LMR) em PySide6, com o mesmo fluxo da
+tela CTk; perguntas do robo por perguntar_sim_nao/pedir_texto e linha
+inicial lida na thread da interface.
+
+Pecas compartilhadas: widgets/controles.py (Interruptor = CTkSwitch,
+MenuDeOpcoes = CTkOptionMenu, caixa CTkCheckBox desenhada), selecao de
+fichas com a cara da janela CTk, indicador do QCheckBox com 24 px,
+QComboBox com 28 px, variante "cinza". conftest recolhe o lixo depois de
+cada teste Qt (segfault do GC no meio da pintura).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py            |  28 ++-
+ sigft/app_qt/views/lmr.py         | 294 ++++++++++++++++++++++
+ sigft/app_qt/widgets/controles.py | 158 ++++++++++++
+ sigft/app_qt/widgets/dialogs.py   | 107 ++++++--
+ tests/conftest.py                 |  18 ++
+ tests/test_qt_controles.py        |  92 +++++++
+ tests/test_qt_perguntas.py        |  47 ++++
+ tests/test_qt_sem_tkinter.py      |   2 +
+ tests/test_qt_tela_lmr.py         | 404 ++++++++++++++++++++++++++++++
+ 9 files changed, 1130 insertions(+), 20 deletions(-)
+ create mode 100644 sigft/app_qt/views/lmr.py
+ create mode 100644 sigft/app_qt/widgets/controles.py
+ create mode 100644 tests/test_qt_controles.py
+ create mode 100644 tests/test_qt_tela_lmr.py
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index b4a4b7a..2c9e4cb 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -60,6 +60,10 @@ TEXTO_BOTAO_CTK = "#DCE4EE"
+ # começa no mesmo x (medido: 8 px da borda de fora, nas duas capturas).
+ ALTURA_CAMPO_CTK = 28
+ BORDA_CAMPO_CTK = 2
++# CTkOptionMenu: 28 de altura, fonte 13 e texto #DCE4EE. O desenho (a parte
++# escura da seta) é de `widgets.controles.MenuDeOpcoes`; a lista que abre é o
++# DropdownMenu do tema (fundo gray20, texto gray84, gray28 sob o mouse).
++ALTURA_MENU_CTK = 28
+ 
+ # Espessura da borda (px) de cada variante de botão que tem borda. `blocos.botao`
+ # desconta isto da altura: no Qt o `min-height` da folha NÃO inclui a borda, e no
+@@ -178,6 +182,13 @@ def folha_de_estilo() -> str:
+     # * QLineEdit: o CTkEntry do tema (ver ALTURA_CAMPO_CTK). min/max-height não
+     #   contam borda nem padding: 28 - 2*2 - 1;
+     # * #console: CTkTextbox do tema dark-blue -- fg gray20, border_width 0, texto gray84.
++    # * variante "cinza": o #3A3A3A com hover #454545 que as telas CTk escreviam à mão
++    #   ("Todos", "Cancelar"); "neutro" é o mesmo fundo com o hover do tema (Home).
++    # * #quadro_caixas/#lista_caixas: o CTkScrollableFrame da seleção de fichas
++    #   (fundo gray13, cantos 6) e o CTkScrollbar dele (16 px, alça gray41 de 8 px,
++    #   4 px de folga -- border_spacing). As linhas são de `dialogs._DelegadoDaCaixa`.
++    # * QCheckBox::indicator: width/height NÃO contam a borda -- 18 + 2*3 = os 24 da
++    #   CTkCheckBox (com 20 saía 26). Sem imagem, a marcada não tem o "v" de lá.
+     return f"""
+ QMainWindow, #conteudo, #tela {{ background: {c['background']}; }}
+ QDialog {{ background: {cinza_tk('gray10')}; }}
+@@ -205,6 +216,8 @@ QPushButton[variante="acento"] {{ background: {c['accent']}; }}
+ QPushButton[variante="acento"]:hover {{ background: {c['accent_hover']}; }}
+ QPushButton[variante="neutro"] {{ background: #3A3A3A; }}
+ QPushButton[variante="neutro"]:hover {{ background: #4A4A4A; }}
++QPushButton[variante="cinza"] {{ background: #3A3A3A; }}
++QPushButton[variante="cinza"]:hover {{ background: #454545; }}
+ QPushButton[variante="perigo"] {{ background: {c['danger']}; }}
+ QPushButton[variante="perigo"]:hover {{ background: #B71C1C; }}  /* o hover_color das telas CTk */
+ QPushButton[variante="contorno"] {{ background: transparent;
+@@ -224,7 +237,7 @@ QPushButton[variante="contorno"]:hover, QPushButton[variante="contorno_padrao"]:
+ #console {{ background: {cinza_tk('gray20')}; border: none; border-radius: 6px;
+             color: {cinza_tk('gray84')}; font-family: "Consolas", "Menlo", monospace; font-size: 12px; }}
+ QCheckBox {{ font-size: 12px; }}
+-QCheckBox::indicator {{ width: 20px; height: 20px; border: 3px solid #949A9F;
++QCheckBox::indicator {{ width: 18px; height: 18px; border: 3px solid #949A9F;
+                         border-radius: 6px; background: transparent; }}
+ QCheckBox::indicator:checked {{ background: {AZUL_CTK}; border-color: {AZUL_CTK}; }}
+ QProgressBar {{ background: #333333; border: none; border-radius: 5px; max-height: 12px; }}
+@@ -235,8 +248,11 @@ QLineEdit {{ background: #343638; border: {BORDA_CAMPO_CTK}px solid #565B5E; bor
+              min-height: {ALTURA_CAMPO_CTK - 2 * BORDA_CAMPO_CTK - 1}px;
+              max-height: {ALTURA_CAMPO_CTK - 2 * BORDA_CAMPO_CTK - 1}px; }}
+ QLineEdit:disabled {{ color: {cinza_tk('gray45')}; }}
+-QComboBox {{ background: {AZUL_CTK}; border-radius: 6px; padding: 4px 10px;
+-             color: {TEXTO_BOTAO_CTK}; min-height: 22px; }}
++QComboBox {{ background: {AZUL_CTK}; border-radius: 6px; padding: 0 10px; border: none;
++             color: {TEXTO_BOTAO_CTK}; font-size: 13px;
++             min-height: {ALTURA_MENU_CTK}px; max-height: {ALTURA_MENU_CTK}px; }}
++QComboBox QAbstractItemView {{ background: {cinza_tk('gray20')}; color: {cinza_tk('gray84')};
++    selection-background-color: {cinza_tk('gray28')}; border: none; outline: none; }}
+ QTabWidget::pane {{ border: none; background: {cinza_tk('gray16')}; border-radius: 6px; }}
+ QTabBar::tab {{ background: {cinza_tk('gray29')}; color: {TEXTO_BOTAO_CTK}; padding: 6px 14px;
+                 margin: 0 1px; border-radius: 6px; }}
+@@ -244,6 +260,12 @@ QTabBar::tab:selected {{ background: {AZUL_CTK}; }}
+ QTabBar::tab:hover:!selected {{ background: {cinza_tk('gray41')}; }}
+ QListWidget {{ background: #1E1E1E; color: {c['text_light']}; border: none; }}
+ QListWidget::item:selected {{ background: {c['primary']}; color: white; }}
++#quadro_caixas {{ background: {cinza_tk('gray13')}; border-radius: 6px; }}
++#lista_caixas {{ background: transparent; border: none; font-size: 13px; }}
++#lista_caixas QScrollBar:vertical {{ width: 16px; margin: 4px; background: transparent; }}
++#lista_caixas QScrollBar::handle:vertical {{ background: {cinza_tk('gray41')}; border-radius: 4px;
++    min-height: 20px; }}
++#lista_caixas QScrollBar::handle:vertical:hover {{ background: {cinza_tk('gray53')}; }}
+ #cartao {{ background: {theme.COR_CARTAO}; border-radius: 8px; }}
+ QScrollArea {{ border: none; background: transparent; }}
+ QScrollBar:vertical {{ background: transparent; width: 10px; }}
+diff --git a/sigft/app_qt/views/lmr.py b/sigft/app_qt/views/lmr.py
+new file mode 100644
+index 0000000..147e06f
+--- /dev/null
++++ b/sigft/app_qt/views/lmr.py
+@@ -0,0 +1,294 @@
++"""Aba "Upload de Aplicações" (Automação LMR) na interface Qt.
++
++Mesma tela de `sigft/app/views/lmr.py`. O que muda é só COMO o worker fala com
++a pessoa: lá `callback_ask`/`callback_input` chamavam `messagebox`/`simpledialog`
++de dentro da thread do robô, e o fim do lote (e as falhas do pré-processamento)
++mexiam no botão pela thread; aqui as perguntas são `perguntar_sim_nao` e
++`pedir_texto` (abrem na thread da interface) e o botão volta por `iniciar_tarefa`.
++"""
++from __future__ import annotations
++
++import os
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QMessageBox, QVBoxLayout
++
++from sigft.app import theme
++from sigft.app.textos_dialogos import MSG_LOGIN_LMR
++from sigft.app_qt import estilo, file_dialogs, interface
++from sigft.app_qt.widgets import blocos, controles, pickers
++from sigft.app_qt.widgets.dialogs import SelecaoComCaixasDialog
++from sigft.app_qt.widgets.module_frame import ModuleFrame
++
++
++class DialogoDaAba(QDialog):
++    """"Escolha a aba": uma pergunta só, como o CTkToplevel de 420x220 de lá.
++
++    QUEM ESCOLHE A ABA É A PESSOA (a primeira versão adivinhava, e o usuário
++    recusou: adivinhar acerta nove vezes e, na décima, cadastra o lote a partir
++    da planilha errada sem ninguém notar).
++    """
++
++    def __init__(self, parent, *, nome_arquivo: str, abas: list[str]) -> None:
++        super().__init__(parent)
++        self.setWindowTitle("Escolha a aba")
++        self.setFixedSize(420, 220)
++        # Espaços do `pack` de lá; o pady de dois vizinhos SOMA no Tk.
++        layout = QVBoxLayout(self)
++        layout.setContentsMargins(0, 0, 0, 0)
++        layout.setSpacing(0)
++        layout.addSpacing(20)                           # arquivo: pady=(20, …)
++        self.rotulo_arquivo = blocos.rotulo(nome_arquivo, tamanho=12, negrito=True,
++                                            cor=controles.COR_TEXTO_CTK)
++        layout.addWidget(self.rotulo_arquivo)
++        layout.addSpacing(4)                            # arquivo (…, 4) + pergunta (0, …)
++        self.rotulo_pergunta = blocos.rotulo("Qual aba contém as aplicações de LMR?", tamanho=12,
++                                             cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO_CLARO))
++        layout.addWidget(self.rotulo_pergunta)
++        layout.addSpacing(17)                           # pergunta (…, 12) + menu (5, …)
++        self.menu = controles.MenuDeOpcoes(abas)
++        self.menu.setFixedWidth(300)
++        layout.addWidget(self.menu, alignment=Qt.AlignmentFlag.AlignHCenter)
++        layout.addSpacing(20)                           # menu (…, 5) + ler (15, …)
++        self.botao_ler = blocos.botao("Ler esta aba", variante="primario", largura=300)
++        self.botao_ler.clicked.connect(self.accept)
++        layout.addWidget(self.botao_ler, alignment=Qt.AlignmentFlag.AlignHCenter)
++        layout.addSpacing(10)                           # ler (…, 5) + cancelar (5, …)
++        self.botao_cancelar = blocos.botao("Cancelar", variante="cinza", largura=300)
++        self.botao_cancelar.clicked.connect(self.reject)
++        layout.addWidget(self.botao_cancelar, alignment=Qt.AlignmentFlag.AlignHCenter)
++        layout.addStretch()
++
++    def aba_escolhida(self) -> str:
++        return self.menu.currentText()
++
++
++class ModuloLMR(ModuleFrame):
++    def __init__(self, parent=None, controller=None, *, embutida=False, console_externo=None) -> None:
++        # Antes do super(): o `_build_ui` roda lá dentro, e o seletor grava aqui.
++        self.caminho_status_pmib = None
++        super().__init__(parent, controller, titulo="Automação LMR",
++                         embutida=embutida, console_externo=console_externo)
++
++    def _build_ui(self) -> None:
++        # Espaços verticais do `pack` da tela antiga. O pady de dois vizinhos
++        # SOMA no Tk, por isso o espaçamento automático do cartão vai a zero e
++        # cada espaço é a soma escrita à mão.
++        cinza_claro = estilo.cinza_tk(theme.COR_TEXTO_APOIO_CLARO)
++        self._rotulos = r = {}
++
++        self.content_layout.addSpacing(20)              # cartão: pady=20
++        corpo = blocos.cartao(self.content_layout)
++        corpo.setSpacing(0)
++        corpo.setContentsMargins(20, 20, 20, 20)        # título: pady=(20, …); "O script": (…, 20)
++        r["titulo"] = blocos.rotulo("Preenchimento Automático de LMR (Aplicações)", tamanho=16,
++                                    negrito=True, cor=theme.COLORS["accent"])
++        corpo.addWidget(r["titulo"])
++        corpo.addSpacing(10)                            # título (…, 10) + texto (0, …)
++        r["info"] = blocos.rotulo(
++            "Este módulo lê uma aba de um arquivo Excel e cadastra as aplicações no Portal PMIB.\n"
++            "Você escolhe a aba depois de selecionar o arquivo.\n"
++            "Colunas esperadas: FICHA PMIB, CÓDIGO LMR e TAG LMR.\n"
++            "Será solicitado login no navegador durante o processo.",
++            cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO))
++        corpo.addWidget(r["info"])
++        # _STATUS_PMIB opcional: quem só quer cadastrar no portal continua
++        # clicando direto em "Selecionar Excel e Iniciar".
++        corpo.addSpacing(20)                            # texto (…, 20) + marcar (0, …)
++        r["marcar"] = blocos.rotulo("Marcar o resultado no _STATUS_PMIB (opcional):",
++                                    negrito=True, cor=theme.COLORS["text_light"])
++        corpo.addWidget(r["marcar"])
++        corpo.addSpacing(6)                             # marcar (…, 6) + seletor (0, …)
++        self.picker_status = pickers.FilePickerRow(
++            chave="lmr.status_pmib", categoria="excel", texto_botao="Selecionar _STATUS_PMIB",
++            largura_botao=240, titulo="Selecione o _STATUS_PMIB",
++            filetypes=[("Excel", "*.xlsx *.xlsm")],
++            texto_vazio="Nenhum (o lote não será marcado na planilha)",
++            ao_escolher=self._ao_escolher_status)
++        # Lá o seletor é `pack` sem `fill`: centrado, com a largura natural.
++        corpo.addWidget(self.picker_status, alignment=Qt.AlignmentFlag.AlignHCenter)
++        corpo.addSpacing(30)                            # seletor (…, 20) + iniciar (10, …)
++        self.btn_run = blocos.botao("Selecionar Excel e Iniciar", variante="primario", largura=300,
++                                    altura=50, tamanho_fonte=14, negrito=True,
++                                    cor_texto=theme.COLORS["text_white"])
++        self.btn_run.clicked.connect(self.iniciar_lmr)
++        corpo.addWidget(self.btn_run, alignment=Qt.AlignmentFlag.AlignHCenter)
++        corpo.addSpacing(14)                            # iniciar (…, 10) + linha do código (4, …)
++        corpo.addLayout(self._linha_do_codigo())
++        corpo.addSpacing(8)                             # linha do código (…, 8) + explicação (0, …)
++        r["desligado"] = blocos.rotulo(
++            "Desligado, processa a ficha inteira desde o começo.\n"
++            "O número conta CÓDIGOS LMR (não linhas do Excel): o mesmo código\n"
++            "espalhado pela planilha é uma aplicação só.", tamanho=11, cor=cinza_claro)
++        corpo.addWidget(r["desligado"])
++        corpo.addSpacing(20)                            # explicação (…, 10) + "O script" (10, …)
++        r["script"] = blocos.rotulo(
++            "O script pedirá:\n1. Arquivo Excel LMR\n2. Seleção das Fichas (Checkbox)",
++            tamanho=12, cor=cinza_claro)
++        corpo.addWidget(r["script"])
++        self.content_layout.addSpacing(20)
++        self.content_layout.addStretch()
++
++    def _linha_do_codigo(self) -> QHBoxLayout:
++        """"Começar de um código específico" + campo de 70 px, centrados.
++
++        Desligado por padrão. Pedido do usuário (2026-08-21): o padrão é
++        começar do 0, e só quando ele pede é que o número entra -- antes TODA
++        execução abria um Sim/Não e mais um diálogo pedindo o número.
++        """
++        linha = QHBoxLayout()
++        linha.setSpacing(0)
++        linha.addStretch()
++        self.caixa_linha_inicial = controles.Interruptor(
++            "Começar de um código específico", cor_ligado=theme.COLORS["accent"], tamanho_fonte=12)
++        self.caixa_linha_inicial.toggled.connect(self._alternar_linha_inicial)
++        linha.addWidget(self.caixa_linha_inicial)
++        linha.addSpacing(10)                            # interruptor: padx=(0, 10)
++        self.entry_linha_inicial = QLineEdit()  # o visual (28 px) é o do CTkEntry, na folha do app
++        self.entry_linha_inicial.setFixedWidth(70)
++        self.entry_linha_inicial.setPlaceholderText("0")
++        self.entry_linha_inicial.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.entry_linha_inicial.setEnabled(False)
++        linha.addWidget(self.entry_linha_inicial)
++        linha.addStretch()
++        return linha
++
++    # --- linha inicial ----------------------------------------------------------
++    def _alternar_linha_inicial(self, ligado: bool) -> None:
++        self.entry_linha_inicial.setEnabled(ligado)
++        if not ligado:
++            self.entry_linha_inicial.clear()
++
++    def _linha_inicial_escolhida(self) -> int | None:
++        """Número do interruptor, ou `None` quando ele está desligado.
++
++        `None` e `0` NÃO são a mesma coisa para o serviço: `None` quer dizer
++        "não me pergunte nada, comece do começo"; um número quer dizer "a tela
++        já perguntou, use este". Chamar na thread da interface.
++        """
++        if not self.caixa_linha_inicial.isChecked():
++            return None
++        texto = self.entry_linha_inicial.text().strip()
++        if not texto:
++            return None
++        try:
++            return int(texto)
++        except ValueError:
++            self.log(f"Linha inicial {texto!r} não é um número. Começando do 0.")
++            return None
++
++    # --- escolhas (a pessoa decide; sobrescrevíveis em teste) ---------------------
++    def escolher_aba(self, nome_arquivo: str, abas: list[str]) -> str | None:
++        dialogo = DialogoDaAba(self, nome_arquivo=nome_arquivo, abas=abas)
++        aba = dialogo.aba_escolhida() if dialogo.exec() else None
++        dialogo.deleteLater()  # filho da tela: sem isto, cada clique deixava uma janela escondida
++        return aba
++
++    def escolher_pmibs(self, pmibs: list[str]) -> list[str]:
++        dialogo = SelecaoComCaixasDialog(self, titulo="Selecione as Fichas",
++                                         mensagem="Selecione os PMIBs para processar:", itens=pmibs)
++        # Fechar no "X" é "nenhuma": o que estiver marcado não vale.
++        escolhidos = dialogo.selecionados() if dialogo.exec() else []
++        dialogo.deleteLater()
++        return escolhidos
++
++    # --- _STATUS_PMIB opcional -------------------------------------------------------
++    def _ao_escolher_status(self, caminho) -> None:
++        self.caminho_status_pmib = caminho
++        self.log(f"_STATUS_PMIB selecionado: {os.path.basename(caminho)}")
++
++    def _marcar_status_do_lote(self, modulo, completas, incompletas) -> None:
++        """Marca a coluna "APLICAÇÃO - LMR" das fichas do lote.
++
++        Roda no worker, DEPOIS do portal. Nunca deixa uma falha de planilha
++        escapar: o cadastro no portal já aconteceu, e é ele que custa caro.
++        """
++        if not self.caminho_status_pmib:
++            if completas or incompletas:
++                self.log("[i] Nenhum _STATUS_PMIB selecionado. A planilha não foi marcada.")
++            return
++        self.log("Marcando o _STATUS_PMIB...")
++        try:
++            _marcadas, recado = modulo.marcar_status_pmib(
++                self.caminho_status_pmib, completas, incompletas,
++                retry_lock=self.perguntar_retry_excel, callback_log=self.log)
++            self.log(recado)
++        except Exception as erro:  # noqa: BLE001 -- o portal já foi feito
++            self.log(f"[!] Não consegui marcar o _STATUS_PMIB: {type(erro).__name__}: {erro}")
++            self.log("    O cadastro no portal FOI feito. Marque a planilha à mão.")
++
++    # --- execução -----------------------------------------------------------------------
++    def iniciar_lmr(self) -> None:
++        # Antes do seletor: escolher o arquivo para depois ouvir que o módulo
++        # não carregou seria pedir o trabalho à toa.
++        modulo = self.backend("lmr_backend")
++        if modulo is None:
++            return
++        excel_path = file_dialogs.ask_open_file("lmr.excel", "excel", titulo="Selecione o Excel LMR",
++                                                filetypes=[("Excel", "*.xlsx")])
++        if not excel_path:
++            return
++        try:
++            abas = modulo.listar_abas(excel_path)
++        except Exception as e:  # noqa: BLE001 -- vira aviso
++            QMessageBox.critical(self, "Erro", f"Não consegui ler as abas do arquivo:\n{e}")
++            return
++        if not abas:
++            QMessageBox.critical(self, "Erro", "O arquivo não tem nenhuma aba.")
++            return
++        nome = os.path.basename(excel_path)
++        aba = self.escolher_aba(nome, abas)
++        if aba is None:
++            return
++        self.log(f"Lendo {nome} (aba '{aba}')...")
++        self.iniciar_tarefa(self._pre_processamento, modulo, excel_path, aba, botao=self.btn_run)
++
++    def _pre_processamento(self, modulo, excel_path, aba) -> None:
++        try:
++            automator = modulo.LMRAutomation()
++            ok, df_completo, pmibs_unicos, msg = automator.carregar_dados_excel(excel_path, aba)
++            self.log(msg)
++            if not ok:
++                self.avisar("Erro", f"Falha ao ler Excel:\n{msg}", tipo="erro")
++                return
++            if not pmibs_unicos:
++                self.log("Nenhum PMIB encontrado.")
++                return
++            # A seleção é uma janela: abre na thread da interface. Ela é modal,
++            # então o botão (que `iniciar_tarefa` devolve agora) não pode ser
++            # clicado enquanto a pessoa escolhe.
++            interface.na_interface(self._selecionar_e_rodar, modulo, pmibs_unicos, df_completo)
++        except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++            self.log(f"Erro Pré-processamento: {e}")
++
++    def _selecionar_e_rodar(self, modulo, pmibs, df_completo) -> None:
++        selecionados = self.escolher_pmibs(pmibs)
++        if not selecionados:
++            self.log("Seleção cancelada.")
++            return
++        self.log(f"{len(selecionados)} fichas selecionadas. Iniciando robô...")
++        self.iniciar_tarefa(self._worker_lmr, modulo, selecionados, df_completo, botao=self.btn_run)
++
++    def _worker_lmr(self, modulo, selecionados, df_completo) -> None:
++        auto = modulo.LMRAutomation()
++        try:
++            self.log("Iniciando navegador...")
++            auto.iniciar_driver()
++            self.log("Carregando portal...")
++            auto.abrir_portal()
++            self.pausar_e_esperar(MSG_LOGIN_LMR)
++            # Lido DEPOIS do login, como lá (a pessoa pode ligar o interruptor
++            # enquanto loga), mas na thread da interface: é widget.
++            linha_inicio = self._na_interface_e_esperar(self._linha_inicial_escolhida)
++            completas, incompletas = auto.processar_lista(
++                selecionados, df_completo, callback_log=self.log,
++                callback_ask=self.perguntar_sim_nao, callback_input=self.pedir_texto,
++                linha_inicio=linha_inicio)
++            self.log("Automação LMR finalizada.")
++            # DEPOIS do portal e com try/except próprio (ver o método).
++            self._marcar_status_do_lote(modulo, completas, incompletas)
++            self.avisar("Sucesso", "Processo concluído.")
++        except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++            self.log(f"Erro Fatal LMR: {e}")
++        finally:
++            auto.fechar_driver()
+diff --git a/sigft/app_qt/widgets/controles.py b/sigft/app_qt/widgets/controles.py
+new file mode 100644
+index 0000000..6617a79
+--- /dev/null
++++ b/sigft/app_qt/widgets/controles.py
+@@ -0,0 +1,158 @@
++"""Controles do CustomTkinter que a folha de estilo não sabe imitar.
++
++O QSS pinta fundo, borda e texto, mas não desenha o botão redondo de um
++CTkSwitch, a seta do CTkOptionMenu nem o "v" de uma CTkCheckBox (sem imagem,
++a caixa marcada do QSS é só um quadrado cheio). Aqui eles são desenhados à
++mão, com as medidas e as cores do tema dark-blue
++(customtkinter/assets/themes/dark-blue.json), o que o app antigo usa.
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import QPointF, QRectF, QSize, Qt
++from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
++from PySide6.QtWidgets import QCheckBox, QComboBox
++
++from sigft.app_qt import estilo
++
++# CTkSwitch: trilho de 36x18 (switch_width/height) com borda transparente de 3
++# -- o que se vê é o miolo, 30x12 -- e o botão redondo de 18 px. A linha toda
++# tem 24 de altura (height); o texto vem 6 px depois do trilho.
++LARGURA_TRILHO, ALTURA_TRILHO, BORDA_TRILHO = 36, 18, 3
++VAO_TEXTO_INTERRUPTOR = 6
++ALTURA_INTERRUPTOR = 24
++COR_TRILHO = "#4A4D50"          # CTkSwitch fg_color
++COR_BOTAO_INTERRUPTOR = "#D5D9DE"
++COR_BOTAO_INTERRUPTOR_HOVER = "#FFFFFF"   # gray100
++COR_TEXTO_CTK = estilo.cinza_tk("gray84")
++COR_TEXTO_DESLIGADO_CTK = estilo.cinza_tk("gray45")
++
++# CTkOptionMenu: 28 de altura; a parte da seta é um quadrado da altura, mais
++# escura (button_color), que escurece mais no hover (button_hover_color).
++ALTURA_MENU = estilo.ALTURA_MENU_CTK
++COR_SETA_MENU_HOVER = "#1E2C40"
++
++# CTkCheckBox: caixa de 24 com borda 3 #949A9F e cantos de 6; marcada, enche
++# da cor e ganha o "v" gray90.
++LADO_CAIXA, BORDA_CAIXA, RAIO_CAIXA = 24, 3, 6
++COR_BORDA_CAIXA = estilo.BORDA_CTK
++COR_MARCA_CAIXA = estilo.cinza_tk("gray90")
++
++
++def _pintor(widget) -> QPainter:
++    pintor = QPainter(widget)
++    pintor.setRenderHint(QPainter.RenderHint.Antialiasing)
++    return pintor
++
++
++class Interruptor(QCheckBox):
++    """CTkSwitch: um QCheckBox (isChecked, toggled) com a cara do interruptor.
++
++    `cor_ligado` é o `progress_color` do CTk (o padrão do tema é o azul).
++    Clicar no texto também alterna, como lá.
++    """
++
++    def __init__(self, texto: str, parent=None, *, cor_ligado: str = estilo.AZUL_CTK,
++                 tamanho_fonte: int = 13) -> None:
++        super().__init__(texto, parent)
++        self._cor_ligado = cor_ligado
++        # A folha do widget ganha da global (QCheckBox 12 px): o tamanho é o pedido.
++        self.setStyleSheet(f"font-size: {tamanho_fonte}px;")
++        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
++        self.setCursor(Qt.CursorShape.PointingHandCursor)
++
++    def sizeHint(self) -> QSize:  # noqa: N802 -- nome do Qt
++        largura = LARGURA_TRILHO + VAO_TEXTO_INTERRUPTOR + self.fontMetrics().horizontalAdvance(self.text())
++        return QSize(largura, max(ALTURA_INTERRUPTOR, self.fontMetrics().height()))
++
++    def minimumSizeHint(self) -> QSize:  # noqa: N802 -- nome do Qt
++        return self.sizeHint()
++
++    def hitButton(self, pos) -> bool:  # noqa: N802 -- nome do Qt
++        return self.rect().contains(pos)
++
++    def paintEvent(self, _evento) -> None:  # noqa: N802 -- nome do Qt
++        pintor = _pintor(self)
++        y0 = (self.height() - ALTURA_TRILHO) / 2
++        miolo = QRectF(BORDA_TRILHO, y0 + BORDA_TRILHO,
++                       LARGURA_TRILHO - 2 * BORDA_TRILHO, ALTURA_TRILHO - 2 * BORDA_TRILHO)
++        pintor.setPen(Qt.PenStyle.NoPen)
++        pintor.setBrush(QColor(self._cor_ligado if self.isChecked() else COR_TRILHO))
++        pintor.drawRoundedRect(miolo, miolo.height() / 2, miolo.height() / 2)
++        x_botao = LARGURA_TRILHO - ALTURA_TRILHO if self.isChecked() else 0
++        sobre = self.isEnabled() and self.underMouse()
++        pintor.setBrush(QColor(COR_BOTAO_INTERRUPTOR_HOVER if sobre else COR_BOTAO_INTERRUPTOR))
++        pintor.drawEllipse(QRectF(x_botao, y0, ALTURA_TRILHO, ALTURA_TRILHO))
++        pintor.setPen(QColor(COR_TEXTO_CTK if self.isEnabled() else COR_TEXTO_DESLIGADO_CTK))
++        pintor.setFont(self.font())
++        x_texto = LARGURA_TRILHO + VAO_TEXTO_INTERRUPTOR
++        pintor.drawText(QRectF(x_texto, 0, self.width() - x_texto, self.height()),
++                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.text())
++        pintor.end()
++
++
++class MenuDeOpcoes(QComboBox):
++    """CTkOptionMenu: a lista que abre continua a do Qt; o botão é o do CTk."""
++
++    def __init__(self, opcoes: list[str] | None = None, parent=None) -> None:
++        super().__init__(parent)
++        if opcoes:
++            self.addItems(opcoes)
++        self.setFixedHeight(ALTURA_MENU)
++        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
++        self.setCursor(Qt.CursorShape.PointingHandCursor)
++
++    def sizeHint(self) -> QSize:  # noqa: N802 -- nome do Qt
++        return QSize(super().sizeHint().width(), ALTURA_MENU)
++
++    def paintEvent(self, _evento) -> None:  # noqa: N802 -- nome do Qt
++        pintor = _pintor(self)
++        largura, altura = self.width(), self.height()
++        inteiro = QPainterPath()
++        inteiro.addRoundedRect(QRectF(0, 0, largura, altura), 6, 6)
++        pintor.setClipPath(inteiro)
++        pintor.fillRect(QRectF(0, 0, largura - altura, altura), QColor(estilo.AZUL_CTK))
++        sobre = self.isEnabled() and self.underMouse()
++        pintor.fillRect(QRectF(largura - altura, 0, altura, altura),
++                        QColor(COR_SETA_MENU_HOVER if sobre else estilo.AZUL_CTK_HOVER))
++        pintor.setClipping(False)
++        # A seta: no Windows e no Linux o CTk a desenha com a fonte de formas dele
++        # (não com o polígono do macOS). Medida na captura: um "v" de 9x5 px com
++        # traço de 2, no meio do quadrado escuro (1 px abaixo do centro).
++        cor_texto = QColor(estilo.TEXTO_BOTAO_CTK if self.isEnabled() else estilo.cinza_tk("gray60"))
++        cx, cy = largura - altura / 2, altura / 2 + 1
++        caneta = QPen(cor_texto, 2)
++        caneta.setCapStyle(Qt.PenCapStyle.RoundCap)
++        caneta.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
++        pintor.setPen(caneta)
++        pintor.drawPolyline([QPointF(cx - 3.5, cy - 1.75), QPointF(cx, cy + 1.75),
++                             QPointF(cx + 3.5, cy - 1.75)])
++        # O texto: rótulo do Tk com borda 1, depois dos 6 px do canto.
++        pintor.setPen(cor_texto)
++        pintor.setFont(self.font())
++        caixa_texto = QRectF(7, 0, largura - altura - 10, altura)
++        texto = self.fontMetrics().elidedText(self.currentText(), Qt.TextElideMode.ElideRight,
++                                              int(caixa_texto.width()))
++        pintor.drawText(caixa_texto, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, texto)
++        pintor.end()
++
++
++def pintar_caixa(pintor: QPainter, x: float, y: float, marcada: bool, cor_marcada: str) -> None:
++    """Desenha uma CTkCheckBox de 24 px com o canto de cima à esquerda em (x, y)."""
++    pintor.save()
++    pintor.setRenderHint(QPainter.RenderHint.Antialiasing)
++    metade = BORDA_CAIXA / 2
++    quadro = QRectF(x + metade, y + metade, LADO_CAIXA - BORDA_CAIXA, LADO_CAIXA - BORDA_CAIXA)
++    pintor.setPen(QPen(QColor(cor_marcada if marcada else COR_BORDA_CAIXA), BORDA_CAIXA))
++    pintor.setBrush(QColor(cor_marcada) if marcada else Qt.BrushStyle.NoBrush)
++    pintor.drawRoundedRect(quadro, RAIO_CAIXA - metade, RAIO_CAIXA - metade)
++    if marcada:
++        # draw_checkmark do CTk: tamanho 0.58 da caixa, raio tamanho/2.8, traço lado/8.
++        raio = round(LADO_CAIXA * 0.58) / 2.8
++        cx, cy = x + LADO_CAIXA / 2, y + LADO_CAIXA / 2
++        caneta = QPen(QColor(COR_MARCA_CAIXA), round(LADO_CAIXA / 8))
++        caneta.setCapStyle(Qt.PenCapStyle.RoundCap)
++        caneta.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
++        pintor.setPen(caneta)
++        pintor.drawPolyline([QPointF(cx + raio, cy - raio), QPointF(cx - raio / 4, cy + raio * 0.8),
++                             QPointF(cx - raio, cy + raio / 6)])
++    pintor.restore()
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 9129a3b..47e6ec2 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -6,12 +6,21 @@ thread do robô fica presa em `Event.wait()` para sempre.
+ """
+ from __future__ import annotations
+ 
+-from PySide6.QtCore import Qt
++from PySide6.QtCore import QEvent, QRect, QSize, Qt
++from PySide6.QtGui import QColor
+ from PySide6.QtWidgets import (
+-    QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout,
++    QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
++    QStyledItemDelegate, QVBoxLayout,
+ )
+ 
++from sigft.app import theme
+ from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
++from sigft.app_qt.widgets import blocos, controles
++
++# CTkCheckBox na lista de lá: caixa de 24, `pack(pady=2)` -> uma linha a cada 28;
++# o texto começa 6 px depois da caixa.
++ALTURA_LINHA_CAIXA = 28
++VAO_TEXTO_CAIXA = 6
+ 
+ 
+ class _DialogoDeAcaoManual(QDialog):
+@@ -107,44 +116,108 @@ class RetryLockDialog(_DialogoDeAcaoManual):
+         self._responder(False)
+ 
+ 
++class _DelegadoDaCaixa(QStyledItemDelegate):
++    """Cada linha da lista desenhada como uma CTkCheckBox (caixa de 24 + texto).
++
++    Clicar na caixa OU no texto alterna, como lá; o resto da linha, não.
++    """
++
++    def __init__(self, parent, *, cor_marcada: str) -> None:
++        super().__init__(parent)
++        self._cor_marcada = cor_marcada
++
++    @staticmethod
++    def _marcada(index) -> bool:
++        valor = index.data(Qt.ItemDataRole.CheckStateRole)
++        return valor in (Qt.CheckState.Checked, Qt.CheckState.Checked.value)
++
++    def sizeHint(self, option, index) -> QSize:  # noqa: N802 -- nome do Qt
++        return QSize(option.rect.width(), ALTURA_LINHA_CAIXA)
++
++    def paint(self, pintor, option, index) -> None:
++        r = option.rect
++        # pack(pady=2): a caixa fica 2 px abaixo do topo da linha de 28.
++        controles.pintar_caixa(pintor, r.x(), r.y() + 2, self._marcada(index), self._cor_marcada)
++        pintor.save()
++        pintor.setPen(QColor(controles.COR_TEXTO_CTK))
++        pintor.setFont(option.font)
++        x_texto = r.x() + controles.LADO_CAIXA + VAO_TEXTO_CAIXA
++        pintor.drawText(QRect(x_texto, r.y(), r.right() - x_texto, r.height()),
++                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
++                        index.data(Qt.ItemDataRole.DisplayRole))
++        pintor.restore()
++
++    def editorEvent(self, evento, modelo, option, index) -> bool:  # noqa: N802 -- nome do Qt
++        tipo = evento.type()
++        if tipo in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
++            return True  # sem seleção nem edição: só o soltar do botão conta
++        if tipo != QEvent.Type.MouseButtonRelease or evento.button() != Qt.MouseButton.LeftButton:
++            return False
++        texto = index.data(Qt.ItemDataRole.DisplayRole) or ""
++        alcance = controles.LADO_CAIXA + VAO_TEXTO_CAIXA + option.fontMetrics.horizontalAdvance(texto)
++        if evento.position().x() - option.rect.x() <= alcance:
++            novo = Qt.CheckState.Unchecked if self._marcada(index) else Qt.CheckState.Checked
++            modelo.setData(index, novo, Qt.ItemDataRole.CheckStateRole)
++        return True
++
++
+ class SelecaoComCaixasDialog(QDialog):
+     """Lista com caixas de marcar + "Todos" + "CONFIRMAR".
+ 
+     É a janela de seleção de fichas da Aplicação LMR (450x600). A lista é um
+     QListWidget: desenha só as linhas visíveis, ao contrário de um widget por
+-    ficha -- com centenas de PMIBs a diferença aparece.
++    ficha -- com centenas de PMIBs a diferença aparece. Cada linha é pintada
++    como a CTkCheckBox de lá (`_DelegadoDaCaixa`), dentro de um quadro como o
++    CTkScrollableFrame.
+     """
+ 
+-    def __init__(self, parent, *, titulo: str, mensagem: str, itens: list[str]) -> None:
++    def __init__(self, parent, *, titulo: str, mensagem: str, itens: list[str],
++                 cor_caixa: str = theme.COLORS["primary"]) -> None:
+         super().__init__(parent)
+         self.setWindowTitle(titulo)
+         self.resize(450, 600)
++        # Espaços do `pack` de lá; o pady de dois vizinhos SOMA no Tk.
+         layout = QVBoxLayout(self)
+-        rotulo = QLabel(mensagem)
+-        rotulo.setStyleSheet("font-size: 14px; font-weight: bold;")
+-        rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+-        layout.addWidget(rotulo)
+-        self.lista = QListWidget()
++        layout.setContentsMargins(0, 0, 0, 0)
++        layout.setSpacing(0)
++        layout.addSpacing(10)                           # rótulo: pady=10
++        self.rotulo = blocos.rotulo(mensagem, tamanho=14, negrito=True, cor=controles.COR_TEXTO_CTK)
++        layout.addWidget(self.rotulo)
++        layout.addSpacing(15)                           # rótulo (…, 10) + quadro (5, …)
++        # CTkScrollableFrame(padx=10): quadro #212121 de cantos 6; a lista começa
++        # 6 px para dentro, e a barra de rolagem (16 px) encosta 1 px da borda.
++        self.quadro = QFrame(objectName="quadro_caixas")
++        dentro = QVBoxLayout(self.quadro)
++        dentro.setContentsMargins(6, 6, 1, 6)
++        self.lista = QListWidget(objectName="lista_caixas")
++        self.lista.setItemDelegate(_DelegadoDaCaixa(self.lista, cor_marcada=cor_caixa))
++        self.lista.setSelectionMode(QListWidget.SelectionMode.NoSelection)
++        self.lista.setFocusPolicy(Qt.FocusPolicy.NoFocus)
++        self.lista.setUniformItemSizes(True)
++        self.lista.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+         for texto in itens:
+             item = QListWidgetItem(texto)
+             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+             item.setCheckState(Qt.CheckState.Unchecked)
+             self.lista.addItem(item)
+-        layout.addWidget(self.lista, 1)
++        dentro.addWidget(self.lista)
++        linha_quadro = QHBoxLayout()
++        linha_quadro.setContentsMargins(10, 0, 10, 0)
++        linha_quadro.addWidget(self.quadro)
++        layout.addLayout(linha_quadro, 1)
++        layout.addSpacing(15)                           # quadro (…, 5) + botões (10, …)
+         linha = QHBoxLayout()
+-        self.botao_todos = QPushButton("Todos")
+-        self.botao_todos.setProperty("variante", "neutro")
+-        self.botao_todos.setFixedWidth(80)
++        linha.setContentsMargins(10, 0, 10, 0)          # Todos: padx=10; CONFIRMAR: padx=10
++        self.botao_todos = blocos.botao("Todos", variante="cinza", largura=80)
+         self.botao_todos.clicked.connect(self._marcar_todos)
+-        self.botao_confirmar = QPushButton("CONFIRMAR")
+-        self.botao_confirmar.setProperty("variante", "acento")
+-        self.botao_confirmar.setStyleSheet("color: #161616;")
+-        self.botao_confirmar.setFixedWidth(150)
++        self.botao_confirmar = blocos.botao("CONFIRMAR", variante="acento", largura=150,
++                                            cor_texto="#161616")
+         self.botao_confirmar.clicked.connect(self.accept)
+         linha.addWidget(self.botao_todos)
+         linha.addStretch()
+         linha.addWidget(self.botao_confirmar)
+         layout.addLayout(linha)
++        layout.addSpacing(10)                           # botões: pady=10
+ 
+     def _marcar_todos(self) -> None:
+         for i in range(self.lista.count()):
+diff --git a/tests/conftest.py b/tests/conftest.py
+index ba7f4f5..40d06ec 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -258,6 +258,24 @@ def _isola_os_dados_do_usuario(monkeypatch, tmp_path_factory):
+     _dados.esquecer_pasta()
+ 
+ 
++@pytest.hookimpl(hookwrapper=True, tryfirst=True)
++def pytest_runtest_teardown(item, nextitem):
++    """Depois de um teste Qt, recolhe o lixo NA HORA.
++
++    O pytest-qt fecha as telas com `close()` + `deleteLater()`, mas o
++    `processEvents()` dele não roda o DeferredDelete: o C++ das telas fica
++    vivo e dono do Python. E uma tela é lixo em ciclo (o seletor guarda um
++    método da tela, que guarda o seletor), que o GC só apaga quando quer --
++    no meio da pintura do teste seguinte. Aí o QPainter dele quebrava
++    (segfault em `QPainter::device()`, 2026-10-08, ordem de testes certa).
++    Recolhendo aqui, depois de toda a desmontagem, o C++ morre fora de pintura.
++    """
++    yield
++    if "qtbot" in getattr(item, "fixturenames", ()):
++        import gc
++        gc.collect()
++
++
+ @pytest.fixture
+ def qt_interface(qapp):
+     """QApplication pronta e o canal thread -> interface instalado."""
+diff --git a/tests/test_qt_controles.py b/tests/test_qt_controles.py
+new file mode 100644
+index 0000000..6620da4
+--- /dev/null
++++ b/tests/test_qt_controles.py
+@@ -0,0 +1,92 @@
++"""Interruptor (CTkSwitch) e menu de opções (CTkOptionMenu) desenhados à mão.
++
++As medidas e cores vêm do tema dark-blue do CustomTkinter
++(customtkinter/assets/themes/dark-blue.json) e da captura da tela LMR de
++2026-10-08 (Xvfb, 1280x850).
++"""
++from PySide6.QtCore import QPoint, Qt
++from PySide6.QtWidgets import QCheckBox, QComboBox, QStyle, QStyleOptionButton
++
++from sigft.app import theme
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import controles
++
++
++def _cor(imagem, x, y) -> str:
++    return imagem.pixelColor(x, y).name().upper()
++
++
++def _na_folha(qtbot, widget):
++    widget.setStyleSheet(estilo.folha_de_estilo())
++    qtbot.addWidget(widget)
++    widget.show()
++    qtbot.waitExposed(widget)
++    return widget
++
++
++# --- Interruptor ----------------------------------------------------------------
++
++def test_interruptor_e_uma_caixa_de_marcar_com_as_medidas_do_ctkswitch(qt_interface, qtbot):
++    chave = _na_folha(qtbot, controles.Interruptor("Começar de um código específico",
++                                                   tamanho_fonte=12))
++    assert isinstance(chave, QCheckBox)
++    # CTkSwitch: height=24; trilho 36x18 na coluna 0, 6 px de vão, e o texto.
++    largura_texto = chave.fontMetrics().horizontalAdvance(chave.text())
++    assert chave.sizeHint().height() == 24
++    assert chave.sizeHint().width() == 36 + 6 + largura_texto
++    assert chave.font().pixelSize() == 12
++
++
++def test_interruptor_desenha_trilho_e_botao_como_o_ctk(qt_interface, qtbot):
++    chave = _na_folha(qtbot, controles.Interruptor("Ligar", cor_ligado=theme.COLORS["accent"]))
++    chave.resize(chave.sizeHint())
++    y0 = (chave.height() - 18) // 2
++    desligado = chave.grab().toImage()
++    # Desligado: botão (#D5D9DE, 18 px) à esquerda, trilho #4A4D50 (30x12) à direita dele.
++    assert _cor(desligado, 9, y0 + 9) == "#D5D9DE"
++    assert _cor(desligado, 27, y0 + 9) == "#4A4D50"
++    assert _cor(desligado, 27, y0 + 1) != "#4A4D50"   # o trilho é mais baixo que o botão
++    chave.setChecked(True)
++    ligado = chave.grab().toImage()
++    assert _cor(ligado, 27, y0 + 9) == "#D5D9DE"
++    assert _cor(ligado, 9, y0 + 9) == theme.COLORS["accent"].upper()
++
++
++def test_interruptor_alterna_clicando_no_texto(qt_interface, qtbot):
++    chave = _na_folha(qtbot, controles.Interruptor("Começar de um código específico"))
++    chave.resize(chave.sizeHint())
++    sinais = []
++    chave.toggled.connect(sinais.append)
++    qtbot.mouseClick(chave, Qt.MouseButton.LeftButton, pos=QPoint(chave.width() - 5, 12))
++    qtbot.mouseClick(chave, Qt.MouseButton.LeftButton, pos=QPoint(5, 12))
++    assert sinais == [True, False]
++
++
++# --- Menu de opções ---------------------------------------------------------------
++
++def test_menu_de_opcoes_pinta_como_o_ctkoptionmenu(qt_interface, qtbot):
++    menu = _na_folha(qtbot, controles.MenuDeOpcoes(["Plan1", "LMR"]))
++    menu.setFixedWidth(300)
++    assert isinstance(menu, QComboBox)
++    assert menu.height() == 28 and menu.sizeHint().height() == 28
++    imagem = menu.grab().toImage()
++    # Parte do texto #1F538D, parte da seta (28 px, a altura) #14375E.
++    assert _cor(imagem, 150, 3) == estilo.AZUL_CTK
++    assert _cor(imagem, 300 - 26, 3) == estilo.AZUL_CTK_HOVER
++    assert _cor(imagem, 300 - 30, 3) == estilo.AZUL_CTK
++    # A seta é um "v" de #DCE4EE no meio da parte escura.
++    cores_da_seta = {_cor(imagem, x, y) for x in range(280, 293) for y in range(10, 18)}
++    assert estilo.TEXTO_BOTAO_CTK in cores_da_seta
++    assert menu.currentText() == "Plan1"
++
++
++# --- caixa de marcar comum (folha global) -------------------------------------------
++
++def test_caixa_de_marcar_global_tem_24_px_como_a_ctkcheckbox(qt_interface, qtbot):
++    # CTkCheckBox: checkbox_width/height = 24, borda 3 incluída. No QSS, width e
++    # height do ::indicator NÃO contam a borda: 18 + 2*3.
++    caixa = _na_folha(qtbot, QCheckBox("Versões de teste"))
++    opcao = QStyleOptionButton()
++    caixa.initStyleOption(opcao)
++    indicador = caixa.style().subElementRect(QStyle.SubElement.SE_CheckBoxIndicator, opcao, caixa)
++    assert (indicador.width(), indicador.height()) == (24, 24)
+diff --git a/tests/test_qt_perguntas.py b/tests/test_qt_perguntas.py
+index 2710d3d..9a0af5d 100644
+--- a/tests/test_qt_perguntas.py
++++ b/tests/test_qt_perguntas.py
+@@ -75,3 +75,50 @@ def test_selecao_com_caixas(qt_interface, qtbot):
+     assert d.selecionados() == ["C"]
+     d.botao_todos.click()
+     assert d.selecionados() == ["A", "B", "C"]
++
++
++def test_selecao_com_caixas_tem_as_medidas_e_a_cara_da_janela_do_ctk(qt_interface, qtbot):
++    # Janela CTk de 450x600 (sigft/app/views/lmr.py), medida na captura de 2026-10-08:
++    # rótulo 14 negrito em y=10 (28 de altura); quadro rolável #212121 em (10, 53),
++    # 430x494; caixas de 24 px a cada 28 px, a primeira em (16, 61); "Todos" 80x28
++    # em (10, 562) e "CONFIRMAR" 150x28 em (290, 562).
++    from PySide6.QtCore import QPoint, Qt
++
++    from sigft.app import theme
++    from sigft.app_qt import estilo
++
++    d = qd.SelecaoComCaixasDialog(None, titulo="Selecione as Fichas",
++                                  mensagem="Selecione os PMIBs para processar:",
++                                  itens=[f"4500063671.{i:04d}" for i in range(1, 31)])
++    d.setStyleSheet(estilo.folha_de_estilo())
++    qtbot.addWidget(d)
++    d.show()
++    qtbot.waitExposed(d)
++
++    def caixa(w):
++        p = w.mapTo(d, w.rect().topLeft())
++        return (p.x(), p.y(), w.width(), w.height())
++
++    assert (d.width(), d.height()) == (450, 600)
++    assert caixa(d.rotulo)[1:4:2] == (10, 28)
++    assert caixa(d.quadro) == (10, 53, 430, 494)
++    assert caixa(d.botao_todos) == (10, 562, 80, 28)
++    assert caixa(d.botao_confirmar) == (290, 562, 150, 28)
++    linha = d.lista.visualItemRect(d.lista.item(0))
++    origem = d.lista.viewport().mapTo(d, linha.topLeft())
++    assert (origem.x(), origem.y(), linha.height()) == (16, 59, 28)
++
++    d.lista.item(1).setCheckState(Qt.CheckState.Checked)
++    imagem = d.grab().toImage()
++    cor = lambda x, y: imagem.pixelColor(x, y).name().upper()  # noqa: E731
++    assert cor(200, 300) == "#212121"
++    assert cor(17, 73) == estilo.BORDA_CTK                      # borda da caixa desmarcada
++    assert cor(22, 92) == theme.COLORS["primary"].upper()       # caixa marcada cheia de primary
++
++    # Clicar no TEXTO marca, como na CTkCheckBox; fora dele, não.
++    retangulo = d.lista.visualItemRect(d.lista.item(2))
++    qtbot.mouseClick(d.lista.viewport(), Qt.MouseButton.LeftButton,
++                     pos=QPoint(retangulo.x() + 60, retangulo.center().y()))
++    qtbot.mouseClick(d.lista.viewport(), Qt.MouseButton.LeftButton,
++                     pos=QPoint(retangulo.x() + 350, retangulo.center().y()))
++    assert d.selecionados() == ["4500063671.0002", "4500063671.0003"]
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index 4196b3d..1929532 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -52,6 +52,8 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.widgets.blocos",
+     "sigft.app_qt.views.translator",
+     "sigft.app_qt.views.apagar_lmr",
++    "sigft.app_qt.views.lmr",
++    "sigft.app_qt.widgets.controles",
+ ])
+ def test_importa_sem_tkinter(modulo):
+     resultado = _importa_sem_tk(modulo)
+diff --git a/tests/test_qt_tela_lmr.py b/tests/test_qt_tela_lmr.py
+new file mode 100644
+index 0000000..128b066
+--- /dev/null
++++ b/tests/test_qt_tela_lmr.py
+@@ -0,0 +1,404 @@
++from types import SimpleNamespace
++
++import pytest
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QCheckBox, QDialog, QLineEdit
++
++from sigft.app import backends
++from sigft.app_qt.views import lmr as tela_mod
++
++
++class RoboFalso:
++    def __init__(self, carregar=None, falha=None):
++        self.passos, self.callbacks = [], {}
++        self._carregar = carregar or (lambda c, a: (True, "DF", ["111", "222"], f"lidas 2 fichas de {a}"))
++        self.falha = falha
++
++    def carregar_dados_excel(self, caminho, aba):
++        self.passos.append(("carregar", caminho, aba))
++        return self._carregar(caminho, aba)
++
++    def iniciar_driver(self):
++        self.passos.append("driver")
++
++    def abrir_portal(self):
++        self.passos.append("portal")
++
++    def processar_lista(self, selecionados, df, *, callback_log, callback_ask, callback_input, linha_inicio):
++        self.callbacks = dict(log=callback_log, ask=callback_ask, input=callback_input, inicio=linha_inicio)
++        if self.falha:
++            raise self.falha
++        callback_log("processando...")
++        self.passos.append(("lista", tuple(selecionados), df))
++        return ["111"], []
++
++    def fechar_driver(self):
++        self.passos.append("fechou")
++
++
++@pytest.fixture
++def tela(qt_interface, qtbot, monkeypatch):
++    robo = RoboFalso()
++    marcadas, abertos = [], []
++
++    def marcar_status_pmib(caminho, completas, incompletas, *, retry_lock, callback_log):
++        marcadas.append((caminho, completas, incompletas, retry_lock, callback_log))
++        return 1, "1 ficha marcada no _STATUS_PMIB."
++
++    modulo = SimpleNamespace(
++        listar_abas=lambda caminho: ["Plan1", "LMR"],
++        LMRAutomation=lambda: robo,
++        marcar_status_pmib=marcar_status_pmib)
++    monkeypatch.setattr(backends, "lmr_backend", modulo)
++
++    def abrir(*a, **k):
++        abertos.append((a, k))
++        return "/tmp/LMR.xlsx"
++
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", abrir)
++    t = tela_mod.ModuloLMR()
++    qtbot.addWidget(t)
++    t.robo, t.marcadas, t.avisos, t.pausas, t.abertos, t.abas_pedidas = robo, marcadas, [], [], abertos, []
++    monkeypatch.setattr(t, "avisar", lambda ti, m, tipo="info": t.avisos.append((tipo, ti, m)))
++    monkeypatch.setattr(t, "pausar_e_esperar", lambda m, texto_botao=None: t.pausas.append(m))
++
++    def escolher_aba(nome, abas):
++        t.abas_pedidas.append((nome, abas))
++        return "LMR"
++
++    monkeypatch.setattr(t, "escolher_aba", escolher_aba)
++    monkeypatch.setattr(t, "escolher_pmibs", lambda pmibs: ["222"])
++    return t
++
++
++def _esperar_fim(tela, qtbot, ultima):
++    qtbot.waitUntil(lambda: "fechou" in tela.robo.passos, timeout=3000)
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++    qtbot.waitUntil(lambda: ultima in tela.console.toPlainText(), timeout=2000)
++    return tela.console.toPlainText()
++
++
++def test_textos_e_caixa_da_linha_inicial(tela):
++    from sigft.app import theme
++    assert tela.label_titulo.text() == "Automação LMR"
++    assert tela.btn_run.text() == "Selecionar Excel e Iniciar"
++    assert tela.picker_status.botao.text() == "Selecionar _STATUS_PMIB"
++    assert tela.picker_status.label_status.text() == "Nenhum (o lote não será marcado na planilha)"
++    assert tela.caminho_status_pmib is None
++    r = tela._rotulos
++    assert r["titulo"].text() == "Preenchimento Automático de LMR (Aplicações)"
++    assert theme.COLORS["accent"] in r["titulo"].styleSheet()
++    assert r["info"].text().startswith("Este módulo lê uma aba de um arquivo Excel")
++    assert "#808080" in r["info"].styleSheet()                      # "gray" do Tk
++    assert r["marcar"].text() == "Marcar o resultado no _STATUS_PMIB (opcional):"
++    assert "#B3B3B3" in r["desligado"].styleSheet() and "font-size: 11px" in r["desligado"].styleSheet()
++    assert r["script"].text() == "O script pedirá:\n1. Arquivo Excel LMR\n2. Seleção das Fichas (Checkbox)"
++    assert isinstance(tela.caixa_linha_inicial, QCheckBox)
++    assert tela.caixa_linha_inicial.text() == "Começar de um código específico"
++    assert isinstance(tela.entry_linha_inicial, QLineEdit)
++    assert tela.entry_linha_inicial.placeholderText() == "0"
++    assert not tela.entry_linha_inicial.isEnabled()
++    tela.caixa_linha_inicial.setChecked(True)
++    assert tela.entry_linha_inicial.isEnabled()
++    tela.entry_linha_inicial.setText("12")
++    assert tela._linha_inicial_escolhida() == 12
++    tela.caixa_linha_inicial.setChecked(False)
++    assert tela.entry_linha_inicial.text() == "" and tela._linha_inicial_escolhida() is None
++
++
++def test_linha_inicial_vazia_ou_invalida(tela, qtbot):
++    tela.caixa_linha_inicial.setChecked(True)
++    assert tela._linha_inicial_escolhida() is None
++    tela.entry_linha_inicial.setText("abc")
++    assert tela._linha_inicial_escolhida() is None
++    qtbot.waitUntil(lambda: "Linha inicial 'abc' não é um número. Começando do 0."
++                    in tela.console.toPlainText(), timeout=2000)
++
++
++def test_picker_do_status_usa_a_memoria_de_pastas(tela, qtbot, monkeypatch):
++    chamadas = []
++
++    def falso(chave, categoria, **k):
++        chamadas.append((chave, categoria, k["titulo"], k["filetypes"]))
++        return "/pasta/_STATUS_PMIB.xlsx"
++
++    monkeypatch.setattr(tela_mod.pickers.file_dialogs, "ask_open_file", falso)
++    tela.picker_status.botao.click()
++    assert chamadas == [("lmr.status_pmib", "excel", "Selecione o _STATUS_PMIB",
++                         [("Excel", "*.xlsx *.xlsm")])]
++    assert tela.caminho_status_pmib == "/pasta/_STATUS_PMIB.xlsx"
++    qtbot.waitUntil(lambda: "_STATUS_PMIB selecionado: _STATUS_PMIB.xlsx"
++                    in tela.console.toPlainText(), timeout=2000)
++
++
++def test_fluxo_completo(tela, qtbot):
++    from sigft.app.textos_dialogos import MSG_LOGIN_LMR
++    tela.caminho_status_pmib = "/tmp/STATUS.xlsx"
++    tela.caixa_linha_inicial.setChecked(True)
++    tela.entry_linha_inicial.setText("7")
++    tela.btn_run.click()
++    texto = _esperar_fim(tela, qtbot, "1 ficha marcada no _STATUS_PMIB.")
++    assert tela.abertos == [(("lmr.excel", "excel"),
++                             {"titulo": "Selecione o Excel LMR", "filetypes": [("Excel", "*.xlsx")]})]
++    assert tela.abas_pedidas == [("LMR.xlsx", ["Plan1", "LMR"])]
++    assert tela.robo.passos == [("carregar", "/tmp/LMR.xlsx", "LMR"), "driver", "portal",
++                                ("lista", ("222",), "DF"), "fechou"]
++    assert tela.pausas == [MSG_LOGIN_LMR]
++    assert tela.robo.callbacks["log"] == tela.log
++    assert tela.robo.callbacks["ask"] == tela.perguntar_sim_nao
++    assert tela.robo.callbacks["input"] == tela.pedir_texto
++    assert tela.robo.callbacks["inicio"] == 7
++    [(caminho, completas, incompletas, retry_lock, callback_log)] = tela.marcadas
++    assert (caminho, completas, incompletas) == ("/tmp/STATUS.xlsx", ["111"], [])
++    assert retry_lock == tela.perguntar_retry_excel and callback_log == tela.log
++    assert tela.avisos == [("info", "Sucesso", "Processo concluído.")]
++    ordem = ["Lendo LMR.xlsx (aba 'LMR')...", "lidas 2 fichas de LMR",
++             "1 fichas selecionadas. Iniciando robô...", "Iniciando navegador...",
++             "Carregando portal...", "processando...", "Automação LMR finalizada.",
++             "Marcando o _STATUS_PMIB...", "1 ficha marcada no _STATUS_PMIB."]
++    posicoes = [texto.index(linha) for linha in ordem]
++    assert posicoes == sorted(posicoes)
++
++
++def test_sem_status_avisa_que_a_planilha_nao_foi_marcada(tela, qtbot):
++    tela.btn_run.click()
++    texto = _esperar_fim(tela, qtbot, "[i] Nenhum _STATUS_PMIB selecionado.")
++    assert "[i] Nenhum _STATUS_PMIB selecionado. A planilha não foi marcada." in texto
++    assert tela.marcadas == [] and tela.robo.callbacks["inicio"] is None
++    assert tela.avisos == [("info", "Sucesso", "Processo concluído.")]
++
++
++def test_falha_na_planilha_nao_derruba_o_lote(tela, qtbot, monkeypatch):
++    def quebra(*a, **k):
++        raise PermissionError("travado")
++
++    monkeypatch.setattr(backends.lmr_backend, "marcar_status_pmib", quebra)
++    tela.caminho_status_pmib = "/tmp/STATUS.xlsx"
++    tela.btn_run.click()
++    texto = _esperar_fim(tela, qtbot, "Marque a planilha à mão.")
++    assert "[!] Não consegui marcar o _STATUS_PMIB: PermissionError: travado" in texto
++    assert "    O cadastro no portal FOI feito. Marque a planilha à mão." in texto
++    assert tela.avisos == [("info", "Sucesso", "Processo concluído.")]
++
++
++def test_erro_no_portal_vira_erro_fatal_e_fecha_o_driver(tela, qtbot):
++    tela.robo.falha = RuntimeError("tabela sumiu")
++    tela.btn_run.click()
++    texto = _esperar_fim(tela, qtbot, "Erro Fatal LMR:")
++    assert "Erro Fatal LMR: tabela sumiu" in texto and "Automação LMR finalizada." not in texto
++    assert tela.robo.passos[-1] == "fechou" and tela.avisos == []
++
++
++def test_selecao_vazia_cancela(tela, qtbot, monkeypatch):
++    monkeypatch.setattr(tela, "escolher_pmibs", lambda pmibs: [])
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: "Seleção cancelada." in tela.console.toPlainText(), timeout=3000)
++    assert "driver" not in tela.robo.passos
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++
++
++def test_cancelar_a_aba_nao_le_nada(tela, monkeypatch):
++    monkeypatch.setattr(tela, "escolher_aba", lambda nome, abas: None)
++    tela.btn_run.click()
++    assert tela.robo.passos == [] and tela.btn_run.isEnabled()
++
++
++def test_cancelar_o_arquivo_nao_faz_nada(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "")
++    tela.btn_run.click()
++    assert tela.abas_pedidas == [] and tela.robo.passos == []
++
++
++def test_falha_ao_ler_o_excel_avisa_com_erro(tela, qtbot):
++    tela.robo._carregar = lambda c, a: (False, None, [], "coluna FICHA PMIB ausente")
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: tela.avisos != [], timeout=3000)
++    assert tela.avisos == [("erro", "Erro", "Falha ao ler Excel:\ncoluna FICHA PMIB ausente")]
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++    assert "driver" not in tela.robo.passos
++
++
++def test_excel_sem_pmib(tela, qtbot, monkeypatch):
++    tela.robo._carregar = lambda c, a: (True, "DF", [], "0 linhas")
++    escolhidos = []
++    monkeypatch.setattr(tela, "escolher_pmibs", lambda p: escolhidos.append(p) or ["x"])
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: "Nenhum PMIB encontrado." in tela.console.toPlainText(), timeout=3000)
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++    assert escolhidos == []
++
++
++def test_erro_no_pre_processamento(tela, qtbot):
++    def quebra(c, a):
++        raise ValueError("planilha corrompida")
++
++    tela.robo._carregar = quebra
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: "Erro Pré-processamento: planilha corrompida"
++                    in tela.console.toPlainText(), timeout=3000)
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++
++
++def test_arquivo_sem_abas(tela, monkeypatch):
++    monkeypatch.setattr(backends.lmr_backend, "listar_abas", lambda c: [])
++    erros = []
++    monkeypatch.setattr(tela_mod.QMessageBox, "critical", staticmethod(lambda *a: erros.append(a[1:])))
++    tela.btn_run.click()
++    assert erros == [("Erro", "O arquivo não tem nenhuma aba.")]
++
++
++def test_abas_ilegiveis(tela, monkeypatch):
++    def quebra(c):
++        raise OSError("arquivo corrompido")
++
++    monkeypatch.setattr(backends.lmr_backend, "listar_abas", quebra)
++    erros = []
++    monkeypatch.setattr(tela_mod.QMessageBox, "critical", staticmethod(lambda *a: erros.append(a[1:])))
++    tela.btn_run.click()
++    assert erros == [("Erro", "Não consegui ler as abas do arquivo:\narquivo corrompido")]
++
++
++def test_backend_que_nao_carregou_nao_abre_o_seletor(tela, monkeypatch):
++    monkeypatch.setattr(backends, "lmr_backend", None)
++    monkeypatch.setattr(backends, "falhas", {"lmr_backend": ImportError("sem selenium")})
++    avisos = []
++    monkeypatch.setattr("sigft.app_qt.widgets.module_frame.QMessageBox.warning",
++                        staticmethod(lambda *a: avisos.append(a[1])))
++    tela.btn_run.click()
++    assert avisos == ["Módulo indisponível"] and tela.abertos == []
++
++
++def test_embutida_escreve_no_console_do_pai(qt_interface, qtbot):
++    from sigft.app_qt.widgets.console import ConsoleFrame
++    console = ConsoleFrame()
++    qtbot.addWidget(console)
++    t = tela_mod.ModuloLMR(embutida=True, console_externo=console)
++    qtbot.addWidget(t)
++    assert t.label_titulo is None and t.console is console
++    t.log("oi")
++    qtbot.waitUntil(lambda: "oi" in console.toPlainText(), timeout=2000)
++
++
++# --- as duas escolhas, com as janelas de verdade ---------------------------------
++
++def test_escolher_aba_pela_janela(qt_interface, qtbot, monkeypatch):
++    t = tela_mod.ModuloLMR()
++    qtbot.addWidget(t)
++    vistos = []
++
++    def aceitar(dialogo):
++        vistos.append((dialogo.windowTitle(), dialogo.rotulo_arquivo.text(), dialogo.rotulo_pergunta.text(),
++                       [dialogo.menu.itemText(i) for i in range(dialogo.menu.count())]))
++        dialogo.menu.setCurrentIndex(1)
++        return QDialog.DialogCode.Accepted
++
++    monkeypatch.setattr(tela_mod.DialogoDaAba, "exec", aceitar)
++    assert t.escolher_aba("LMR.xlsx", ["Plan1", "LMR"]) == "LMR"
++    assert vistos == [("Escolha a aba", "LMR.xlsx", "Qual aba contém as aplicações de LMR?",
++                       ["Plan1", "LMR"])]
++    monkeypatch.setattr(tela_mod.DialogoDaAba, "exec", lambda d: QDialog.DialogCode.Rejected)
++    assert t.escolher_aba("LMR.xlsx", ["Plan1", "LMR"]) is None
++
++
++def test_escolher_pmibs_pela_janela(qt_interface, qtbot, monkeypatch):
++    t = tela_mod.ModuloLMR()
++    qtbot.addWidget(t)
++    vistos = []
++
++    def aceitar(dialogo):
++        vistos.append((dialogo.windowTitle(), dialogo.rotulo.text()))
++        dialogo.lista.item(1).setCheckState(Qt.CheckState.Checked)
++        return QDialog.DialogCode.Accepted
++
++    monkeypatch.setattr(tela_mod.SelecaoComCaixasDialog, "exec", aceitar)
++    assert t.escolher_pmibs(["111", "222"]) == ["222"]
++    assert vistos == [("Selecione as Fichas", "Selecione os PMIBs para processar:")]
++
++    def marcar_e_fechar(dialogo):
++        dialogo.lista.item(0).setCheckState(Qt.CheckState.Checked)
++        return QDialog.DialogCode.Rejected
++
++    monkeypatch.setattr(tela_mod.SelecaoComCaixasDialog, "exec", marcar_e_fechar)
++    assert t.escolher_pmibs(["111", "222"]) == []          # fechar no "X" = nenhuma
++
++
++# --- paridade visual ------------------------------------------------------------------
++
++@pytest.fixture
++def folha(qt_interface):
++    from sigft.app_qt import estilo
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    yield
++    qt_interface.setStyleSheet(anterior)
++
++
++def _pos(w, base):
++    return w.mapTo(base, w.rect().topLeft())
++
++
++def test_medidas_iguais_as_do_customtkinter(folha, qtbot):
++    # Tela antiga avulsa (CustomTkinter, 1280x850, sondada com winfo_*): cartão
++    # 20 px abaixo do conteúdo; entre as peças, a SOMA dos pady vizinhos (10, 20,
++    # 6, 30, 14, 8, 20) e 20 nas pontas; seletor 240x28; botão 300x50; linha do
++    # código (interruptor 24 de altura + 10 + campo 70x28) centrada.
++    t = tela_mod.ModuloLMR()
++    qtbot.addWidget(t)
++    t.resize(1003, 850)
++    t.show()
++    qtbot.waitExposed(t)
++
++    def y(w):
++        return _pos(w, t).y()
++
++    def base(w):
++        return y(w) + w.height()
++
++    r = t._rotulos
++    cartao = t.btn_run.parentWidget()
++    assert y(cartao) - y(t.content) == 20
++    assert y(r["titulo"]) - y(cartao) == 20 and r["titulo"].height() == 28
++    assert y(r["info"]) - base(r["titulo"]) == 10
++    assert y(r["marcar"]) - base(r["info"]) == 20 and r["marcar"].height() == 28
++    assert y(t.picker_status) - base(r["marcar"]) == 6
++    assert (t.picker_status.botao.width(), t.picker_status.botao.height()) == (240, 28)
++    assert y(t.btn_run) - base(t.picker_status) == 30
++    assert (t.btn_run.width(), t.btn_run.height()) == (300, 50)
++    assert y(t.entry_linha_inicial) - base(t.btn_run) == 14
++    assert (t.entry_linha_inicial.width(), t.entry_linha_inicial.height()) == (70, 28)
++    assert t.caixa_linha_inicial.height() == 24
++    assert y(t.caixa_linha_inicial) - y(t.entry_linha_inicial) == 2
++    assert y(r["desligado"]) - base(t.entry_linha_inicial) == 8
++    assert y(r["script"]) - base(r["desligado"]) == 20
++    assert base(cartao) - base(r["script"]) == 20
++    meio = _pos(cartao, t).x() + cartao.width() / 2
++    assert abs(_pos(t.btn_run, t).x() + 150 - meio) <= 1
++    esquerda = _pos(t.caixa_linha_inicial, t).x()
++    direita = _pos(t.entry_linha_inicial, t).x() + 70
++    assert abs((esquerda + direita) / 2 - meio) <= 1
++    assert _pos(t.entry_linha_inicial, t).x() - (esquerda + t.caixa_linha_inicial.width()) == 10
++    seletor = _pos(t.picker_status, t).x() + t.picker_status.width() / 2
++    assert abs(seletor - meio) <= 1
++
++
++def test_janela_da_aba_tem_as_medidas_do_ctk(folha, qtbot):
++    # CTkToplevel 420x220: nome do arquivo (12 negrito) em y=20, pergunta (12, gray70)
++    # em y=52, menu 300x28 em (60, 97), "Ler esta aba" em (60, 145), "Cancelar" em (60, 183).
++    d = tela_mod.DialogoDaAba(None, nome_arquivo="LMR_Aplicacoes_2026.xlsx", abas=["Plan1", "LMR"])
++    qtbot.addWidget(d)
++    d.show()
++    qtbot.waitExposed(d)
++
++    def caixa(w):
++        p = _pos(w, d)
++        return (p.x(), p.y(), w.width(), w.height())
++
++    assert (d.width(), d.height()) == (420, 220)
++    assert caixa(d.rotulo_arquivo)[1::2] == (20, 28)
++    assert caixa(d.rotulo_pergunta)[1::2] == (52, 28)
++    assert "#B3B3B3" in d.rotulo_pergunta.styleSheet()
++    assert caixa(d.menu) == (60, 97, 300, 28)
++    assert caixa(d.botao_ler) == (60, 145, 300, 28)
++    assert caixa(d.botao_cancelar) == (60, 183, 300, 28)
++    assert d.botao_ler.text() == "Ler esta aba" and d.botao_cancelar.text() == "Cancelar"
++    assert d.aba_escolhida() == "Plan1"
+-- 
+2.43.0
+
