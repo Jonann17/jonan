@@ -1,7 +1,7 @@
 From 5f19ea57d7eaa94bf321b87e40e81ec763791db9 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 12:04:51 +0000
-Subject: [PATCH 3/4] Qt6: perguntas, avisos e selecao com caixas sempre na
+Subject: [PATCH 3/7] Qt6: perguntas, avisos e selecao com caixas sempre na
  thread da interface
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
