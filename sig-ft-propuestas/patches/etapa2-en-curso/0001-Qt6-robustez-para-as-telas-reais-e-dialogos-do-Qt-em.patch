@@ -1,7 +1,7 @@
 From 5ebc91198077753f5956663ef7f41eb7cff4f5e7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 11:55:29 +0000
-Subject: [PATCH 1/7] Qt6: robustez para as telas reais e dialogos do Qt em
+Subject: [PATCH 1/8] Qt6: robustez para as telas reais e dialogos do Qt em
  portugues
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

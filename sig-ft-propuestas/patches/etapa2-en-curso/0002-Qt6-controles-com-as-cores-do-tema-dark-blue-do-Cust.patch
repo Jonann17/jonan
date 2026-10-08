@@ -1,7 +1,7 @@
 From d620a0ece528acbcf7f1fc11a1faa647542fa947 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 12:00:27 +0000
-Subject: [PATCH 2/7] Qt6: controles com as cores do tema dark-blue do
+Subject: [PATCH 2/8] Qt6: controles com as cores do tema dark-blue do
  CustomTkinter
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

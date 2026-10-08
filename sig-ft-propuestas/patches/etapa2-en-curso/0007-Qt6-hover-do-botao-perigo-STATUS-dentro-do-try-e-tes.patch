@@ -1,7 +1,7 @@
 From 691f044f8abc6a4ef7f9c582369341e330de83ed Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 12:38:12 +0000
-Subject: [PATCH 7/7] Qt6: hover do botao perigo, STATUS dentro do try e testes
+Subject: [PATCH 7/8] Qt6: hover do botao perigo, STATUS dentro do try e testes
  do glossario do Tradutor
 
 - perigo:hover #B71C1C, o hover_color que as telas CTk passam (sem a regra
