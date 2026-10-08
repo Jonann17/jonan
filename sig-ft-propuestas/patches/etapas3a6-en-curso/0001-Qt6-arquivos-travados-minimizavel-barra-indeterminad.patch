@@ -1,0 +1,833 @@
+From 2f3dbea316b41ae8d530071d6a328f4d2ed6d5ca Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 17:37:36 +0000
+Subject: [PATCH 1/3] Qt6: arquivos travados minimizavel, barra indeterminada e
+ limpeza dos estilos compartilhados
+
+Revisao da E3.1: a janela de arquivos travados vira janela independente
+com minimizar (como o CTkToplevel sem transient); modo indeterminado da
+barra de progresso; Abas com o conteudo em y=43 (medido no CTk) e
+ValueError em nome desconhecido; area rolavel com folhas de seletor (o
+transparent solto apagava o fundo dos filhos); botao com cor_fundo;
+uma folha so para o CTkScrollbar; SoltaAoFechar compartilhado nos
+dialogos de espera; registro de janelas abertas sem ciclo; esperar()
+volta tambem quando a janela e escondida; regras mortas de QTabWidget
+removidas.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py                   | 32 ++++++----
+ sigft/app_qt/widgets/abas.py             | 28 ++++++---
+ sigft/app_qt/widgets/blocos.py           | 59 +++++++++++++-----
+ sigft/app_qt/widgets/controles.py        |  2 +-
+ sigft/app_qt/widgets/dialogos_selecao.py | 77 +++++++++++++-----------
+ sigft/app_qt/widgets/dialogs.py          | 39 +++++++-----
+ sigft/app_qt/widgets/painel_janela.py    | 31 +++++++---
+ sigft/app_qt/widgets/pickers.py          | 15 ++---
+ tests/test_qt_controles_e31.py           | 76 ++++++++++++++++++++++-
+ tests/test_qt_dialogos_selecao.py        | 40 ++++++++++++
+ tests/test_qt_estilo_controles.py        |  3 +-
+ tests/test_qt_painel_janela.py           | 19 ++++++
+ tests/test_qt_tela_aplicacao_lmr.py      |  6 +-
+ 13 files changed, 316 insertions(+), 111 deletions(-)
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 5c1c20b..f98ef1c 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -186,8 +186,9 @@ def folha_de_estilo() -> str:
+     # * variante "cinza": o #3A3A3A com hover #454545 que as telas CTk escreviam à mão
+     #   ("Todos", "Cancelar"); "neutro" é o mesmo fundo com o hover do tema (Home).
+     # * #quadro_caixas/#lista_caixas: o CTkScrollableFrame da seleção de fichas
+-    #   (fundo gray13, cantos 6) e o CTkScrollbar dele (16 px, alça gray41 de 8 px,
+-    #   4 px de folga -- border_spacing). As linhas são de `dialogs._DelegadoDaCaixa`.
++    #   (fundo gray13, cantos 6) e o CTkScrollbar dele (`folha_rolagem_ctk`). As
++    #   linhas são de `dialogs._DelegadoDaCaixa`.
++    # * abas: não há regra de QTabWidget -- o CTkTabview é `widgets/abas.Abas`.
+     # * QCheckBox::indicator: width/height NÃO contam a borda -- 18 + 2*3 = os 24 da
+     #   CTkCheckBox (com 20 saía 26). Sem imagem, a marcada não tem o "v" de lá.
+     return f"""
+@@ -254,19 +255,11 @@ QComboBox {{ background: {AZUL_CTK}; border-radius: 6px; padding: 0 10px; border
+              min-height: {ALTURA_MENU_CTK}px; max-height: {ALTURA_MENU_CTK}px; }}
+ QComboBox QAbstractItemView {{ background: {cinza_tk('gray20')}; color: {cinza_tk('gray84')};
+     selection-background-color: {cinza_tk('gray28')}; border: none; outline: none; }}
+-QTabWidget::pane {{ border: none; background: {cinza_tk('gray16')}; border-radius: 6px; }}
+-QTabBar::tab {{ background: {cinza_tk('gray29')}; color: {TEXTO_BOTAO_CTK}; padding: 6px 14px;
+-                margin: 0 1px; border-radius: 6px; }}
+-QTabBar::tab:selected {{ background: {AZUL_CTK}; }}
+-QTabBar::tab:hover:!selected {{ background: {cinza_tk('gray41')}; }}
+ QListWidget {{ background: #1E1E1E; color: {c['text_light']}; border: none; }}
+ QListWidget::item:selected {{ background: {c['primary']}; color: white; }}
+ #quadro_caixas {{ background: {cinza_tk('gray13')}; border-radius: 6px; }}
+ #lista_caixas {{ background: transparent; border: none; font-size: 13px; }}
+-#lista_caixas QScrollBar:vertical {{ width: 16px; margin: 4px; background: transparent; }}
+-#lista_caixas QScrollBar::handle:vertical {{ background: {cinza_tk('gray41')}; border-radius: 4px;
+-    min-height: 20px; }}
+-#lista_caixas QScrollBar::handle:vertical:hover {{ background: {cinza_tk('gray53')}; }}
++{folha_rolagem_ctk('#lista_caixas', margem_vertical=4)}
+ #cartao {{ background: {theme.COR_CARTAO}; border-radius: 8px; }}
+ QScrollArea {{ border: none; background: transparent; }}
+ QScrollBar:vertical {{ background: transparent; width: 10px; }}
+@@ -316,6 +309,23 @@ ALTURA_LINHA_TABELA_TK = 20
+ FOLGA_LINHA_LISTA_TK = 0 if sys.platform == "win32" else 1
+ 
+ 
++def folha_rolagem_ctk(seletor: str = "", *, margem_vertical: int = 4) -> str:
++    """O CTkScrollbar: faixa de 16 px, alça gray41 de 8 (border_spacing 4 dos
++    lados), gray53 sob o mouse, sem setas. `seletor` prefixa as regras (ex.:
++    "#lista_caixas"); vazio, a folha vale para a própria QScrollBar (folha local).
++    `margem_vertical`: onde a alça começa e acaba -- 4 do border_spacing, mais o
++    canto do quadro quando a barra vai da borda de cima à de baixo dele."""
++    p = f"{seletor} " if seletor else ""
++    folga = (LARGURA_ROLAGEM_CTK - 8) // 2
++    return (f"{p}QScrollBar:vertical {{ width: {LARGURA_ROLAGEM_CTK}px; background: transparent;"
++            f" margin: {margem_vertical}px {folga}px; }}\n"
++            f"{p}QScrollBar::handle:vertical {{ background: {cinza_tk('gray41')}; border-radius: 4px;"
++            " min-height: 20px; }\n"
++            f"{p}QScrollBar::handle:vertical:hover {{ background: {cinza_tk('gray53')}; }}\n"
++            f"{p}QScrollBar::add-line:vertical, {p}QScrollBar::sub-line:vertical {{ height: 0; }}\n"
++            f"{p}QScrollBar::add-page:vertical, {p}QScrollBar::sub-page:vertical {{ background: transparent; }}")
++
++
+ def _folha_e31() -> str:
+     """Rádio, slider, tabela (ttk.Treeview) e lista crua (tk.Listbox) -- E3.1.
+ 
+diff --git a/sigft/app_qt/widgets/abas.py b/sigft/app_qt/widgets/abas.py
+index 082bea0..5340ac3 100644
+--- a/sigft/app_qt/widgets/abas.py
++++ b/sigft/app_qt/widgets/abas.py
+@@ -9,13 +9,21 @@ captura da E3.1:
+   27 na tela);
+ * o quadro começa 18 px abaixo do topo (os 10 livres + os 8 da barra que
+   ficam acima dele, `_outer_button_overhang`), cantos de 6;
+-* o conteúdo da aba começa em x=6, y=42 (36 da barra + 6 do canto) e termina
++* o conteúdo da aba começa em x=6, y=43 (37 da barra + 6 do canto) e termina
+   6 px antes da borda de baixo e da direita;
+ * cada botão: texto + 14 px (6 do canto + 1 do rótulo do Tk, dos dois lados),
+   borda de 3 na cor da barra -- o selecionado é o miolo azul dentro dela.
+ 
+ API como a do CTkTabview: `add(nome)` devolve o QWidget da aba (com um
+-QVBoxLayout), `tab(nome)`, `set(nome)`, `get()`.
++QVBoxLayout), `tab(nome)`, `set(nome)`, `get()`. Nome repetido em `add` ou
++desconhecido em `tab`/`set` levanta ValueError, como lá.
++
++Limites (o que o CTkTabview também não faz, ou que nenhuma tela usa):
++* a largura de cada botão é fixada quando a aba é criada (texto + 14): mudar o
++  texto ou a fonte depois não a refaz; não há `delete`, `rename` nem `insert`;
++* sem teclado: as setas não trocam de aba (no CTk também não); Tab foca cada botão;
++* só `anchor="n"` (barra em cima, centrada) -- o único que as telas usam;
++* a barra não encolhe: abas que não cabem na largura alargam o widget.
+ """
+ from __future__ import annotations
+ 
+@@ -31,8 +39,8 @@ ESPACO_ACIMA = 10
+ ALTURA_BARRA = 26
+ SOBRA_DA_BARRA = 8          # quanto da barra fica ACIMA do quadro
+ # Na captura a barra tem 27 px, não 26 (o CTkSegmentedButton arredonda para
+-# cima). A grade continua com 26 -- o quadro e o conteúdo não andam --, e a barra
+-# desce 1 px a mais sobre o quadro.
++# cima), e no Tk ela alarga a linha 2 da grade para 19: o quadro continua em 18,
++# mas o conteúdo da aba começa em 43 (medido com winfo), não em 42.
+ ALTURA_BARRA_VISIVEL = 27
+ CANTO = 6
+ BORDA_BOTAO = 3
+@@ -69,15 +77,15 @@ class Abas(QWidget):
+         grade.setSpacing(0)
+         grade.setRowMinimumHeight(0, ESPACO_ACIMA)
+         grade.setRowMinimumHeight(1, SOBRA_DA_BARRA)
+-        grade.setRowMinimumHeight(2, ALTURA_BARRA - SOBRA_DA_BARRA)
++        grade.setRowMinimumHeight(2, ALTURA_BARRA_VISIVEL - SOBRA_DA_BARRA)
+         grade.setRowStretch(3, 1)
+ 
+         self.quadro = QFrame(objectName="quadro_abas")
+         self.quadro.setStyleSheet(
+             f"#quadro_abas {{ background: {self.cor_fundo}; border-radius: {CANTO}px; }}")
+         dentro = QVBoxLayout(self.quadro)
+-        # 24 = o que sobra da barra dentro do quadro (18) + o canto (6).
+-        dentro.setContentsMargins(CANTO, ALTURA_BARRA - SOBRA_DA_BARRA + CANTO, CANTO, CANTO)
++        # 25 = o que sobra da barra dentro do quadro (19) + o canto (6).
++        dentro.setContentsMargins(CANTO, ALTURA_BARRA_VISIVEL - SOBRA_DA_BARRA + CANTO, CANTO, CANTO)
+         self.pilha = QStackedWidget()
+         self.pilha.setStyleSheet("QStackedWidget { background: transparent; }")
+         dentro.addWidget(self.pilha)
+@@ -122,9 +130,11 @@ class Abas(QWidget):
+         return aba
+ 
+     def tab(self, nome: str) -> QWidget:
++        self._conferir(nome)
+         return self.abas[nome]
+ 
+     def set(self, nome: str) -> None:
++        self._conferir(nome)
+         self.botoes[nome].setChecked(True)
+         self.pilha.setCurrentWidget(self.abas[nome])
+ 
+@@ -133,6 +143,10 @@ class Abas(QWidget):
+         return next((n for n, a in self.abas.items() if a is atual), "")
+ 
+     # -- interno -------------------------------------------------------------
++    def _conferir(self, nome: str) -> None:
++        if nome not in self.abas:
++            raise ValueError(f"Não existe aba chamada {nome!r}")
++
+     def _clicou(self, nome: str) -> None:
+         self.set(nome)
+         if self._ao_mudar is not None:
+diff --git a/sigft/app_qt/widgets/blocos.py b/sigft/app_qt/widgets/blocos.py
+index 81bd2c8..966e117 100644
+--- a/sigft/app_qt/widgets/blocos.py
++++ b/sigft/app_qt/widgets/blocos.py
+@@ -57,7 +57,10 @@ def rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str | N
+ 
+ def botao(texto: str, *, variante: str | None = None, largura: int | None = None,
+           altura: int | None = None, tamanho_fonte: int | None = None,
+-          negrito: bool = False, cor_texto: str | None = None) -> QPushButton:
++          negrito: bool = False, cor_texto: str | None = None, cor_fundo: str | None = None,
++          cor_hover: str = estilo.AZUL_CTK_HOVER) -> QPushButton:
++    """`cor_fundo` é o `fg_color` de um CTkButton pintado à mão; `cor_hover`, o
++    `hover_color` (sem ele, o CTk usa o do tema: AZUL_CTK_HOVER)."""
+     b = QPushButton(texto)
+     if variante:
+         b.setProperty("variante", variante)
+@@ -76,11 +79,14 @@ def botao(texto: str, *, variante: str | None = None, largura: int | None = None
+     if negrito:
+         folha += " font-weight: bold;"
+     extra = ""
++    if cor_fundo:
++        folha += f" background: {cor_fundo};"
++        extra += f" QPushButton:hover {{ background: {cor_hover}; }}"
+     if cor_texto:
+         folha += f" color: {cor_texto};"
+         # A folha do botão ganha da do app em TODOS os estados: sem repetir o
+         # desabilitado aqui, o texto ficaria com `cor_texto` mesmo desligado.
+-        extra = f" QPushButton:disabled {{ color: {estilo.cinza_tk(estilo.TEXTO_DESABILITADO_CTK)}; }}"
++        extra += f" QPushButton:disabled {{ color: {estilo.cinza_tk(estilo.TEXTO_DESABILITADO_CTK)}; }}"
+     if folha:
+         b.setStyleSheet(f"QPushButton {{{folha} }}{extra}")
+     return b
+@@ -131,6 +137,12 @@ def folha_fonte_tk(tupla, *, em_pontos: bool = False) -> str:
+     return f"font-family: {familias}; font-size: {tamanho}; font-weight: {peso};"
+ 
+ 
++def geometria_tk(texto: str) -> tuple[int, int]:
++    """O `geometry("900x600")` do Tk (com ou sem "+x+y") em (largura, altura)."""
++    largura, altura = texto.lower().split("+")[0].split("x")
++    return int(largura), int(altura)
++
++
+ def area_rolavel(layout_pai=None, *, cor: str | None = None, margem: int = 6):
+     """CTkScrollableFrame: devolve `(area, layout)` -- os filhos vão no `layout`.
+ 
+@@ -140,29 +152,26 @@ def area_rolavel(layout_pai=None, *, cor: str | None = None, margem: int = 6):
+     gray41 de 8) e aparece só quando há o que rolar -- a mesma decisão da barra
+     lateral (main.py): lá ela é um traço sempre visível que não rola nada.
+     """
+-    area = QScrollArea()
++    # Folhas SEMPRE com seletor de objectName: uma "background: transparent"
++    # solta vale para todos os descendentes e apagava o fundo de cartões e
++    # botões postos na área.
++    area = QScrollArea(objectName="area_rolavel")
+     area.setWidgetResizable(True)
+     area.setFrameShape(QFrame.Shape.NoFrame)
+     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+     fundo = estilo.cinza_tk(cor) if cor else "transparent"
+-    area.setStyleSheet(f"QScrollArea {{ background: {fundo}; border: none; border-radius: 6px; }}")
+-    area.viewport().setStyleSheet("background: transparent;")
+-    interno = QWidget()
+-    interno.setStyleSheet("background: transparent;")
++    area.setStyleSheet(f"#area_rolavel {{ background: {fundo}; border: none; border-radius: 6px; }}")
++    area.viewport().setObjectName("area_rolavel_vista")
++    area.viewport().setStyleSheet("#area_rolavel_vista { background: transparent; }")
++    interno = QWidget(objectName="area_rolavel_interno")
++    interno.setStyleSheet("#area_rolavel_interno { background: transparent; }")
+     layout = QVBoxLayout(interno)
+     layout.setContentsMargins(margem, margem, margem, margem)
+     layout.setSpacing(0)
+     layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+     area.setWidget(interno)
+-    folga = (estilo.LARGURA_ROLAGEM_CTK - 8) // 2
+-    area.verticalScrollBar().setStyleSheet(
+-        f"QScrollBar:vertical {{ width: {estilo.LARGURA_ROLAGEM_CTK}px; background: transparent;"
+-        f" margin: {margem + folga}px 0 {margem + folga}px 0; }}"
+-        f" QScrollBar::handle:vertical {{ background: {estilo.cinza_tk('gray41')}; border-radius: 4px;"
+-        f" margin: 0 {folga}px; min-height: 20px; }}"
+-        f" QScrollBar::handle:vertical:hover {{ background: {estilo.cinza_tk('gray53')}; }}"
+-        " QScrollBar::add-line, QScrollBar::sub-line { height: 0; }"
+-        " QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }")
++    # A alça começa no canto do quadro (margem) + os 4 do border_spacing.
++    area.verticalScrollBar().setStyleSheet(estilo.folha_rolagem_ctk(margem_vertical=margem + 4))
+     if layout_pai is not None:
+         layout_pai.addWidget(area)
+     return area, layout
+@@ -197,7 +206,11 @@ def definir_progresso(barra: QProgressBar, fracao: float) -> None:
+     O CTk desenha o trecho cheio com as pontas redondas DENTRO da barra: com
+     raio r e largura L, ele vai até r + fracao * (L - 2r) + r -- em 0 já há um
+     ponto de 2r, e em 40% de 200 x 8 o fim está em 84,8 (o `setValue` cru daria 80).
++    Com a barra em modo indeterminado, não faz nada (lá o `set` também não aparece
++    enquanto a animação corre); o valor volta a contar depois de `modo_indeterminado(barra, False)`.
+     """
++    if barra.maximum() == barra.minimum():
++        return  # em modo indeterminado (faixa 0-0) um valor não quer dizer nada
+     fracao = min(max(float(fracao), 0.0), 1.0)
+     largura = barra.width() or 1
+     raio = barra.height() / 2
+@@ -205,6 +218,20 @@ def definir_progresso(barra: QProgressBar, fracao: float) -> None:
+     barra.setValue(round(barra.maximum() * min(cheio / largura, 1.0)))
+ 
+ 
++def modo_indeterminado(barra: QProgressBar, ligado: bool) -> None:
++    """O `configure(mode="indeterminate")` + `start()`/`stop()` do CTkProgressBar.
++
++    Ligado: faixa 0-0, que o Qt anima sozinho (o bloco que vai e vem). Desligado:
++    volta à faixa 0-1000 de `barra_progresso`, em zero (o `stop()` + `set(0)` que a
++    tela fazia).
++    """
++    if ligado:
++        barra.setRange(0, 0)
++    else:
++        barra.setRange(0, 1000)
++        barra.setValue(0)
++
++
+ def slider(*, minimo: int = 0, maximo: int = 100, largura: int = 200, cor_botao: str | None = None,
+            cor_percorrido: str | None = None, cor_botao_hover: str | None = None) -> QSlider:
+     """CTkSlider horizontal (`from_`/`to` inteiros; `number_of_steps` = a faixa).
+diff --git a/sigft/app_qt/widgets/controles.py b/sigft/app_qt/widgets/controles.py
+index 6617a79..db1f407 100644
+--- a/sigft/app_qt/widgets/controles.py
++++ b/sigft/app_qt/widgets/controles.py
+@@ -20,7 +20,7 @@ from sigft.app_qt import estilo
+ LARGURA_TRILHO, ALTURA_TRILHO, BORDA_TRILHO = 36, 18, 3
+ VAO_TEXTO_INTERRUPTOR = 6
+ ALTURA_INTERRUPTOR = 24
+-COR_TRILHO = "#4A4D50"          # CTkSwitch fg_color
++COR_TRILHO = estilo.TRILHO_CTK   # CTkSwitch fg_color (o mesmo da barra e do slider)
+ COR_BOTAO_INTERRUPTOR = "#D5D9DE"
+ COR_BOTAO_INTERRUPTOR_HOVER = "#FFFFFF"   # gray100
+ COR_TEXTO_CTK = estilo.cinza_tk("gray84")
+diff --git a/sigft/app_qt/widgets/dialogos_selecao.py b/sigft/app_qt/widgets/dialogos_selecao.py
+index 454dacd..6e84469 100644
+--- a/sigft/app_qt/widgets/dialogos_selecao.py
++++ b/sigft/app_qt/widgets/dialogos_selecao.py
+@@ -20,6 +20,8 @@ lista quando a tela pede. Ver a nota longa no `SelecaoMultiplaDialog` do CTk.
+ """
+ from __future__ import annotations
+ 
++import functools
++
+ from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt
+ from PySide6.QtWidgets import (
+     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QMessageBox,
+@@ -30,30 +32,23 @@ from sigft.app import theme
+ from sigft.app.textos_dialogos import TEXTOS_TRAVADOS
+ from sigft.app_qt import estilo
+ from sigft.app_qt.widgets import blocos
++from sigft.app_qt.widgets.dialogs import SoltaAoFechar
+ 
+ # Diálogo aberto sem pai (ou cujo pai some) precisa de uma referência viva
+-# enquanto está na tela; sai daqui quando fecha.
+-_ABERTOS: set = set()
+-
+-
++# enquanto está na tela; sai daqui quando fecha. Chave = id(): a conexão que o
++# tira daqui não pode guardar o próprio diálogo (seria um ciclo que o prende).
++_ABERTOS: dict = {}
+ 
+-def _folha_de_fundo(cor: str) -> str:
+-    """Botão com `fg_color` e sem `hover_color` no CTk: o fundo pedido e o hover do tema."""
+-    return (f"QPushButton {{ background: {cor}; }}"
+-            f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
+ 
++def _esquecer(chave: int, *_sinal) -> None:
++    _ABERTOS.pop(chave, None)
+ 
+-def _geometria(texto: str) -> tuple[int, int]:
+-    """"900x600" do Tk em (900, 600)."""
+-    largura, altura = texto.lower().split("+")[0].split("x")
+-    return int(largura), int(altura)
+ 
+ 
+ def _botao(texto: str, *, largura: int | None = None, variante: str | None = None,
+            cor: str | None = None):
+-    b = blocos.botao(texto, variante=variante, largura=largura, altura=28)
+-    if cor:
+-        b.setStyleSheet(b.styleSheet() + " " + _folha_de_fundo(cor))
++    # `cor`: fg_color sem hover_color no CTk -> o hover é o do tema.
++    b = blocos.botao(texto, variante=variante, largura=largura, altura=28, cor_fundo=cor)
+     # Enter não confirma sozinho: o Tk não ligava tecla nenhuma nestas janelas.
+     b.setAutoDefault(False)
+     b.setDefault(False)
+@@ -78,13 +73,14 @@ class _JanelaQueAbre(QDialog):
+     def __init__(self, parent, *, titulo: str, geometria: str, modal: bool) -> None:
+         super().__init__(parent)
+         self.setWindowTitle(titulo)
+-        self.resize(*_geometria(geometria))
++        self.resize(*blocos.geometria_tk(geometria))
+         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+         if modal:
+             self.setWindowModality(Qt.WindowModality.ApplicationModal)
+         self._escolha = None
+-        _ABERTOS.add(self)
+-        self.finished.connect(lambda _r: _ABERTOS.discard(self))
++        self._laco: QEventLoop | None = None
++        _ABERTOS[id(self)] = self
++        self.finished.connect(functools.partial(_esquecer, id(self)))
+ 
+     def _abrir(self) -> None:
+         self.show()
+@@ -95,11 +91,19 @@ class _JanelaQueAbre(QDialog):
+         """O `wait_window` do CTk: volta quando a janela fecha, sem parar o laço
+         de eventos. Devolve o que foi confirmado, ou None."""
+         if self.isVisible():
+-            laco = QEventLoop()
+-            self.finished.connect(laco.quit)
+-            laco.exec()
++            self._laco = QEventLoop()
++            self.finished.connect(self._laco.quit)
++            self._laco.exec()
++            self._laco = None
+         return self._escolha
+ 
++    def hideEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        # Escondida por fora (hide(), o pai fechando) sem passar por done():
++        # o `esperar()` também tem de voltar.
++        if self._laco is not None:
++            self._laco.quit()
++        super().hideEvent(evento)
++
+     def _confirmar_com(self, escolha, ao_confirmar) -> None:
+         self._escolha = escolha
+         if ao_confirmar is not None:
+@@ -326,17 +330,30 @@ class _EsticaColunas(QObject):
+         return False
+ 
+ 
+-class ArquivosTravadosDialog(QDialog):
++class ArquivosTravadosDialog(SoltaAoFechar, QDialog):
+     """Arquivos que não puderam ser gravados, cada um com o motivo e o que fazer;
+     Repetir x Seguir. A decisão volta em `resultado["repetir"]`.
+ 
+     `itens`: `(nome, motivo, o_que_fazer)`; `momento`: "antes", "depois" ou
+     "na_hora" (`TEXTOS_TRAVADOS`). Sem modal: a pessoa vai ao Excel fechar os
+     arquivos com a janela aberta. "X" e Esc = Seguir.
++
++    Janela INDEPENDENTE, como o CTkToplevel de lá (sem `transient()`): tem botão
++    de minimizar e entrada própria na barra de tarefas, e não vai junto quando a
++    janela principal minimiza -- o original diz à pessoa para ir ao Excel e
++    "minimizar esta janela, se quiser". Por isso nasce SEM pai Qt (um QDialog com
++    pai é "possuído" pela janela principal no Windows); `parent` fica em
++    `self.dono` só como referência. Sempre por cima, como o `-topmost` de lá
++    (que também ficava por cima do Excel enquanto não minimizada).
+     """
+ 
+     def __init__(self, parent=None, *, itens, momento, evento_espera, resultado: dict) -> None:
+-        super().__init__(parent)
++        super().__init__(None)
++        self.dono = parent
++        self.setWindowFlags(
++            Qt.WindowType.Window | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint
++            | Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowCloseButtonHint
++            | Qt.WindowType.WindowStaysOnTopHint)
+         textos = TEXTOS_TRAVADOS[momento]
+         self.itens = [tuple(item) for item in itens]
+         self._evento = evento_espera
+@@ -344,7 +361,6 @@ class ArquivosTravadosDialog(QDialog):
+         self._decidido = False
+         self.setWindowTitle(textos["titulo"])
+         self.resize(620, 380)
+-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+ 
+         layout = QVBoxLayout(self)
+         # pady do Tk somados: (16, 6) | 4 | (6, 4) | (4, 16).
+@@ -395,13 +411,6 @@ class ArquivosTravadosDialog(QDialog):
+         self._responder(False)
+         self.reject()
+ 
+-    def reject(self) -> None:
+-        """Esc chega aqui sem passar pelo `closeEvent`: também solta o worker."""
+-        if not self._decidido:
+-            self._responder(False)
+-        super().reject()
+-
+-    def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
+-        if not self._decidido:
+-            self._responder(False)
+-        super().closeEvent(evento)
++    def _ao_fechar_sem_decidir(self) -> None:
++        """"X", Esc ou qualquer `reject()` sem decisão = Seguir (`SoltaAoFechar`)."""
++        self._responder(False)
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 47e6ec2..cf07f76 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -23,20 +23,15 @@ ALTURA_LINHA_CAIXA = 28
+ VAO_TEXTO_CAIXA = 6
+ 
+ 
+-class _DialogoDeAcaoManual(QDialog):
+-    def __init__(self, parent, *, titulo: str, mensagem: str, largura: int, altura: int) -> None:
+-        super().__init__(parent)
+-        self.setWindowTitle(titulo)
+-        self.setFixedSize(largura, altura)
+-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+-        self._decidido = False
+-        self.layout_principal = QVBoxLayout(self)
+-        self.layout_principal.setContentsMargins(20, 20, 20, 20)
+-        self.rotulo = QLabel(mensagem)
+-        self.rotulo.setWordWrap(True)
+-        self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+-        self.rotulo.setStyleSheet("font-size: 13px;")
+-        self.layout_principal.addWidget(self.rotulo, 1)
++class SoltaAoFechar:
++    """Mixin (antes do QDialog) das janelas em que um worker espera a resposta.
++
++    Fechar no "X", Esc ou qualquer `reject()` responde `_ao_fechar_sem_decidir()`
++    se ninguém decidiu ainda -- sem isso a thread do robô fica presa em
++    `Event.wait()`. Quem decide (um botão) põe `_decidido = True` antes.
++    """
++
++    _decidido = False
+ 
+     def _ao_fechar_sem_decidir(self) -> None:
+         raise NotImplementedError
+@@ -55,6 +50,22 @@ class _DialogoDeAcaoManual(QDialog):
+         super().closeEvent(evento)
+ 
+ 
++class _DialogoDeAcaoManual(SoltaAoFechar, QDialog):
++    def __init__(self, parent, *, titulo: str, mensagem: str, largura: int, altura: int) -> None:
++        super().__init__(parent)
++        self.setWindowTitle(titulo)
++        self.setFixedSize(largura, altura)
++        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
++        self._decidido = False
++        self.layout_principal = QVBoxLayout(self)
++        self.layout_principal.setContentsMargins(20, 20, 20, 20)
++        self.rotulo = QLabel(mensagem)
++        self.rotulo.setWordWrap(True)
++        self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.rotulo.setStyleSheet("font-size: 13px;")
++        self.layout_principal.addWidget(self.rotulo, 1)
++
++
+ class PausaLoginDialog(_DialogoDeAcaoManual):
+     """"Ação Manual Necessária" com um botão: continuar a automação."""
+ 
+diff --git a/sigft/app_qt/widgets/painel_janela.py b/sigft/app_qt/widgets/painel_janela.py
+index 3619798..622cdc1 100644
+--- a/sigft/app_qt/widgets/painel_janela.py
++++ b/sigft/app_qt/widgets/painel_janela.py
+@@ -6,16 +6,22 @@ trava a janela principal (sem modal).
+ """
+ from __future__ import annotations
+ 
++import functools
++
+ from PySide6.QtCore import Qt
+ from PySide6.QtWidgets import QVBoxLayout, QWidget
+ 
+-from sigft.app import theme
+ from sigft.app_qt import estilo
+ from sigft.app_qt.widgets import blocos
+ 
+ # Mesma ideia do `_ABERTOS` dos diálogos: a janela vive enquanto está aberta,
+-# mesmo que quem a abriu não guarde a referência.
+-_ABERTAS: set = set()
++# mesmo que quem a abriu não guarde a referência. Chave = id(): as conexões que
++# a tiram daqui não podem guardar a própria janela (o ciclo a prenderia).
++_ABERTAS: dict = {}
++
++
++def _esquecer(chave: int, *_sinal) -> None:
++    _ABERTAS.pop(chave, None)
+ 
+ 
+ class JanelaPainel(QWidget):
+@@ -24,6 +30,13 @@ class JanelaPainel(QWidget):
+     `parent` (= `self.conteudo`) é o QWidget de dentro de uma área rolável (o
+     CTkScrollableFrame de lá) e já vem com um QVBoxLayout alinhado ao topo: o
+     painel faz `parent.layout().addWidget(...)`. Abre ao ser construída.
++
++    Fechar só ESCONDE (o padrão do Qt, sem WA_DeleteOnClose), como o `destroy()`
++    do CTk do ponto de vista de quem abriu: a tela não precisa saber se a janela
++    ainda existe. Sem pai, ao fechar ela sai de `_ABERTAS` e o Python a recolhe;
++    com pai (a Home), fica oculta até o pai morrer -- e sai de `_ABERTAS` também
++    se o pai for destruído com ela aberta (`destroyed`). Cada clique na Home abre
++    uma janela nova, como lá.
+     """
+ 
+     def __init__(self, master=None, *, titulo: str, montar, geometria: str = "900x680") -> None:
+@@ -34,8 +47,7 @@ class JanelaPainel(QWidget):
+         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+         self.setStyleSheet(f"#janela_painel {{ background: {estilo.cinza_tk('gray10')}; }}")
+         self.setWindowTitle(titulo)
+-        largura, altura = (int(v) for v in geometria.lower().split("+")[0].split("x"))
+-        self.resize(largura, altura)
++        self.resize(*blocos.geometria_tk(geometria))
+ 
+         layout = QVBoxLayout(self)
+         # CTkScrollableFrame pack(padx=10, pady=10); botão pack(pady=(0, 12)):
+@@ -49,14 +61,13 @@ class JanelaPainel(QWidget):
+ 
+         montar(self.conteudo)
+ 
++        # primary com hover primary_hover: é a variante "primario" da folha.
+         self.botao_fechar = blocos.botao("Fechar", variante="primario", largura=120, altura=28)
+-        self.botao_fechar.setStyleSheet(
+-            self.botao_fechar.styleSheet()
+-            + f" QPushButton:hover {{ background: {theme.COLORS['primary_hover']}; }}")
+         self.botao_fechar.clicked.connect(self.close)
+         layout.addWidget(self.botao_fechar, 0, Qt.AlignmentFlag.AlignHCenter)
+ 
+-        _ABERTAS.add(self)
++        _ABERTAS[id(self)] = self
++        self.destroyed.connect(functools.partial(_esquecer, id(self)))
+         self.show()
+         # O CTk punha `-topmost` por 200 ms só para a janela nascer na frente;
+         # no Qt, trocar a flag de "sempre por cima" exige reabrir a janela
+@@ -65,5 +76,5 @@ class JanelaPainel(QWidget):
+         self.activateWindow()
+ 
+     def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
+-        _ABERTAS.discard(self)
++        _ABERTAS.pop(id(self), None)
+         super().closeEvent(evento)
+diff --git a/sigft/app_qt/widgets/pickers.py b/sigft/app_qt/widgets/pickers.py
+index 5949c0f..5050f0f 100644
+--- a/sigft/app_qt/widgets/pickers.py
++++ b/sigft/app_qt/widgets/pickers.py
+@@ -200,16 +200,11 @@ class FileQueueList(QWidget):
+         coluna.setContentsMargins(0, 0, 0, 0)
+         coluna.setSpacing(10)  # pady=5 de cada botão: 5 + 5 entre dois
+         coluna.addSpacing(5)
+-        self.botao_adicionar = blocos.botao(texto_adicionar, largura=estilo.LARGURA_BOTAO_CTK, altura=28)
+-        self.botao_adicionar.setStyleSheet(
+-            self.botao_adicionar.styleSheet()
+-            + f" QPushButton {{ background: {COR_BOTAO_SELECAO}; }}"
+-            + f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
+-        self.botao_remover = blocos.botao("Remover Seleção", largura=estilo.LARGURA_BOTAO_CTK, altura=28)
+-        self.botao_remover.setStyleSheet(
+-            self.botao_remover.styleSheet()
+-            + f" QPushButton {{ background: {theme.COLORS['danger']}; }}"
+-            + f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
++        # fg_color sem hover_color lá: o hover é o do tema (padrão de `cor_hover`).
++        self.botao_adicionar = blocos.botao(texto_adicionar, largura=estilo.LARGURA_BOTAO_CTK, altura=28,
++                                            cor_fundo=COR_BOTAO_SELECAO)
++        self.botao_remover = blocos.botao("Remover Seleção", largura=estilo.LARGURA_BOTAO_CTK, altura=28,
++                                          cor_fundo=theme.COLORS["danger"])
+         self.botao_limpar = blocos.botao("Limpar Tudo", variante="contorno",
+                                          largura=estilo.LARGURA_BOTAO_CTK, altura=28,
+                                          cor_texto=estilo.TEXTO_BOTAO_CTK)
+diff --git a/tests/test_qt_controles_e31.py b/tests/test_qt_controles_e31.py
+index a4878c6..ccded8a 100644
+--- a/tests/test_qt_controles_e31.py
++++ b/tests/test_qt_controles_e31.py
+@@ -54,12 +54,17 @@ def test_abas_add_tab_set_get_e_aviso(qt_interface, qtbot):
+     assert abas.botoes["Processamento IA (Gerar Excel)"].isChecked()
+     with pytest.raises(ValueError):
+         abas.add("Robô Web (Preencher Portal)")
++    # nome desconhecido: ValueError, como o CTkTabview (e não KeyError)
++    with pytest.raises(ValueError):
++        abas.set("Não existe")
++    with pytest.raises(ValueError):
++        abas.tab("Não existe")
+ 
+ 
+ def test_abas_geometria_do_ctktabview(qt_interface, qtbot, folha_do_app):
+     # Medido na captura: barra de 27 px (26 do CTk + 1 de arredondamento) a 10 px do topo, centrada; o quadro
+     # começa 18 px abaixo do topo (a barra entra 18 px nele); o conteúdo da aba
+-    # começa em y=42 e x=6 (canto de 6 px). Cada botão: texto + 14 px.
++    # começa em y=43 e x=6 (canto de 6 px). Cada botão: texto + 14 px.
+     abas = Abas()
+     aba = abas.add("Processamento IA (Gerar Excel)")
+     abas.add("Robô Web")
+@@ -70,7 +75,8 @@ def test_abas_geometria_do_ctktabview(qt_interface, qtbot, folha_do_app):
+     assert abs((barra.x() + barra.width() / 2) - abas.width() / 2) <= 1
+     assert quadro.y() == 18 and quadro.height() == 200 - 18 and quadro.width() == 420
+     topo = aba.mapTo(abas, aba.rect().topLeft())
+-    assert (topo.x(), topo.y()) == (6, 42)
++    assert (topo.x(), topo.y()) == (6, 43)  # winfo no CTk: 43
++    assert aba.height() == 200 - 43 - 6  # winfo no CTk: 151
+     b = abas.botoes["Robô Web"]
+     assert b.width() == b.fontMetrics().horizontalAdvance("Robô Web") + 14
+     assert barra.width() == sum(x.width() for x in abas.botoes.values())
+@@ -191,3 +197,69 @@ def test_fonte_tk_pixel_ou_ponto(qt_interface):
+     g = blocos.fonte_tk(("Consolas", 11), em_pontos=True)
+     assert g.pointSize() == 11 and not g.bold()
+     assert g.families()[0] == "Consolas"
++
++
++def test_barra_indeterminada_liga_e_desliga(qt_interface, qtbot):
++    # cria_fichas: configure(mode="indeterminate") + start() ... stop().
++    barra = blocos.barra_progresso(largura=200)
++    qtbot.addWidget(barra)
++    blocos.definir_progresso(barra, 0.5)
++    blocos.modo_indeterminado(barra, True)
++    assert (barra.minimum(), barra.maximum()) == (0, 0)
++    blocos.definir_progresso(barra, 0.7)  # não escreve nada com a faixa 0-0
++    assert (barra.minimum(), barra.maximum()) == (0, 0)
++    blocos.modo_indeterminado(barra, False)
++    assert (barra.minimum(), barra.maximum(), barra.value()) == (0, 1000, 0)
++    blocos.definir_progresso(barra, 1.0)
++    assert barra.value() == 1000
++
++
++def test_tabela_com_as_cores_do_windows(qt_interface, monkeypatch):
++    import sys
++    monkeypatch.setattr(sys, "platform", "win32")
++    qss = estilo.folha_de_estilo()
++    assert "selection-background-color: #0078D7" in qss
++    monkeypatch.setattr(sys, "platform", "linux")
++    assert "#0078D7" not in estilo.folha_de_estilo()
++
++
++def test_botao_com_cor_de_fundo_e_hover_do_tema(qt_interface, qtbot):
++    b = blocos.botao("Adicionar", cor_fundo="#3A3A3A", altura=28)
++    qtbot.addWidget(b)
++    assert "background: #3A3A3A" in b.styleSheet()
++    assert f"QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}" in b.styleSheet()
++    c = blocos.botao("x", cor_fundo="#3A3A3A", cor_hover="#454545")
++    qtbot.addWidget(c)
++    assert "#454545" in c.styleSheet()
++
++
++def test_uma_cor_de_trilho_so(qt_interface):
++    from sigft.app_qt.widgets import controles
++    assert controles.COR_TRILHO == estilo.TRILHO_CTK
++
++
++def test_sem_regras_de_qtabwidget(qt_interface):
++    # O CTkTabview é `Abas`; regra de QTabWidget seria código morto.
++    assert "QTabBar" not in estilo.folha_de_estilo() and "QTabWidget" not in estilo.folha_de_estilo()
++
++
++def test_area_rolavel_nao_apaga_o_fundo_dos_filhos(qt_interface, qtbot, folha_do_app):
++    # "background: transparent" sem seletor valia para TODO descendente: o cartão
++    # e o botão dentro da área perdiam o fundo.
++    from PySide6.QtGui import QImage
++
++    area, layout = blocos.area_rolavel(cor="#2B2B2B")
++    cartao = blocos.cartao(layout)
++    botao = blocos.botao("Gerar", variante="perigo", largura=120, altura=40)
++    cartao.addWidget(botao)
++    area.resize(400, 300)
++    recipiente = _mostrar(qtbot, area)  # noqa: F841 -- segura vivo
++    imagem = area.grab().toImage()
++    quadro = cartao.parentWidget()
++    ponto_cartao = quadro.mapTo(area, quadro.rect().topLeft())
++    cor_cartao = imagem.pixelColor(ponto_cartao.x() + 10, ponto_cartao.y() + 5).name().upper()
++    centro = botao.mapTo(area, botao.rect().center())
++    cor_botao = imagem.pixelColor(centro.x() - 50, centro.y()).name().upper()
++    assert cor_cartao == theme.COR_CARTAO.upper()
++    assert cor_botao == theme.COLORS["danger"].upper()
++    assert isinstance(imagem, QImage)
+diff --git a/tests/test_qt_dialogos_selecao.py b/tests/test_qt_dialogos_selecao.py
+index fe8a710..315e69e 100644
+--- a/tests/test_qt_dialogos_selecao.py
++++ b/tests/test_qt_dialogos_selecao.py
+@@ -308,3 +308,43 @@ def test_falha_ao_abrir_a_lista_de_travados_solta_o_worker(qt_interface, qtbot,
+     qtbot.waitUntil(lambda: not t.is_alive(), timeout=3000)
+     assert respostas == [False]  # resposta segura: Seguir
+     assert "falha de construcao" in capsys.readouterr().err
++
++
++def test_travados_minimiza_e_e_janela_independente(qt_interface, qtbot):
++    # O original manda a pessoa ir ao Excel e "minimizar esta janela, se quiser":
++    # CTkToplevel sem transient() -- janela própria, com minimizar, sempre por cima.
++    tela = Tela()
++    qtbot.addWidget(tela)
++    dlg = qd.ArquivosTravadosDialog(tela, itens=ITENS, momento="antes",
++                                    evento_espera=threading.Event(), resultado={})
++    qtbot.addWidget(dlg)
++    flags = dlg.windowFlags()
++    assert flags & Qt.WindowType.WindowMinimizeButtonHint
++    assert flags & Qt.WindowType.WindowCloseButtonHint
++    assert flags & Qt.WindowType.WindowStaysOnTopHint
++    assert dlg.parent() is None and dlg.dono is tela  # não "possuída" pela janela principal
++    assert dlg.windowModality() == Qt.WindowModality.NonModal
++
++
++def test_perguntar_arquivos_travados_da_thread_da_interface(qt_interface, qtbot):
++    # Sem worker (um clique que grava direto): `exec()`, que bloqueia sem parar o
++    # laço de eventos. Aqui a janela fica modal -- ver o relatório da E3.1.
++    from PySide6.QtCore import QTimer
++
++    tela = Tela()
++    qtbot.addWidget(tela)
++
++    def clicar():
++        _abertos(qd.ArquivosTravadosDialog)[0].botao_repetir.click()
++
++    QTimer.singleShot(50, clicar)
++    assert tela.perguntar_arquivos_travados([_falha(*ITENS[0])], "na_hora") is True
++
++
++def test_esperar_volta_quando_a_janela_e_escondida_por_fora(qt_interface, qtbot):
++    from PySide6.QtCore import QTimer
++
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["a"], modal=True)
++    qtbot.addWidget(dlg)
++    QTimer.singleShot(50, dlg.hide)
++    assert dlg.esperar() is None
+diff --git a/tests/test_qt_estilo_controles.py b/tests/test_qt_estilo_controles.py
+index b8b21bd..43d618a 100644
+--- a/tests/test_qt_estilo_controles.py
++++ b/tests/test_qt_estilo_controles.py
+@@ -19,8 +19,7 @@ def test_variante_primario_usa_a_cor_da_marca():
+ 
+ def test_campos_abas_listas_e_cartao():
+     qss = _qss()
+-    for trecho in ("QLineEdit", "#343638", "#565B5E", "QTabBar::tab:selected",
+-                   "QListWidget", "#1E1E1E", "#cartao", theme.COR_CARTAO, "QComboBox"):
++    for trecho in ("QLineEdit", "#343638", "#565B5E", "QListWidget", "#1E1E1E", "#cartao", theme.COR_CARTAO, "QComboBox"):
+         assert trecho in qss, trecho
+ 
+ 
+diff --git a/tests/test_qt_painel_janela.py b/tests/test_qt_painel_janela.py
+index b383193..0a1edce 100644
+--- a/tests/test_qt_painel_janela.py
++++ b/tests/test_qt_painel_janela.py
+@@ -64,3 +64,22 @@ def test_medidas_do_customtkinter(qt_interface, qtbot, folha_do_app):
+     assert botao.y() - (area.y() + area.height()) == 10
+     assert janela.height() - (botao.y() + botao.height()) == 12
+     assert abs((botao.x() + botao.width() / 2) - janela.width() / 2) <= 1
++
++
++def test_sai_do_registro_ao_fechar_e_ao_ser_destruida(qt_interface, qtbot):
++    from PySide6.QtWidgets import QWidget
++
++    from sigft.app_qt.widgets import painel_janela
++
++    sem_pai = JanelaPainel(None, titulo="x", montar=lambda p: None)
++    assert id(sem_pai) in painel_janela._ABERTAS
++    sem_pai.close()
++    assert id(sem_pai) not in painel_janela._ABERTAS
++
++    pai = QWidget()
++    com_pai = JanelaPainel(pai, titulo="y", montar=lambda p: None)
++    chave = id(com_pai)
++    assert chave in painel_janela._ABERTAS
++    pai.deleteLater()
++    del com_pai
++    qtbot.waitUntil(lambda: chave not in painel_janela._ABERTAS, timeout=2000)
+diff --git a/tests/test_qt_tela_aplicacao_lmr.py b/tests/test_qt_tela_aplicacao_lmr.py
+index b14fb5c..b59ded3 100644
+--- a/tests/test_qt_tela_aplicacao_lmr.py
++++ b/tests/test_qt_tela_aplicacao_lmr.py
+@@ -102,10 +102,8 @@ def test_medidas_iguais_as_do_customtkinter(folha, qtbot):
+         rolagem = tela.content.parentWidget().parentWidget()  # viewport -> QScrollArea
+         vista = rolagem.viewport()
+         p = _pos(vista, t)
+-        # y/altura: +-1 porque o `Abas` põe o conteúdo a 42 px do topo e o
+-        # CTkTabview a 43 (a barra de 27 alarga a linha 2 da grade do Tk em 1 px).
+-        assert p.x() == 52 and abs(p.y() - 128) <= 1
+-        assert vista.width() == 888 and abs(vista.height() - 510) <= 1
++        assert p.x() == 52 and p.y() == 128
++        assert vista.width() == 888 and vista.height() == 510
+         cartao = tela.btn_run.parentWidget()
+         assert _pos(cartao, t).y() - p.y() == 20
+         # O cartão e o botão grande mantêm o fundo dentro da aba.
+-- 
+2.43.0
+
