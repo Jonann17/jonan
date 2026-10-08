@@ -1,7 +1,7 @@
 From b007a7e5850c34b0b760b198d5b6daab40f3a83c Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 17:41:58 +0000
-Subject: [PATCH 2/3] Qt6: tela de busca de PMIB
+Subject: [PATCH 2/4] Qt6: tela de busca de PMIB
 
 Porta ModuloBuscaPMIB (SearchPMIB) para PySide6: parametros, radio de
 modo, menu de coluna e janela de resultados com cartoes. MenuDeOpcoes
