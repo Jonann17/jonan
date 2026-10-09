@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Prueba el puerto serie del Pi A hacia el Arduino, por partes, para saber
-# dónde está la falla (Pi, conversor de nivel o Arduino).
+# Prueba la comunicación del Pi A con el Arduino, por partes, para saber
+# dónde está la falla (Pi, conversor de nivel, cable o Arduino).
+# Usa el mismo puerto que la cámara: el USB si el Arduino está enchufado
+# ahí, si no los pines GPIO 14/15 (/dev/serial0).
 #
 # Uso:
 #   probar_serie          → le pregunta "NOW" al Arduino y muestra qué vuelve
@@ -12,12 +14,20 @@
 # vuelve a arrancar al final.
 
 MODO="${1:-arduino}"
-PUERTO=/dev/serial0
+DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+if [ "$MODO" = lazo ]; then
+  PUERTO=/dev/serial0
+else
+  PUERTO="$(cd "$DIR" && python3 -c 'from comun import cargar_config, puerto_arduino; c = cargar_config(); print(puerto_arduino(c.get("arduino", "puerto", fallback="auto")))' 2>/dev/null)"
+  PUERTO="${PUERTO:-/dev/serial0}"
+fi
+echo ">> Puerto: $PUERTO"
 
 if [ ! -e "$PUERTO" ]; then
-  echo "❌ No existe $PUERTO: la UART está apagada."
-  echo "   → Configuración de Raspberry Pi → Interfaces → Puerto serie: Activado,"
-  echo "     Consola serie: Desactivado, y reiniciar."
+  echo "❌ No existe $PUERTO."
+  echo "   → Lo más simple: conectá el Arduino al Pi con el cable USB."
+  echo "   → Para usar los pines: Configuración de Raspberry Pi → Interfaces →"
+  echo "     Puerto serie: Activado, Consola serie: Desactivado, y reiniciar."
   exit 1
 fi
 
@@ -35,7 +45,8 @@ except ImportError:
 
 modo, puerto = sys.argv[1], sys.argv[2]
 s = serial.serial_for_url(puerto, 9600, timeout=2)
-time.sleep(0.5)
+# Por USB, abrir el puerto reinicia el Arduino: esperar a que arranque.
+time.sleep(2.5 if ("ACM" in puerto or "USB" in puerto or "by-id" in puerto) else 0.5)
 s.reset_input_buffer()
 
 if modo == "lazo":
@@ -71,6 +82,10 @@ elif r:
     print("⚠️  Llega algo pero no es el JSON: casi siempre es GND sin unir,")
     print("   o el lado de 3,3 V (LV) del conversor sin alimentar.")
 else:
+    if "ACM" in puerto or "USB" in puerto or "by-id" in puerto:
+        print("❌ No llega nada por USB. ¿Está cargado piranometro.ino en el Arduino?")
+        print("   Probalo desde la Mac con el Monitor Serie (9600, NOW) y otro cable USB.")
+        sys.exit(0)
     print("❌ No llega nada del Arduino. Probá en este orden:")
     print("   1) probar_serie lazo   (¿anda la UART del Pi sola?)")
     print("   2) Medí con el multímetro el conversor (ver la guía).")
