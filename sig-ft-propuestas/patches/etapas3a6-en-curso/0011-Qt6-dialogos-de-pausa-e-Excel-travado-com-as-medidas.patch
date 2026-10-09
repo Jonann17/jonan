@@ -1,0 +1,295 @@
+From af9876ff474004c85328336cf31c7523bef66f2d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 18:41:19 +0000
+Subject: [PATCH 11/13] Qt6: dialogos de pausa e Excel travado com as medidas
+ do CTk
+
+Uma implementacao so das medidas (junta a correcao da Copia de Fichas,
+0b8921f, que cobria so a pausa): texto com pady (30 na pausa, 20 no
+Excel), quebra em 400 e centrado na sobra; botao da pausa de 45 com a
+largura do CTkButton; botoes do Excel 150x40 com padx 10, o par
+centrado. Enter nao aperta botao nenhum na pausa, no Excel travado nem
+nos arquivos travados (no CTk nenhuma tecla estava ligada; um Enter
+perdido soltava o robo antes do login). Testes do Enter ao lado dos do
+Esc; o teste de medidas da pausa e o da Copia de Fichas.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/dialogos_selecao.py  |  3 +-
+ sigft/app_qt/widgets/dialogs.py           | 71 ++++++++++++++---------
+ tests/test_qt_dialogos_de_acao_medidas.py | 37 ++++++++++++
+ tests/test_qt_espera.py                   | 69 ++++++++++++++++++++++
+ 4 files changed, 153 insertions(+), 27 deletions(-)
+ create mode 100644 tests/test_qt_dialogos_de_acao_medidas.py
+
+diff --git a/sigft/app_qt/widgets/dialogos_selecao.py b/sigft/app_qt/widgets/dialogos_selecao.py
+index b552d53..8d8ba86 100644
+--- a/sigft/app_qt/widgets/dialogos_selecao.py
++++ b/sigft/app_qt/widgets/dialogos_selecao.py
+@@ -419,7 +419,8 @@ class ArquivosTravadosDialog(SoltaAoFechar, QDialog):
+                                           tamanho_fonte=14, negrito=True)
+         self.botao_seguir = blocos.botao(textos["seguir"], variante="contorno", largura=170, altura=40)
+         for b in (self.botao_repetir, self.botao_seguir):
+-            b.setAutoDefault(False)
++            b.setAutoDefault(False)  # Enter não decide: o worker espera a pessoa escolher
++            b.setDefault(False)
+         self.botao_repetir.clicked.connect(self.repetir)
+         self.botao_seguir.clicked.connect(self.seguir)
+         layout.addLayout(_linha_de_botoes(self.botao_repetir, self.botao_seguir))
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 5f22b12..86d1beb 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -7,20 +7,22 @@ thread do robô fica presa em `Event.wait()` para sempre.
+ from __future__ import annotations
+ 
+ from PySide6.QtCore import QEvent, QRect, QSize, Qt
+-from PySide6.QtGui import QColor
++from PySide6.QtGui import QColor, QFontMetrics
+ from PySide6.QtWidgets import (
+-    QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+-    QStyledItemDelegate, QVBoxLayout,
++    QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QStyledItemDelegate, QVBoxLayout,
+ )
+ 
+ from sigft.app import theme
+ from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
++from sigft.app_qt import estilo
+ from sigft.app_qt.widgets import blocos, controles
+ 
+ # CTkCheckBox na lista de lá: caixa de 24, `pack(pady=2)` -> uma linha a cada 28;
+ # o texto começa 6 px depois da caixa.
+ ALTURA_LINHA_CAIXA = 28
+ VAO_TEXTO_CAIXA = 6
++# O wraplength=400 do texto das janelas de ação manual.
++LARGURA_QUEBRA_TEXTO = 400
+ 
+ 
+ class SoltaAoFechar:
+@@ -51,19 +53,33 @@ class SoltaAoFechar:
+ 
+ 
+ class _DialogoDeAcaoManual(SoltaAoFechar, QDialog):
+-    def __init__(self, parent, *, titulo: str, mensagem: str, largura: int, altura: int) -> None:
++    def __init__(self, parent, *, titulo: str, mensagem: str, largura: int, altura: int,
++                 pady_texto: int) -> None:
+         super().__init__(parent)
+         self.setWindowTitle(titulo)
+         self.setFixedSize(largura, altura)
+         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+         self._decidido = False
++        # Medidas do CTk (E4.4/E4.5, capturas/e4.45): o texto vai com
++        # pady=`pady_texto` e `expand=True` (centrado na sobra acima dos
++        # botões), padx=20 e wraplength=400; os botões com pady=(0, 20).
+         self.layout_principal = QVBoxLayout(self)
+-        self.layout_principal.setContentsMargins(20, 20, 20, 20)
++        self.layout_principal.setContentsMargins(20, 0, 20, 20)
++        self.layout_principal.setSpacing(0)
++        self.layout_principal.addSpacing(pady_texto)
+         self.rotulo = QLabel(mensagem)
+         self.rotulo.setWordWrap(True)
+         self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+-        self.rotulo.setStyleSheet("font-size: 13px;")
+-        self.layout_principal.addWidget(self.rotulo, 1)
++        self.rotulo.setMaximumWidth(LARGURA_QUEBRA_TEXTO)
++        self.rotulo.setStyleSheet(f"font-size: 13px; color: {controles.COR_TEXTO_CTK};")
++        # Numa linha com sobras dos lados (e não com `alignment`): com alinhamento,
++        # o QLabel com quebra escolhe uma largura estreita e quebra cedo demais.
++        linha_texto = QHBoxLayout()
++        linha_texto.addStretch()
++        linha_texto.addWidget(self.rotulo, 100)
++        linha_texto.addStretch()
++        self.layout_principal.addLayout(linha_texto, 1)
++        self.layout_principal.addSpacing(pady_texto)
+ 
+ 
+ class PausaLoginDialog(_DialogoDeAcaoManual):
+@@ -71,21 +87,21 @@ class PausaLoginDialog(_DialogoDeAcaoManual):
+ 
+     def __init__(self, parent, *, mensagem: str, evento_espera, texto_botao: str = TEXTO_CONTINUAR) -> None:
+         super().__init__(parent, titulo="Ação Manual Necessária", mensagem=mensagem,
+-                         largura=450, altura=250)
++                         largura=450, altura=250, pady_texto=30)
+         self._evento = evento_espera
+-        # [E4.7] Medidas do CTk: texto com pady=30 (expand) e botão de 45 com
+-        # pady=(0, 20) -- o texto fica centrado em 125 px a partir de y=30, e
+-        # o botão em y=185. A altura vai na folha do PRÓPRIO botão: o
+-        # `setMinimumHeight` perdia para o `min-height: 28px` da folha do app.
+-        # Largura = texto + 6 de cada lado, como o CTkButton.
+-        self.layout_principal.setContentsMargins(20, 30, 20, 20)
+-        self.layout_principal.setSpacing(0)
+-        self.botao = QPushButton(texto_botao)
+-        self.botao.setProperty("variante", "primario")
+-        self.botao.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; padding: 0 6px;"
+-                                 " min-height: 45px; max-height: 45px; }")
++        # height=45 e FONTE_BOTAO (Roboto 14 bold); a largura é a do CTkButton:
++        # 140, ou o texto + 7 px de cada lado (195 com "CONTINUAR AUTOMAÇÃO").
++        self.botao = blocos.botao(texto_botao, variante="primario", altura=45, tamanho_fonte=14,
++                                  negrito=True)
++        folga = estilo.FOLGA_TEXTO_BOTAO_CTK
++        self.botao.setStyleSheet(self.botao.styleSheet() + f" QPushButton {{ padding: 0 {folga}px; }}")
++        texto_px = QFontMetrics(blocos.fonte_tk(("Roboto", 14, "bold"))).horizontalAdvance(texto_botao)
++        self.botao.setFixedWidth(max(estilo.LARGURA_BOTAO_CTK, texto_px + 2 * folga))
++        # Enter não aperta o botão: no CTk nenhuma tecla estava ligada, e um Enter
++        # perdido soltaria o robô (e começaria o lote) antes de terminar o login.
++        self.botao.setAutoDefault(False)
++        self.botao.setDefault(False)
+         self.botao.clicked.connect(self.liberar)
+-        self.layout_principal.addSpacing(30)
+         self.layout_principal.addWidget(self.botao, 0, Qt.AlignmentFlag.AlignHCenter)
+ 
+     def liberar(self) -> None:
+@@ -103,17 +119,20 @@ class RetryLockDialog(_DialogoDeAcaoManual):
+ 
+     def __init__(self, parent, *, mensagem: str = MSG_EXCEL_BLOQUEADO, evento_espera, resultado: dict) -> None:
+         super().__init__(parent, titulo="Arquivo Bloqueado", mensagem=mensagem,
+-                         largura=450, altura=200)
++                         largura=450, altura=200, pady_texto=20)
+         self._evento = evento_espera
+         self._resultado = resultado
++        # Dois botões de 150x40 com padx=10, o par centrado.
+         linha = QHBoxLayout()
+-        self.botao_repetir = QPushButton("Tentar Novamente")
+-        self.botao_repetir.setProperty("variante", "primario")
+-        self.botao_cancelar = QPushButton("Ignorar e Continuar")
+-        self.botao_cancelar.setProperty("variante", "contorno")
++        linha.setSpacing(20)
++        linha.addStretch()
++        self.botao_repetir = blocos.botao("Tentar Novamente", variante="primario", largura=150, altura=40)
++        self.botao_cancelar = blocos.botao("Ignorar e Continuar", variante="contorno", largura=150, altura=40)
+         for botao in (self.botao_repetir, self.botao_cancelar):
+-            botao.setFixedSize(150, 40)
++            botao.setAutoDefault(False)  # Enter não decide (no CTk nenhuma tecla estava ligada)
++            botao.setDefault(False)
+             linha.addWidget(botao)
++        linha.addStretch()
+         self.botao_repetir.clicked.connect(self.repetir)
+         self.botao_cancelar.clicked.connect(self.cancelar)
+         self.layout_principal.addLayout(linha)
+diff --git a/tests/test_qt_dialogos_de_acao_medidas.py b/tests/test_qt_dialogos_de_acao_medidas.py
+new file mode 100644
+index 0000000..9c3bada
+--- /dev/null
++++ b/tests/test_qt_dialogos_de_acao_medidas.py
+@@ -0,0 +1,37 @@
++"""Medidas da janela de Excel travado (RetryLockDialog) contra
++as do CustomTkinter (sigft/app/widgets/dialogs.py), medidas com winfo_* numa
++captura Xvfb (capturas/e4.45): lá o texto vem com pady=20 e `expand=True` e os
++botões com pady=(0, 20). A pausa de login tem o teste dela em
++`test_qt_tela_copia_fichas.py::test_medidas_da_pausa_de_login`."""
++import threading
++
++from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import dialogs
++
++
++def _geo(dlg, w):
++    p = w.mapTo(dlg, w.rect().topLeft())
++    return p.x(), p.y(), w.width(), w.height()
++
++
++def _mostrar(qt_interface, qtbot, dlg):
++    qtbot.addWidget(dlg)
++    dlg.show()
++    qtbot.waitExposed(dlg)
++
++
++def test_excel_travado(qt_interface, qtbot):
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        d = dialogs.RetryLockDialog(None, mensagem=MSG_EXCEL_BLOQUEADO, evento_espera=threading.Event(),
++                                    resultado={})
++        _mostrar(qt_interface, qtbot, d)
++        assert (d.width(), d.height()) == (450, 200)
++        assert _geo(d, d.botao_repetir) == (65, 140, 150, 40)
++        assert _geo(d, d.botao_cancelar) == (235, 140, 150, 40)
++        x, y, w, h = _geo(d, d.rotulo)
++        assert y >= 20 and y + h <= 120 and abs(y + h / 2 - 70) <= 1
++    finally:
++        qt_interface.setStyleSheet(anterior)
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+index f92a41f..5b90bfd 100644
+--- a/tests/test_qt_espera.py
++++ b/tests/test_qt_espera.py
+@@ -110,6 +110,75 @@ def test_esc_no_retry_excel_e_cancelar(qt_interface, qtbot):
+     assert respostas == [False]
+ 
+ 
++def _apertar_enter(janela):
++    """Return e Enter (teclado numérico), com o foco no primeiro botão -- o
++    caso de uma tecla perdida enquanto a pessoa ainda faz o login."""
++    from PySide6.QtCore import Qt
++    from PySide6.QtTest import QTest
++    from PySide6.QtWidgets import QPushButton
++
++    botoes = janela.findChildren(QPushButton)
++    for botao in botoes:
++        assert not botao.autoDefault() and not botao.isDefault(), botao.text()
++    if botoes:
++        botoes[0].setFocus()
++    for tecla in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
++        QTest.keyClick(janela, tecla)
++        if botoes:
++            QTest.keyClick(botoes[0], tecla)
++
++
++def test_enter_nao_solta_o_login(qt_interface, qtbot):
++    # No CTk nenhuma tecla estava ligada: um Enter perdido não pode soltar o
++    # robô (e começar o lote) antes de a pessoa terminar o login.
++    tela = Tela()
++    qtbot.addWidget(tela)
++    terminou = []
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)), daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
++    dialogo = _abertos(qd.PausaLoginDialog)[0]
++    _apertar_enter(dialogo)
++    qtbot.wait(100)
++    assert t.is_alive() and terminou == [] and dialogo.isVisible()
++    dialogo.botao.click()
++    t.join(3)
++    assert terminou == [True]
++
++
++def test_enter_nao_decide_o_retry_excel(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()), daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
++    dialogo = _abertos(qd.RetryLockDialog)[0]
++    _apertar_enter(dialogo)
++    qtbot.wait(100)
++    assert t.is_alive() and respostas == [] and dialogo.isVisible()
++    dialogo.botao_cancelar.click()
++    t.join(3)
++    assert respostas == [False]
++
++
++def test_enter_nao_decide_os_arquivos_travados(qt_interface, qtbot):
++    from sigft.app_qt.widgets import dialogos_selecao
++
++    evento, resultado = threading.Event(), {}
++    dialogo = dialogos_selecao.ArquivosTravadosDialog(
++        None, itens=[("a.xlsx", "aberto no Excel", "feche o arquivo")], momento="antes",
++        evento_espera=evento, resultado=resultado)
++    qtbot.addWidget(dialogo)
++    dialogo.show()
++    qtbot.waitExposed(dialogo)
++    _apertar_enter(dialogo)
++    qtbot.wait(50)
++    assert not evento.is_set() and resultado == {} and dialogo.isVisible()
++    dialogo.seguir()
++    assert evento.is_set() and resultado == {"repetir": False}
++
++
+ def test_botoes_continuam_respondendo_como_antes(qt_interface, qtbot):
+     evento = threading.Event()
+     resultado = {}
+-- 
+2.43.0
+
