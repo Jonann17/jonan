@@ -34,7 +34,7 @@ from datetime import datetime
 
 # Permite importar comun.py que está en la carpeta de arriba
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from comun import cargar_config, configurar_logging, asegurar_carpeta
+from comun import cargar_config, configurar_logging, asegurar_carpeta, puerto_arduino
 
 import requests
 
@@ -58,7 +58,7 @@ PASO_CONSULTA = 5
 
 
 # ------------------------------------------------------------------
-#  Arduino (piranómetro) por el puerto serie de los GPIO 14/15
+#  Arduino (piranómetro): por cable USB o por los GPIO 14/15
 # ------------------------------------------------------------------
 class Arduino:
     """Habla con arduino/piranometro/piranometro.ino.
@@ -78,7 +78,15 @@ class Arduino:
         try:
             if self.serie is None:
                 import serial  # python3-serial
-                self.serie = serial.Serial(self.puerto, self.baudios, timeout=0.3)
+                # "auto" se resuelve en cada apertura: si se enchufa o se
+                # desenchufa el USB, la próxima consulta usa el puerto que haya.
+                puerto = puerto_arduino(self.puerto)
+                self.serie = serial.Serial(puerto, self.baudios, timeout=0.3)
+                # Por USB, abrir el puerto REINICIA el Arduino UNO: se espera
+                # a que arranque y se descarta su mensaje de bienvenida.
+                time.sleep(2.5)
+                self.serie.reset_input_buffer()
+                log.info("Arduino conectado en %s", puerto)
             self.serie.reset_input_buffer()
             self.serie.write((comando + "\n").encode("ascii"))
             limite = time.monotonic() + espera
@@ -94,7 +102,7 @@ class Arduino:
                 log.warning("El Arduino no respondió a %s.", comando)
         except Exception as e:   # puerto ausente, JSON roto, cable suelto...
             if comando == "GET":
-                log.warning("Error con el Arduino (%s): %s", self.puerto, e)
+                log.warning("Error con el Arduino (%s): %s", puerto_arduino(self.puerto), e)
             try:
                 if self.serie is not None:
                     self.serie.close()
@@ -285,7 +293,7 @@ def main():
     url_servidor = config["camara"]["url_servidor"]
 
     if config.getboolean("arduino", "habilitado", fallback=False):
-        arduino = Arduino(config["arduino"].get("puerto", "/dev/serial0"),
+        arduino = Arduino(config["arduino"].get("puerto", "auto"),
                           config.getint("arduino", "baudios", fallback=9600))
     else:
         arduino = SinArduino()

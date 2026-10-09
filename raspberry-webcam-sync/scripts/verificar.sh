@@ -120,26 +120,37 @@ if [ "$ROL" = a ]; then
 
   echo ""
   echo "── Arduino / piranómetro ──"
-  if [ -e /dev/serial0 ]; then
-    bien "UART habilitada (/dev/serial0)"
-  else
-    mal "UART apagada (no existe /dev/serial0)" "actualizar   (y después reiniciar)"
-  fi
+  PUERTO="$(cd "$DIR" && python3 -c 'from comun import cargar_config, puerto_arduino; c = cargar_config(); print(puerto_arduino(c.get("arduino", "puerto", fallback="auto")))' 2>/dev/null)"
+  case "$PUERTO" in
+    /dev/ttyACM*|/dev/ttyUSB*|/dev/serial/by-id/*)
+      bien "Arduino conectado por cable USB ($PUERTO)"
+      PISTA="revisá el cable USB entre el Arduino y el Pi"
+      ;;
+    *)
+      PISTA="revisá cables (pin 8/9, GND, 5V) y el conversor de nivel, o conectá el Arduino por USB"
+      if [ -e /dev/serial0 ]; then
+        bien "UART habilitada (/dev/serial0)"
+      else
+        mal "No hay Arduino por USB y la UART está apagada (no existe /dev/serial0)" \
+            "conectá el Arduino por cable USB, o: actualizar (y después reiniciar)"
+      fi
+      if grep -q "console=serial0" /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null; then
+        mal "La consola de Linux sigue usando el puerto serie" "actualizar   (y después reiniciar)"
+      fi
+      ;;
+  esac
   USUARIO="$(sed -n 's/^User=//p' /etc/systemd/system/camara.service 2>/dev/null)"
   if id -nG "${USUARIO:-$(whoami)}" 2>/dev/null | grep -qw dialout; then
     bien "Usuario '${USUARIO:-$(whoami)}' con permiso para el puerto serie"
   else
     mal "Usuario sin permiso para el puerto serie (grupo dialout)" "actualizar   (y después reiniciar)"
   fi
-  if grep -q "console=serial0" /boot/firmware/cmdline.txt /boot/cmdline.txt 2>/dev/null; then
-    mal "La consola de Linux sigue usando el puerto serie" "actualizar   (y después reiniciar)"
-  fi
   if [ -n "$ESTADO" ]; then
     SENSOR="$(python3 -c "import json,sys; s=json.load(sys.stdin).get('sensor'); print(f\"{s.get('v_now')} V · {s.get('g_now')} W/m² · sat={s.get('sat')}\" if s else '')" <<<"$ESTADO" 2>/dev/null)"
     if [ -n "$SENSOR" ]; then
       bien "El Arduino responde: $SENSOR"
     else
-      mal "No llegan datos del Arduino" "revisá cables (pin 8/9, GND, 5V) y el conversor de nivel"
+      mal "No llegan datos del Arduino" "$PISTA"
     fi
   fi
 

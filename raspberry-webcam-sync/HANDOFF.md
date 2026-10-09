@@ -186,9 +186,15 @@ descarga OK (ping a 192.168.50.1 responde, fotos bajan a subcarpetas por día).
   `POST /hora`. `hora_ajustada` se compara con el `boot_id` del kernel, así
   que vuelve a "sin ajustar" en cada reinicio. `instalar_servidor.sh` crea la
   regla sudoers y apaga NTP.
-- **Arduino:** UART `/dev/serial0` (GPIO 14/15) con conversor de nivel;
-  `instalar_camara.sh` habilita la UART y agrega el usuario a `dialout`
-  (requiere reiniciar). Sección `[arduino]` en `config.ini`.
+- **Arduino:** dos formas de conectarlo al Pi A, con `puerto = auto` en
+  `config.ini` (sección `[arduino]`) se detecta sola:
+  - **Cable USB (recomendada, sin conversor):** queda en `/dev/ttyACM0`; el
+    USB también alimenta al Arduino. Abrir el puerto reinicia el UNO, así que
+    la cámara espera 2,5 s antes de la primera consulta.
+  - **Pines GPIO 14/15** (`/dev/serial0`) con conversor de nivel;
+    `instalar_camara.sh` habilita la UART (requiere reiniciar).
+  En los dos casos el usuario tiene que estar en `dialout` (lo hace
+  `instalar_camara.sh`). Para diagnosticar: `verificar` y `probar_serie`.
 - **Ojo:** el método del artículo da un índice (~0,4 W/m² con 5 V/10 kΩ/110×60 mm),
   no irradiancia real → calibrar `CAL_K`. `MODO_SHUNT 1` = alternativa lineal.
 
