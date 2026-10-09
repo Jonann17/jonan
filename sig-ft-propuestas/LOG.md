@@ -69,6 +69,47 @@ En Linux, el Qt necesita estas bibliotecas del sistema (el CI ya las instala):
 - **Nota para Rafael:** esta etapa **no toca** AutoSpec (ni `sigft/services/autospec*`
   ni su pantalla). Su pantalla se migra en la etapa 5, con una nota aparte.
 
+### 2. Qt6 — Etapas 2 a 5 (en curso; pausado el 2026-10-09)
+- **Parches:** `patches/etapa2-en-curso/` (14) y después `patches/etapas3a6-en-curso/`
+  (16), en ese orden, encima de `patches/etapa1/`. Lo terminado pero sin integrar y lo
+  que quedó a medias está en `patches/pendiente/` (ver su README).
+- **Ya funciona en `python -m sigft.app_qt.main`, desde el menú y sin script:** Home
+  (cards), Cria Fichas, Planilhas PMIB (PDM), Analyzer, Upload Condições, Tradutor,
+  Upload Specs, Fichas Duplicadas, Aplicação LMR (Upload + Exclusão), PMIB Manager,
+  Busca PMIB y el aviso de actualización al abrir. Correção de PDM está portada pero
+  sigue bloqueada en el menú, igual que hoy.
+- **Falta:** AutoSpec (a medias), paneles de la Home (claves, modelos y gastos de IA,
+  mural, "Procurar atualizações", "Versões de teste"), revisión de Cria Fichas,
+  integrar `pendiente/0001`, pulido visual compartido, corte (`frontend.py` y
+  `SIG-FT.bat` abriendo Qt, `requirements.txt`, lanzador para macOS, `.exe`),
+  revisión final de toda la rama y entrega.
+- **Diferencias intencionales con la app actual (para que Luan decida):**
+  - Confirmaciones destructivas (Apagar LMR, "Confirmar" de Correção de PDM): Enter
+    elige "Não" (en Tk elegía "Sim").
+  - Los avisos de fin ("Processo concluído") no frenan al robot: el navegador se
+    cierra sin esperar el OK.
+  - Cancelar el diálogo de carpeta ya no borra la ruta ya elegida (PMIB Manager, PDM).
+  - Esc, Enter y Espacio no cierran ni confirman ventanas con trabajo de la persona
+    (pesos del Analyzer, revisión de PDM, pausa de login, Excel bloqueado).
+  - Un segundo clic trae al frente la ventana ya abierta en vez de abrir otra.
+  - Los robots corren en hilo común: cerrar la ventana con un robot andando pregunta
+    antes (regla del mural del 2026-09-25).
+  - Si un módulo no cargó, el clic avisa el motivo en vez de fallar dentro del hilo.
+- **Errores de la app actual que la versión Qt ya no tiene:** ventanas abiertas desde
+  hilos de fondo (en macOS cierran la app), botones que quedaban trabados después de
+  un error (Apagar LMR, LMR, Correção de PDM, Upload de Condições), pesos del Analyzer
+  guardados a medias cuando un campo era inválido.
+- **Cómo se probó:** `bash scripts/check.sh` → 6119 passed, 27 skipped; `ruff check .`
+  limpio. Cada pantalla se comparó con la CustomTkinter en capturas reales (Xvfb)
+  medidas con PIL: posiciones y tamaños iguales o a pocos px, casi todo por ancho de
+  texto (la negrita larga sale hasta ~9% más ancha; pendiente de pulido). Cada tarea
+  pasó por revisión independiente. **No probado:** portal real (RPA), `.exe` en
+  Windows, macOS.
+- **Nota para Rafael:** AutoSpec todavía no está migrada; no se tocó ningún archivo de
+  su frente (`sigft/services/autospec*`, `sigft/core/web/`, `tests/test_autospec_*`).
+- **Registro del proceso** (planos, briefs, informes de cada tarea y de cada revisión,
+  scripts de captura): `registro/`.
+
 ## Hallazgos fuera de alcance (para Luan)
 
 - `tests/test_llm_comparacao.py:408` hace `os.chdir(tmp_path)` sin restaurarlo
@@ -77,8 +118,5 @@ En Linux, el Qt necesita estas bibliotecas del sistema (el CI ya las instala):
 
 ## Próximas etapas
 
-2. Selectores de archivo + pantallas piloto ApagarLMR y Translator.
-3. LMR, BuscaPMIB, PMIBManager, Analyzer, PDM.
-4. UploadConditions, UploadTechSpecs, CopiaFichas, CorrecaoPDM (bloqueada).
-5. CriaFichas y AutoSpec (con nota para Rafael).
-6. Paneles de la Home, actualización automática, `.exe` con Qt y corte de `frontend.py`.
+Ver "Falta" en la sección 2. El plan completo está en
+`planos/2026-10-08-qt6-etapas3a6-app-completa.md`.

@@ -1,0 +1,737 @@
+From a7a685848659e7360aa921fdfd3be80492599ab6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 16:15:40 +0000
+Subject: [PATCH] Qt6: uploads com erro de JSON no console, botoes sem foco e
+ um robo por vez
+
+Revisao das telas de upload (E4.4/E4.5):
+- _pre_start_web volta para dentro do try, como no CTk: JSON que nao e
+  lista de fichas (ou Excel com linhas estranhas) loga "Erro ao ler
+  JSON/Excel" em vez de sumir no laco do Qt.
+- "Tentar Novamente" com o hover do tema (fg primary sem hover_color la).
+- Sem a conta a mao do botao que cresce com o texto: blocos.botao(...,
+  largura_minima=) no INICIAR, na pausa e nos botoes do PMIB Manager
+  (_botao_ctk removido); larguras iguais medidas no Xvfb.
+- Pausa de login, Excel travado e arquivos travados: nenhum botao pega o
+  foco nem e o padrao (dialogs.sem_tecla); Enter e Espaco perdidos nao
+  soltam mais o robo.
+- Um robo por vez: com o robo rodando, o fim da IA salva mas nao
+  pergunta o "Continuar", e nenhuma fila nova comeca (motivo no console).
+- Testes do robo que nao nasce e do fechar() que falha; teste da largura
+  da pausa exato (medida do Qt) e comentario com a folga certa (7).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/_upload_comum.py       | 52 ++++++++-----
+ sigft/app_qt/views/pmib_manager.py        | 47 +++++-------
+ sigft/app_qt/views/upload_conditions.py   | 14 ++--
+ sigft/app_qt/views/upload_tech_specs.py   | 14 ++--
+ sigft/app_qt/widgets/dialogos_selecao.py  |  5 +-
+ sigft/app_qt/widgets/dialogs.py           | 34 +++++----
+ tests/test_qt_dialogos_de_acao_medidas.py | 14 ++++
+ tests/test_qt_espera.py                   | 43 +++++------
+ tests/test_qt_tela_copia_fichas.py        | 10 ++-
+ tests/test_qt_tela_upload_conditions.py   | 92 +++++++++++++++++++++++
+ tests/test_qt_tela_upload_tech_specs.py   | 50 ++++++++++++
+ 11 files changed, 276 insertions(+), 99 deletions(-)
+
+diff --git a/sigft/app_qt/views/_upload_comum.py b/sigft/app_qt/views/_upload_comum.py
+index 18d68e6..29ad15e 100644
+--- a/sigft/app_qt/views/_upload_comum.py
++++ b/sigft/app_qt/views/_upload_comum.py
+@@ -13,7 +13,6 @@ from __future__ import annotations
+ import os
+ 
+ from PySide6.QtCore import Qt
+-from PySide6.QtGui import QFontMetrics
+ from PySide6.QtWidgets import QHBoxLayout, QMessageBox, QSizePolicy, QVBoxLayout
+ 
+ from sigft.app import theme
+@@ -28,21 +27,10 @@ TEXTO_NAO_SELECIONADO = "Não selecionado"
+ ALTURA_LISTA_FILA = 200
+ # Os botões cinza escritos à mão na tela CTk (fg #3A3A3A, hover #454545).
+ HOVER_CINZA = "#454545"
+-
+-
+-def botao_que_cresce(texto: str, *, largura: int, altura: int, tamanho_fonte: int = 13,
+-                     negrito: bool = True, cor_fundo: str | None = None,
+-                     variante: str | None = None):
+-    """CTkButton de `width=largura` que CRESCE até caber o texto, com a folga
+-    de texto dele (7 px de cada lado): "INICIAR PROCESSAMENTO IA" pede 200 e
+-    fica com 202 lá."""
+-    b = blocos.botao(texto, variante=variante, altura=altura, tamanho_fonte=tamanho_fonte,
+-                     negrito=negrito, cor_fundo=cor_fundo)
+-    folga = estilo.FOLGA_TEXTO_BOTAO_CTK
+-    b.setStyleSheet(b.styleSheet() + f" QPushButton {{ padding: 0 {folga}px; }}")
+-    fonte = blocos.fonte_tk(("Roboto", tamanho_fonte) + (("bold",) if negrito else ()))
+-    b.setFixedWidth(max(largura, QFontMetrics(fonte).horizontalAdvance(texto) + 2 * folga))
+-    return b
++# Um robô por vez: o "Continuar" do fim da IA (ou uma seleção antiga
++# confirmada agora) não sobe um segundo navegador com o primeiro rodando.
++MSG_ROBO_OCUPADO = ("O robô já está preenchendo uma fila no portal. Espere ele terminar "
++                    "(ou use PARAR ROBÔ WEB) antes de iniciar outra.")
+ 
+ 
+ def reabilitar(*botoes_e_estados) -> None:
+@@ -69,9 +57,31 @@ class TelaDeUpload(ModuleFrame):
+     TEXTO_WEB = ""
+     TEXTO_CARREGAR = ""
+ 
++    # Liga no `_inicio_do_robo` e desliga no `_fim_do_robo`, os dois na thread
++    # da interface. Não dá para olhar o PARAR: ele desliga no clique, com o
++    # robô ainda fechando o ciclo.
++    _robo_ativo = False
++
+     def _chave(self) -> str:
+         return self.controller.get_key("GEMINI") if self.controller is not None else ""
+ 
++    # --- um robô por vez ----------------------------------------------------------
++    def _robo_ocupado(self) -> bool:
++        """Com um robô já rodando, diz no console por que nada começa."""
++        if self._robo_ativo:
++            self.log(MSG_ROBO_OCUPADO)
++            return True
++        return False
++
++    def _inicio_do_robo(self) -> None:
++        self._robo_ativo = True
++        reabilitar((self.btn_web_mem, False), (self.btn_web_file, False), (self.btn_parar_web, True))
++
++    def _fim_do_robo(self) -> None:
++        """Na thread da interface, quando o worker do robô acaba (bem ou mal)."""
++        self._robo_ativo = False
++        reabilitar((self.btn_web_mem, True), (self.btn_web_file, True), (self.btn_parar_web, False))
++
+     # --- montagem -------------------------------------------------------------
+     def _build_ui(self) -> None:
+         # Espaços do `pack` de lá; o pady de dois vizinhos SOMA no Tk.
+@@ -157,8 +167,9 @@ class TelaDeUpload(ModuleFrame):
+     def _linha_acoes_ia(self) -> QHBoxLayout:
+         """INICIAR (pack expand=True: centrado no que sobra) e PARAR encostado à
+         direita; os dois com padx=5, dentro do padx=10 da linha."""
+-        self.btn_ia = botao_que_cresce("INICIAR PROCESSAMENTO IA", largura=200, altura=40,
+-                                       cor_fundo=theme.COLORS["primary"])
++        # width=200 lá, mas o CTkButton cresce até caber o texto (202 no CTk).
++        self.btn_ia = blocos.botao("INICIAR PROCESSAMENTO IA", largura_minima=200, altura=40,
++                                   tamanho_fonte=13, negrito=True, cor_fundo=theme.COLORS["primary"])
+         self.btn_ia.clicked.connect(self._start_ia_process)
+         self.btn_parar_ia = blocos.botao("PARAR", largura=100, altura=40, tamanho_fonte=13, negrito=True,
+                                          cor_fundo=theme.COLORS["danger"])
+@@ -220,7 +231,10 @@ class TelaDeUpload(ModuleFrame):
+         return resposta == QMessageBox.StandardButton.Yes
+ 
+     def _perguntar_se_continua(self) -> bool:
+-        """Depois de salvar: pular para a aba 2 e iniciar o robô?"""
++        """Depois de salvar: pular para a aba 2 e iniciar o robô? Com um robô já
++        rodando, nem pergunta: o Sim não teria como ser atendido."""
++        if self._robo_ocupado():
++            return False
+         resposta = QMessageBox.question(
+             self, "Continuar", "Dados salvos! Deseja pular para a Aba 2 e iniciar o Robô Web agora?",
+             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+diff --git a/sigft/app_qt/views/pmib_manager.py b/sigft/app_qt/views/pmib_manager.py
+index 08815f4..6a8fb20 100644
+--- a/sigft/app_qt/views/pmib_manager.py
++++ b/sigft/app_qt/views/pmib_manager.py
+@@ -17,7 +17,6 @@ import pathlib
+ import webbrowser
+ 
+ from PySide6.QtCore import Qt
+-from PySide6.QtGui import QFontMetrics
+ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QMessageBox, QVBoxLayout
+ 
+ from sigft.app import theme
+@@ -36,10 +35,9 @@ OPCAO_GERAR_PAINEL = "pmib_manager.gerar_painel"
+ TEXTO_NENHUM_ARQUIVO = "Nenhum arquivo selecionado"
+ 
+ # Os botões de arquivo pedem width=280, mas o CTkButton CRESCE até caber o
+-# texto com 7 px de cada lado (medido: 272 px de texto -> 286). A folha do app
+-# dá 14 de cada lado; nestes botões a folga é a do CTk.
++# texto com 7 px de cada lado (medido: 272 px de texto -> 286): é o
++# `largura_minima` do `blocos.botao`.
+ LARGURA_BOTAO_ARQUIVO = 280
+-FOLGA_TEXTO_BOTAO_CTK = 7
+ # Cinza escuro dos botões de arquivo e do "Gerar painel" (fg/hover das telas CTk).
+ HOVER_CINZA = "#454545"
+ # A descrição das autorizações quebra em 720 px (wraplength) e ocupa duas
+@@ -65,19 +63,6 @@ def _texto_dos_avisos(inicio, avisos, nao_gravados):
+     return f"{inicio}, mas " + "; e ".join(partes) + "."
+ 
+ 
+-def _botao_ctk(texto, *, largura, variante=None, tamanho_fonte=12, negrito=False, cor_texto=None,
+-               cor_fundo=None, cor_hover=estilo.AZUL_CTK_HOVER):
+-    """Botão de largura mínima `largura` que cresce até caber o texto, como o
+-    CTkButton (7 px de folga de cada lado do texto)."""
+-    b = blocos.botao(texto, variante=variante, tamanho_fonte=tamanho_fonte, negrito=negrito,
+-                     cor_texto=cor_texto, cor_fundo=cor_fundo, cor_hover=cor_hover)
+-    b.setStyleSheet(b.styleSheet() + f" QPushButton {{ padding: 0 {FOLGA_TEXTO_BOTAO_CTK}px; }}")
+-    fonte = blocos.fonte_tk(("Roboto", tamanho_fonte) + (("bold",) if negrito else ()))
+-    texto_px = QFontMetrics(fonte).horizontalAdvance(texto)
+-    b.setFixedWidth(max(largura, texto_px + 2 * FOLGA_TEXTO_BOTAO_CTK))
+-    return b
+-
+-
+ def _rotulo_status():
+     """O "Nenhum arquivo selecionado" cinza ao lado de cada botão de arquivo."""
+     r = blocos.rotulo(TEXTO_NENHUM_ARQUIVO, cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO), alinhar="esquerda")
+@@ -137,13 +122,13 @@ class NovasListasDialog(QDialog):
+ 
+         # Fonte padrão do CTkButton (13) e a folga de texto dele: com a da folha
+         # do app, "Ignorar (Não Adicionar)" não cabe nos 150.
+-        self.botao_marcar = _botao_ctk("Marcar Todas", largura=120, variante="cinza", tamanho_fonte=13)
+-        self.botao_desmarcar = _botao_ctk("Desmarcar Todas", largura=120, variante="cinza", tamanho_fonte=13)
+-        self.botao_confirmar = _botao_ctk("Confirmar Seleção", largura=150, variante="primario",
+-                                          tamanho_fonte=13)
++        self.botao_marcar = blocos.botao("Marcar Todas", largura_minima=120, variante="cinza", tamanho_fonte=13)
++        self.botao_desmarcar = blocos.botao("Desmarcar Todas", largura_minima=120, variante="cinza", tamanho_fonte=13)
++        self.botao_confirmar = blocos.botao("Confirmar Seleção", largura_minima=150, variante="primario",
++                                            tamanho_fonte=13)
+         # fg_color="gray" e hover #555555, escritos à mão na tela antiga.
+-        self.botao_ignorar = _botao_ctk("Ignorar (Não Adicionar)", largura=150, tamanho_fonte=13,
+-                                        cor_fundo=estilo.cinza_tk("gray"), cor_hover="#555555")
++        self.botao_ignorar = blocos.botao("Ignorar (Não Adicionar)", largura_minima=150, tamanho_fonte=13,
++                                          cor_fundo=estilo.cinza_tk("gray"), cor_hover="#555555")
+         for b in (self.botao_marcar, self.botao_desmarcar, self.botao_confirmar, self.botao_ignorar):
+             b.setAutoDefault(False)
+         self.botao_marcar.clicked.connect(self.marcar_todas)
+@@ -243,8 +228,8 @@ class ModuloPMIBManager(ModuleFrame):
+         corpo.addSpacing(13)                            # título (…, 5) + linha (8, …)
+ 
+         # 1. Histórico do Aconex (botão + rótulo)
+-        self.btn_api = _botao_ctk("1. Selecionar Histórico Aconex DocManager (.xlsx)",
+-                                  largura=LARGURA_BOTAO_ARQUIVO, variante="cinza")
++        self.btn_api = blocos.botao("1. Selecionar Histórico Aconex DocManager (.xlsx)",
++                                    largura_minima=LARGURA_BOTAO_ARQUIVO, variante="cinza", tamanho_fonte=12)
+         self.btn_api.clicked.connect(self._sel_api)
+         self.lbl_api_status = _rotulo_status()
+         corpo.addLayout(self._linha_arquivo(self.btn_api, self.lbl_api_status))
+@@ -271,8 +256,9 @@ class ModuloPMIBManager(ModuleFrame):
+         corpo.addSpacing(16)
+ 
+         # 3. Planilha de mapeamento (botão + rótulo)
+-        self.btn_master = _botao_ctk("3. Selecionar Mapeamento Sobressalentes (.xlsx)",
+-                                     largura=LARGURA_BOTAO_ARQUIVO, variante="cinza")
++        self.btn_master = blocos.botao("3. Selecionar Mapeamento Sobressalentes (.xlsx)",
++                                       largura_minima=LARGURA_BOTAO_ARQUIVO, variante="cinza",
++                                       tamanho_fonte=12)
+         self.btn_master.clicked.connect(self._sel_master)
+         self.lbl_master_status = _rotulo_status()
+         corpo.addLayout(self._linha_arquivo(self.btn_master, self.lbl_master_status))
+@@ -295,7 +281,7 @@ class ModuloPMIBManager(ModuleFrame):
+         self.caixa_gerar_painel = controles.CaixaDeMarcar("Gerar painel ao terminar", tamanho_fonte=12)
+         self.caixa_gerar_painel.setChecked(bool(gerar_por_padrao))
+         self.caixa_gerar_painel.toggled.connect(self._lembrar_gerar_painel)
+-        self.btn_painel = _botao_ctk("Gerar painel", largura=160, variante="cinza")
++        self.btn_painel = blocos.botao("Gerar painel", largura_minima=160, variante="cinza", tamanho_fonte=12)
+         self.btn_painel.clicked.connect(self.gerar_painel)
+         # Lá o quadro é `pack` sem `fill` (centrado); caixa e botão com padx=10.
+         linha = QHBoxLayout()
+@@ -324,8 +310,9 @@ class ModuloPMIBManager(ModuleFrame):
+         corpo.addWidget(r["descricao_aut"])
+         corpo.addSpacing(8)                             # linha: pady=(8, 15)
+ 
+-        self.btn_autorizados = _botao_ctk("4. Selecionar export de autorizados (.xlsx)",
+-                                          largura=LARGURA_BOTAO_ARQUIVO, variante="cinza")
++        self.btn_autorizados = blocos.botao("4. Selecionar export de autorizados (.xlsx)",
++                                            largura_minima=LARGURA_BOTAO_ARQUIVO, variante="cinza",
++                                            tamanho_fonte=12)
+         self.btn_autorizados.clicked.connect(self._sel_autorizados)
+         self.lbl_autorizados = _rotulo_status()
+         linha = self._linha_arquivo(self.btn_autorizados, self.lbl_autorizados)
+diff --git a/sigft/app_qt/views/upload_conditions.py b/sigft/app_qt/views/upload_conditions.py
+index d3c5403..9b527f1 100644
+--- a/sigft/app_qt/views/upload_conditions.py
++++ b/sigft/app_qt/views/upload_conditions.py
+@@ -204,6 +204,8 @@ class ModuloUploadConditions(TelaDeUpload):
+ 
+     # --- Robô Web (aba 2) -------------------------------------------------------
+     def _pre_start_web(self, dados_dict_lista) -> None:
++        if self._robo_ocupado():
++            return
+         if not self.caminho_status:
+             QMessageBox.warning(self, "Aviso",
+                                 "Selecione o _STATUS_PMIB na Configuração Global antes de iniciar o Robô.")
+@@ -249,17 +251,20 @@ class ModuloUploadConditions(TelaDeUpload):
+         try:
+             self.log("Lendo arquivo Excel, convertendo strings em dicionários...")
+             dados = ler_resultados_excel(excel_file)
++            # DENTRO do try, como lá: linhas num formato inesperado também viram
++            # "Erro ao ler Excel" (fora dele, a exceção sumia no laço do Qt).
++            self._pre_start_web(dados)
+         except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
+             self.log(f"Erro ao ler Excel: {e}")
+             QMessageBox.critical(self, "Erro de Leitura", f"Falha ao ler Excel: {e}")
+-            return
+-        self._pre_start_web(dados)
+ 
+     def _start_web_process(self, dados) -> None:
++        if self._robo_ocupado():
++            return
+         modulo = self.backend("upload_conditions_backend")
+         if modulo is None:
+             return
+-        reabilitar((self.btn_web_mem, False), (self.btn_web_file, False), (self.btn_parar_web, True))
++        self._inicio_do_robo()
+         self.log(f"Iniciando fila de {len(dados)} fichas no navegador...")
+         self.iniciar_tarefa(self._worker_web, modulo, dados, self.caminho_status)
+ 
+@@ -303,5 +308,4 @@ class ModuloUploadConditions(TelaDeUpload):
+                 except Exception as e:  # noqa: BLE001 -- os botões têm de voltar
+                     self.log(f"Erro Crítico Web: {e}")
+             self.automacao_ativa = None
+-            interface.na_interface(reabilitar, (self.btn_web_mem, True), (self.btn_web_file, True),
+-                                   (self.btn_parar_web, False))
++            interface.na_interface(self._fim_do_robo)
+diff --git a/sigft/app_qt/views/upload_tech_specs.py b/sigft/app_qt/views/upload_tech_specs.py
+index 7eb17aa..71317a3 100644
+--- a/sigft/app_qt/views/upload_tech_specs.py
++++ b/sigft/app_qt/views/upload_tech_specs.py
+@@ -171,6 +171,8 @@ class ModuloUploadTechSpecs(TelaDeUpload):
+     # --- Robô Web (aba 2) -------------------------------------------------------
+     def _pre_start_web(self, dados_json) -> None:
+         """Abre o popup para a pessoa escolher quais fichas do JSON processar."""
++        if self._robo_ocupado():
++            return
+         if not dados_json:
+             QMessageBox.warning(self, "Aviso", "Não há dados para iniciar a automação.")
+             return
+@@ -220,16 +222,19 @@ class ModuloUploadTechSpecs(TelaDeUpload):
+         try:
+             with open(json_file, "r", encoding="utf-8") as f:
+                 dados = json.load(f)
++            # DENTRO do try, como lá: um JSON que não é uma lista de fichas também
++            # vira "Erro ao ler JSON" (fora dele, a exceção sumia no laço do Qt).
++            self._pre_start_web(dados)
+         except Exception as e:  # noqa: BLE001 -- lá só ia para o log
+             self.log(f"Erro ao ler JSON: {e}")
+-            return
+-        self._pre_start_web(dados)
+ 
+     def _start_web_process(self, dados) -> None:
++        if self._robo_ocupado():
++            return
+         controlador = self._controlador()
+         if controlador is None:
+             return
+-        reabilitar((self.btn_web_mem, False), (self.btn_web_file, False), (self.btn_parar_web, True))
++        self._inicio_do_robo()
+         self.log(f"Iniciando fila de {len(dados)} fichas no navegador...")
+         caminho_status = self.caminho_status
+         if not caminho_status:
+@@ -256,5 +261,4 @@ class ModuloUploadTechSpecs(TelaDeUpload):
+         except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
+             self.log(f"Erro Crítico Web: {e}")
+         finally:
+-            interface.na_interface(reabilitar, (self.btn_web_mem, True), (self.btn_web_file, True),
+-                                   (self.btn_parar_web, False))
++            interface.na_interface(self._fim_do_robo)
+diff --git a/sigft/app_qt/widgets/dialogos_selecao.py b/sigft/app_qt/widgets/dialogos_selecao.py
+index 8d8ba86..a731449 100644
+--- a/sigft/app_qt/widgets/dialogos_selecao.py
++++ b/sigft/app_qt/widgets/dialogos_selecao.py
+@@ -32,7 +32,7 @@ from sigft.app import theme
+ from sigft.app.textos_dialogos import TEXTOS_TRAVADOS
+ from sigft.app_qt import estilo
+ from sigft.app_qt.widgets import blocos
+-from sigft.app_qt.widgets.dialogs import SoltaAoFechar
++from sigft.app_qt.widgets.dialogs import SoltaAoFechar, sem_tecla
+ 
+ # Diálogo aberto sem pai (ou cujo pai some) precisa de uma referência viva
+ # enquanto está na tela; sai daqui quando fecha. Chave = id(): a conexão que o
+@@ -419,8 +419,7 @@ class ArquivosTravadosDialog(SoltaAoFechar, QDialog):
+                                           tamanho_fonte=14, negrito=True)
+         self.botao_seguir = blocos.botao(textos["seguir"], variante="contorno", largura=170, altura=40)
+         for b in (self.botao_repetir, self.botao_seguir):
+-            b.setAutoDefault(False)  # Enter não decide: o worker espera a pessoa escolher
+-            b.setDefault(False)
++            sem_tecla(b)  # nem Enter nem Espaço decidem: o worker espera a pessoa escolher
+         self.botao_repetir.clicked.connect(self.repetir)
+         self.botao_seguir.clicked.connect(self.seguir)
+         layout.addLayout(_linha_de_botoes(self.botao_repetir, self.botao_seguir))
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 86d1beb..480490a 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -7,7 +7,7 @@ thread do robô fica presa em `Event.wait()` para sempre.
+ from __future__ import annotations
+ 
+ from PySide6.QtCore import QEvent, QRect, QSize, Qt
+-from PySide6.QtGui import QColor, QFontMetrics
++from PySide6.QtGui import QColor
+ from PySide6.QtWidgets import (
+     QDialog, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QStyledItemDelegate, QVBoxLayout,
+ )
+@@ -25,6 +25,20 @@ VAO_TEXTO_CAIXA = 6
+ LARGURA_QUEBRA_TEXTO = 400
+ 
+ 
++def sem_tecla(botao) -> None:
++    """Botão das janelas que seguram o robô: nenhuma tecla o aperta.
++
++    No CTk nenhuma tecla estava ligada e o CTkButton nunca pega o foco. No Qt,
++    o botão ganha o foco ao abrir a janela: um Espaço perdido o apertava, e o
++    autoDefault fazia o mesmo com o Enter -- soltando o robô (e começando o
++    lote) antes de a pessoa terminar o login. Esc e o "X" continuam valendo.
++    """
++    botao.setAutoDefault(False)
++    botao.setDefault(False)
++    botao.setFocusPolicy(Qt.FocusPolicy.NoFocus)
++
++
++
+ class SoltaAoFechar:
+     """Mixin (antes do QDialog) das janelas em que um worker espera a resposta.
+ 
+@@ -92,15 +106,8 @@ class PausaLoginDialog(_DialogoDeAcaoManual):
+         # height=45 e FONTE_BOTAO (Roboto 14 bold); a largura é a do CTkButton:
+         # 140, ou o texto + 7 px de cada lado (195 com "CONTINUAR AUTOMAÇÃO").
+         self.botao = blocos.botao(texto_botao, variante="primario", altura=45, tamanho_fonte=14,
+-                                  negrito=True)
+-        folga = estilo.FOLGA_TEXTO_BOTAO_CTK
+-        self.botao.setStyleSheet(self.botao.styleSheet() + f" QPushButton {{ padding: 0 {folga}px; }}")
+-        texto_px = QFontMetrics(blocos.fonte_tk(("Roboto", 14, "bold"))).horizontalAdvance(texto_botao)
+-        self.botao.setFixedWidth(max(estilo.LARGURA_BOTAO_CTK, texto_px + 2 * folga))
+-        # Enter não aperta o botão: no CTk nenhuma tecla estava ligada, e um Enter
+-        # perdido soltaria o robô (e começaria o lote) antes de terminar o login.
+-        self.botao.setAutoDefault(False)
+-        self.botao.setDefault(False)
++                                  negrito=True, largura_minima=estilo.LARGURA_BOTAO_CTK)
++        sem_tecla(self.botao)
+         self.botao.clicked.connect(self.liberar)
+         self.layout_principal.addWidget(self.botao, 0, Qt.AlignmentFlag.AlignHCenter)
+ 
+@@ -126,11 +133,12 @@ class RetryLockDialog(_DialogoDeAcaoManual):
+         linha = QHBoxLayout()
+         linha.setSpacing(20)
+         linha.addStretch()
+-        self.botao_repetir = blocos.botao("Tentar Novamente", variante="primario", largura=150, altura=40)
++        # fg_color=primary SEM hover_color lá: o hover é o do tema (#14375E).
++        self.botao_repetir = blocos.botao("Tentar Novamente", cor_fundo=theme.COLORS["primary"],
++                                          largura=150, altura=40)
+         self.botao_cancelar = blocos.botao("Ignorar e Continuar", variante="contorno", largura=150, altura=40)
+         for botao in (self.botao_repetir, self.botao_cancelar):
+-            botao.setAutoDefault(False)  # Enter não decide (no CTk nenhuma tecla estava ligada)
+-            botao.setDefault(False)
++            sem_tecla(botao)
+             linha.addWidget(botao)
+         linha.addStretch()
+         self.botao_repetir.clicked.connect(self.repetir)
+diff --git a/tests/test_qt_dialogos_de_acao_medidas.py b/tests/test_qt_dialogos_de_acao_medidas.py
+index 9c3bada..ec5c5f1 100644
+--- a/tests/test_qt_dialogos_de_acao_medidas.py
++++ b/tests/test_qt_dialogos_de_acao_medidas.py
+@@ -35,3 +35,17 @@ def test_excel_travado(qt_interface, qtbot):
+         assert y >= 20 and y + h <= 120 and abs(y + h / 2 - 70) <= 1
+     finally:
+         qt_interface.setStyleSheet(anterior)
++
++
++def test_tentar_novamente_com_o_hover_do_tema(qt_interface, qtbot):
++    # CTk: fg_color=primary SEM hover_color -> o hover é o do tema (#14375E),
++    # não o primary_hover da variante "primario".
++    from sigft.app import theme
++
++    d = dialogs.RetryLockDialog(None, mensagem=MSG_EXCEL_BLOQUEADO, evento_espera=threading.Event(),
++                                resultado={})
++    qtbot.addWidget(d)
++    folha = d.botao_repetir.styleSheet()
++    assert d.botao_repetir.property("variante") is None
++    assert f"background: {theme.COLORS['primary']}" in folha
++    assert f"QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}" in folha
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+index d197f4e..e03c5e2 100644
+--- a/tests/test_qt_espera.py
++++ b/tests/test_qt_espera.py
+@@ -110,27 +110,28 @@ def test_esc_no_retry_excel_e_cancelar(qt_interface, qtbot):
+     assert respostas == [False]
+ 
+ 
+-def _apertar_enter(janela):
+-    """Return e Enter (teclado numérico), com o foco no primeiro botão -- o
+-    caso de uma tecla perdida enquanto a pessoa ainda faz o login."""
++def _apertar_teclas(janela):
++    """Return, Enter (teclado numérico) e Espaço onde o foco estiver -- o caso
++    de uma tecla perdida enquanto a pessoa ainda faz o login. No CTk nenhuma
++    tecla estava ligada e os CTkButton nunca pegam o foco: aqui nenhum botão
++    pode ser o padrão (Enter) nem receber o foco (Espaço)."""
+     from PySide6.QtCore import Qt
+     from PySide6.QtTest import QTest
+-    from PySide6.QtWidgets import QPushButton
+-
+-    botoes = janela.findChildren(QPushButton)
+-    for botao in botoes:
++    from PySide6.QtWidgets import QApplication, QPushButton
++
++    janela.activateWindow()
++    QApplication.processEvents()
++    for tecla in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
++        QTest.keyClick(QApplication.focusWidget() or janela, tecla)
++    QApplication.processEvents()
++    for botao in janela.findChildren(QPushButton):
+         assert not botao.autoDefault() and not botao.isDefault(), botao.text()
+-    if botoes:
+-        botoes[0].setFocus()
+-    for tecla in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+-        QTest.keyClick(janela, tecla)
+-        if botoes:
+-            QTest.keyClick(botoes[0], tecla)
++        assert botao.focusPolicy() == Qt.FocusPolicy.NoFocus, botao.text()
+ 
+ 
+-def test_enter_nao_solta_o_login(qt_interface, qtbot):
+-    # No CTk nenhuma tecla estava ligada: um Enter perdido não pode soltar o
+-    # robô (e começar o lote) antes de a pessoa terminar o login.
++def test_enter_e_espaco_nao_soltam_o_login(qt_interface, qtbot):
++    # No CTk nenhuma tecla estava ligada: um Enter ou Espaço perdido não pode
++    # soltar o robô (e começar o lote) antes de a pessoa terminar o login.
+     tela = Tela()
+     qtbot.addWidget(tela)
+     terminou = []
+@@ -138,7 +139,7 @@ def test_enter_nao_solta_o_login(qt_interface, qtbot):
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
+     dialogo = _abertos(qd.PausaLoginDialog)[0]
+-    _apertar_enter(dialogo)
++    _apertar_teclas(dialogo)
+     qtbot.wait(100)
+     assert t.is_alive() and terminou == [] and dialogo.isVisible()
+     dialogo.botao.click()
+@@ -146,7 +147,7 @@ def test_enter_nao_solta_o_login(qt_interface, qtbot):
+     assert terminou == [True]
+ 
+ 
+-def test_enter_nao_decide_o_retry_excel(qt_interface, qtbot):
++def test_enter_e_espaco_nao_decidem_o_retry_excel(qt_interface, qtbot):
+     tela = Tela()
+     qtbot.addWidget(tela)
+     respostas = []
+@@ -154,7 +155,7 @@ def test_enter_nao_decide_o_retry_excel(qt_interface, qtbot):
+     t.start()
+     qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
+     dialogo = _abertos(qd.RetryLockDialog)[0]
+-    _apertar_enter(dialogo)
++    _apertar_teclas(dialogo)
+     qtbot.wait(100)
+     assert t.is_alive() and respostas == [] and dialogo.isVisible()
+     dialogo.botao_cancelar.click()
+@@ -162,7 +163,7 @@ def test_enter_nao_decide_o_retry_excel(qt_interface, qtbot):
+     assert respostas == [False]
+ 
+ 
+-def test_enter_nao_decide_os_arquivos_travados(qt_interface, qtbot):
++def test_enter_e_espaco_nao_decidem_os_arquivos_travados(qt_interface, qtbot):
+     from sigft.app_qt.widgets import dialogos_selecao
+ 
+     evento, resultado = threading.Event(), {}
+@@ -172,7 +173,7 @@ def test_enter_nao_decide_os_arquivos_travados(qt_interface, qtbot):
+     qtbot.addWidget(dialogo)
+     dialogo.show()
+     qtbot.waitExposed(dialogo)
+-    _apertar_enter(dialogo)
++    _apertar_teclas(dialogo)
+     qtbot.wait(50)
+     assert not evento.is_set() and resultado == {} and dialogo.isVisible()
+     dialogo.seguir()
+diff --git a/tests/test_qt_tela_copia_fichas.py b/tests/test_qt_tela_copia_fichas.py
+index a19b699..11764ae 100644
+--- a/tests/test_qt_tela_copia_fichas.py
++++ b/tests/test_qt_tela_copia_fichas.py
+@@ -433,9 +433,13 @@ def test_medidas_da_pausa_de_login(qt_interface, qtbot):
+         b = d.botao.geometry()
+         assert (b.y(), b.height()) == (185, 45)
+         assert abs(b.center().x() - 225) <= 1
+-        # 195 no CTk: texto + 6 de cada lado (a largura do texto muda com a fonte).
+-        texto = d.botao.fontMetrics().horizontalAdvance(d.botao.text())
+-        assert texto + 12 <= b.width() <= texto + 14
++        # 195 no CTk: texto + 7 de cada lado (a largura do texto muda com a fonte).
++        # O texto medido como o Qt mede o do botão (`size`, que arredonda a
++        # largura de cada letra; o `horizontalAdvance` pode dar 1 px a menos).
++        from PySide6.QtCore import Qt
++
++        texto = d.botao.fontMetrics().size(Qt.TextFlag.TextShowMnemonic, d.botao.text()).width()
++        assert b.width() == max(estilo.LARGURA_BOTAO_CTK, texto + 2 * estilo.FOLGA_TEXTO_BOTAO_CTK)
+         r = d.rotulo.geometry()
+         assert (r.y(), r.height()) == (30, 125)        # o texto centrado em 92,5, como lá
+     finally:
+diff --git a/tests/test_qt_tela_upload_conditions.py b/tests/test_qt_tela_upload_conditions.py
+index c3b0c2b..01a66bf 100644
+--- a/tests/test_qt_tela_upload_conditions.py
++++ b/tests/test_qt_tela_upload_conditions.py
+@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QMessageBox
+ from sigft.app import backends, theme
+ from sigft.app.textos_dialogos import LOGIN_NECESSARIO, MSG_LOGIN_SOLTAR_ROBO, msg_falha_ao_salvar
+ from sigft.app_qt.views import upload_conditions as tela_mod
++from sigft.app_qt.views._upload_comum import MSG_ROBO_OCUPADO
+ 
+ ABA_IA = "Processamento IA (Gerar Excel)"
+ ABA_WEB = "Robô Web (Preencher Portal)"
+@@ -491,6 +492,97 @@ def test_cancelar_o_excel_de_resultados(tela, caixas, monkeypatch, selecao):
+     assert caixas.chamadas == [] and selecao == []
+ 
+ 
++def test_excel_com_linhas_estranhas_vai_para_o_console(tela, caixas, monkeypatch, selecao, qtbot):
++    # Lá o `_pre_start_web` ficava DENTRO do try: dados num formato inesperado
++    # viram "Erro ao ler Excel" no console e o aviso, não uma exceção solta.
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/r.xlsx")
++    monkeypatch.setattr(tela_mod, "ler_resultados_excel", lambda c: ["linha solta"])
++    tela.caminho_status = "/d/s.xlsx"
++    tela.btn_web_file.click()
++    erro = "'str' object has no attribute 'get'"
++    assert caixas.chamadas == [("erro", "Erro de Leitura", f"Falha ao ler Excel: {erro}")]
++    qtbot.waitUntil(lambda: "Erro ao ler Excel" in _texto(tela), timeout=2000)
++    assert _texto(tela).splitlines() == ["> Lendo arquivo Excel, convertendo strings em dicionários...",
++                                         f"> Erro ao ler Excel: {erro}"]
++    assert selecao == []
++
++
++def test_robo_que_nao_nasce_devolve_os_botoes(tela, qtbot, monkeypatch):
++    # Lá `UploadAutomation()` ficava fora do try: a exceção derrubava a thread
++    # e os botões do robô nunca mais voltavam.
++    def quebra():
++        raise RuntimeError("chromedriver ausente")
++
++    monkeypatch.setattr(backends, "upload_conditions_backend", SimpleNamespace(UploadAutomation=quebra))
++    tela.caminho_status = "/d/s.xlsx"
++    tela._start_web_process([{"pmib_codigo": "A"}])
++    qtbot.waitUntil(lambda: tela.btn_web_mem.isEnabled() and tela.btn_web_file.isEnabled()
++                    and not tela.btn_parar_web.isEnabled(), timeout=3000)
++    qtbot.waitUntil(lambda: "Erro Crítico Web" in _texto(tela), timeout=2000)
++    assert _texto(tela).splitlines() == ["> Iniciando fila de 1 fichas no navegador...",
++                                         "> Erro Crítico Web: chromedriver ausente"]
++    assert tela.automacao_ativa is None and tela.avisos == []
++
++
++def test_fechar_que_falha_loga_e_devolve_os_botoes(tela, qtbot, monkeypatch):
++    class FechaQuebrando(AutomacaoFalsa):
++        def fechar(self):
++            super().fechar()
++            raise OSError("navegador já fechado")
++
++    auto = FechaQuebrando()
++    _rodar_robo(tela, qtbot, monkeypatch, auto, [{"pmib_codigo": "A"}])
++    assert auto.chamadas[-1] == "fechar"
++    assert _texto(tela).splitlines()[-2:] == ["> Fila de processamento web concluída.",
++                                              "> Erro Crítico Web: navegador já fechado"]
++    assert tela.avisos == [("info", "Aviso", "A fila de automação foi finalizada!")]
++    assert tela.automacao_ativa is None
++
++
++class AutomacaoQueEspera(AutomacaoFalsa):
++    """Fica "preenchendo" até o teste soltar."""
++
++    def __init__(self):
++        super().__init__()
++        self.liberar = threading.Event()
++
++    def processar_lista(self, dados, status, **k):
++        self.chamadas.append(("lista", dados, status))
++        self.liberar.wait(5)
++
++
++def test_um_robo_por_vez(tela, caixas, qtbot, monkeypatch, selecao):
++    auto = AutomacaoQueEspera()
++    criados = []
++    monkeypatch.setattr(backends, "upload_conditions_backend",
++                        SimpleNamespace(UploadAutomation=lambda: criados.append(1) or auto))
++    tela.caminho_status = "/d/s.xlsx"
++    tela._start_web_process([{"pmib_codigo": "A"}])
++    qtbot.waitUntil(lambda: any(c[0] == "lista" for c in auto.chamadas if isinstance(c, tuple)),
++                    timeout=2000)
++    # A IA termina enquanto o robô roda: salva, mas nem pergunta o "Continuar"
++    # (não haveria como atender o Sim) e não abre a seleção.
++    proc = ProcessadorFalso(None, resultados=[{"pmib_codigo": "B"}])
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_save_file", lambda *a, **k: "/d/novo.xlsx")
++    caixas.respostas[:] = [SIM]
++    tela._on_ia_finished([{"pmib_codigo": "B"}], proc)
++    assert [c[1] for c in caixas.chamadas] == ["Salvar Resultados"]
++    assert proc.chamadas[-1] == ("novo", "/d/novo.xlsx")
++    assert selecao == []
++    # Nem uma seleção antiga confirmada agora.
++    tela._start_web_process([{"pmib_codigo": "C"}])
++    auto.liberar.set()
++    qtbot.waitUntil(tela.btn_web_mem.isEnabled, timeout=3000)
++    qtbot.wait(100)
++    assert criados == [1]
++    assert _texto(tela).count(MSG_ROBO_OCUPADO) == 2
++    # Terminado o primeiro, um novo pode começar.
++    auto.liberar = threading.Event()
++    auto.liberar.set()
++    tela._start_web_process([{"pmib_codigo": "D"}])
++    qtbot.waitUntil(lambda: criados == [1, 1] and tela.btn_web_mem.isEnabled(), timeout=3000)
++
++
+ def test_ler_resultados_excel_normaliza_o_pmib_e_os_dicionarios(monkeypatch):
+     from tests._pandas_de_verdade import pandas_de_verdade
+ 
+diff --git a/tests/test_qt_tela_upload_tech_specs.py b/tests/test_qt_tela_upload_tech_specs.py
+index 8af5031..3488190 100644
+--- a/tests/test_qt_tela_upload_tech_specs.py
++++ b/tests/test_qt_tela_upload_tech_specs.py
+@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QMessageBox
+ from sigft.app import backends, theme
+ from sigft.app.textos_dialogos import LOGIN_NECESSARIO, MSG_LOGIN_SOLTAR_ROBO, msg_ficha_preenchida
+ from sigft.app_qt.views import upload_tech_specs as tela_mod
++from sigft.app_qt.views._upload_comum import MSG_ROBO_OCUPADO
+ 
+ ABA_IA = "Processamento IA (Gerar JSON)"
+ ABA_WEB = "Robô Web (Preencher Portal)"
+@@ -380,6 +381,55 @@ def test_carregar_json_quebrado_so_loga(tela, caixas, monkeypatch, selecao, tmp_
+     assert caixas.chamadas == [] and selecao == []
+ 
+ 
++def test_carregar_json_em_forma_de_dicionario_vai_para_o_console(tela, caixas, monkeypatch, selecao,
++                                                                 tmp_path, qtbot):
++    # Lá o `_pre_start_web` ficava DENTRO do try: um JSON que não é uma lista
++    # de fichas logava "Erro ao ler JSON"; fora dele, a exceção sumia no
++    # excepthook e a pessoa não via nada.
++    arquivo = tmp_path / "r.json"
++    arquivo.write_text(json.dumps({"METADATA": {"PMIB": "Z"}}), encoding="utf-8")
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: str(arquivo))
++    tela.btn_web_file.click()
++    qtbot.waitUntil(lambda: "Erro ao ler JSON" in _texto(tela), timeout=2000)
++    assert _texto(tela).splitlines() == ["> Erro ao ler JSON: 'str' object has no attribute 'get'"]
++    assert caixas.chamadas == [] and selecao == []
++
++
++class ControladorQueEspera(ControladorFalso):
++    """O robô fica "preenchendo" até o teste soltar."""
++
++    def __init__(self):
++        super().__init__()
++        self.liberar = threading.Event()
++
++    def executar_pipeline_rpa(self, dados, caminho_status, callback_log=None, callback_pause=None):
++        self.chamadas.append(("rpa", dados, caminho_status))
++        self.liberar.wait(5)
++
++
++def test_um_robo_por_vez(tela, caixas, qtbot, monkeypatch):
++    ctrl = ControladorQueEspera()
++    _backend(monkeypatch, ctrl)
++    tela.caminho_status = "/d/s.xlsx"
++    tela._start_web_process([{"x": 1}])
++    qtbot.waitUntil(lambda: ("rpa", [{"x": 1}], "/d/s.xlsx") in ctrl.chamadas, timeout=2000)
++    # A IA termina enquanto o robô roda: salva, mas nem pergunta o "Continuar"
++    # (não haveria como atender o Sim) e não sobe um segundo robô.
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_save_file", lambda *a, **k: "/d/r.json")
++    tela._on_ia_finished([{"METADATA": {"PMIB": "B"}}])
++    assert caixas.chamadas == []
++    assert ("salvar", "/d/r.json") in ctrl.chamadas
++    ctrl.liberar.set()
++    qtbot.waitUntil(tela.btn_web_mem.isEnabled, timeout=3000)
++    qtbot.wait(100)
++    assert [c for c in ctrl.chamadas if c[0] == "rpa"] == [("rpa", [{"x": 1}], "/d/s.xlsx")]
++    assert _texto(tela).count(MSG_ROBO_OCUPADO) == 1
++    # Terminado o primeiro, um novo pode começar.
++    tela._start_web_process([{"x": 2}])
++    qtbot.waitUntil(lambda: ("rpa", [{"x": 2}], "/d/s.xlsx") in ctrl.chamadas and tela.btn_web_mem.isEnabled(),
++                    timeout=3000)
++
++
+ # ---------------------------------------------------------------------------
+ # Medidas
+ # ---------------------------------------------------------------------------
+-- 
+2.43.0
+
