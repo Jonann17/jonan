@@ -1,7 +1,7 @@
 From 431460a0c52c7c991d3f8033f734a7aa35a48c7d Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:13:02 +0000
-Subject: [PATCH 03/14] Qt6: janelas auxiliares (selecao, resumo, PDM, acao do
+Subject: [PATCH 03/16] Qt6: janelas auxiliares (selecao, resumo, PDM, acao do
  robo, duplicadas, revisao)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

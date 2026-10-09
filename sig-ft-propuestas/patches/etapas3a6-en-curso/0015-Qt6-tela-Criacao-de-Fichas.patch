@@ -1,0 +1,2183 @@
+From 9838d2fb2ebe4520522b4a766b9e1cdbec99b1a6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:29:32 +0000
+Subject: [PATCH 15/16] Qt6: tela Criacao de Fichas
+
+Porte de sigft/app/views/cria_fichas.py (ModuloCriaFichas, chave
+"CriaFichas"): abas Criacao de Fichas / Editar codigo do projeto,
+IA + revisao de PDM, robo de criacao, resumo, salvar no Excel, limpar
+e a edicao em massa. Servicos, robo e portal intocados.
+
+- worker nao toca widget: projeto e "Pular IA" lidos no clique,
+  progresso/resumo/botoes por interface.na_interface
+- cadeia IA -> revisao com o botao desligado do clique ao fim; revisao
+  fechada no X devolve o botao (la ficava preso ate o Limpar)
+- "Preparo" do RETRY/CHANGE_PDM segura o robo ate o OK:
+  DialogosDeEspera.avisar(..., esperar=True)
+- "Ver Resumo" nao abre segunda janela
+- blocos.BarraDeProgresso (era _BarraDeProgresso da Copia de Fichas)
+- geometria igual a captura CTk (abas x console 3:1 como o grid do Tk)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/copia_fichas.py |   23 +-
+ sigft/app_qt/views/cria_fichas.py  |  947 +++++++++++++++++++++++++
+ sigft/app_qt/widgets/blocos.py     |   21 +
+ sigft/app_qt/widgets/espera.py     |   12 +-
+ tests/test_qt_espera.py            |   38 +
+ tests/test_qt_sem_tkinter.py       |    1 +
+ tests/test_qt_tela_cria_fichas.py  | 1027 ++++++++++++++++++++++++++++
+ 7 files changed, 2046 insertions(+), 23 deletions(-)
+ create mode 100644 sigft/app_qt/views/cria_fichas.py
+ create mode 100644 tests/test_qt_tela_cria_fichas.py
+
+diff --git a/sigft/app_qt/views/copia_fichas.py b/sigft/app_qt/views/copia_fichas.py
+index 6066ae5..f98ac64 100644
+--- a/sigft/app_qt/views/copia_fichas.py
++++ b/sigft/app_qt/views/copia_fichas.py
+@@ -18,7 +18,7 @@ interface e o worker espera).
+ from __future__ import annotations
+ 
+ from PySide6.QtCore import Qt
+-from PySide6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy
++from PySide6.QtWidgets import QHBoxLayout, QSizePolicy
+ 
+ from sigft import config as sigft_config
+ from sigft.app.textos_dialogos import MSG_LOGIN_LOTE
+@@ -49,25 +49,6 @@ def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str |
+     return r
+ 
+ 
+-class _BarraDeProgresso(QProgressBar):
+-    """CTkProgressBar que guarda a fração e a redesenha quando a largura muda.
+-
+-    `blocos.definir_progresso` converte a fração em valor PELA LARGURA da barra
+-    (as pontas redondas); sem refazer a conta no resize, o `set(0)` feito antes
+-    de a tela aparecer viraria um trecho de 8 % numa barra de 870 px.
+-    """
+-
+-    fracao = 0.0
+-
+-    def definir(self, fracao: float) -> None:
+-        self.fracao = float(fracao)
+-        blocos.definir_progresso(self, self.fracao)
+-
+-    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
+-        super().resizeEvent(evento)
+-        blocos.definir_progresso(self, self.fracao)
+-
+-
+ # =============================================================================
+ # MÓDULO 7: UPLOAD DE FICHAS DUPLICADAS (INTERFACE GE VERNOVA)
+ # =============================================================================
+@@ -169,7 +150,7 @@ class ModuloCopiaFichas(ModuleFrame):
+         acoes.addSpacing(15)                            # interruptor (…, 0) + barra (15, …)
+ 
+         # Progresso: CTkProgressBar(progress_color=accent), pack(fill="x", pady=15).
+-        self.progress = blocos.barra_progresso(barra=_BarraDeProgresso(), cor=COLORS["accent"])
++        self.progress = blocos.barra_progresso(barra=blocos.BarraDeProgresso(), cor=COLORS["accent"])
+         self.progress.definir(0)
+         acoes.addWidget(self.progress)
+ 
+diff --git a/sigft/app_qt/views/cria_fichas.py b/sigft/app_qt/views/cria_fichas.py
+new file mode 100644
+index 0000000..6f7745b
+--- /dev/null
++++ b/sigft/app_qt/views/cria_fichas.py
+@@ -0,0 +1,947 @@
++"""Tela "Cria Fichas PMIB" (Módulo de Criação) na interface Qt.
++
++Mesma tela de `sigft/app/views/cria_fichas.py`: lê a lista de materiais,
++categoriza os itens com IA para escolher o PDM, deixa a pessoa revisar e cria
++as fichas no portal; na segunda aba, a edição em massa do código do projeto.
++Serviços, robô e portal são os mesmos (nenhum seletor muda aqui).
++
++O que muda é só COMO as threads falam com a interface. Lá os workers mexiam
++em botão e barra direto, abriam o resumo por `after(0)` e chamavam
++`messagebox` de dentro do robô; aqui:
++
++* o que o worker precisa da tela (código do projeto, "Pular IA") é lido no
++  clique, e a volta é sempre por `interface.na_interface`;
++* a janela de decisão do robô (`JanelaAcaoRobo`) nasce na thread da interface
++  e o robô espera a resposta;
++* o "Preparo" depois de RETRY/CHANGE_PDM continua SEGURANDO o robô até o OK
++  (`avisar(..., esperar=True)`): é a pausa para a pessoa arrumar o navegador.
++"""
++from __future__ import annotations
++
++import pandas as pd
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QMessageBox, QSizePolicy, QVBoxLayout, QWidget
++
++from sigft.app.textos_dialogos import MSG_LOGIN_NOVA_FICHA, MSG_LOGIN_PAGINA_PRINCIPAL
++from sigft.app.theme import COLORS
++from sigft.app_qt import estilo, file_dialogs, interface
++from sigft.app_qt.views.janelas import JanelaAcaoRobo, JanelaResumo, JanelaRevisaoPDM, JanelaSelecao
++from sigft.app_qt.widgets import blocos, controles
++from sigft.app_qt.widgets.abas import Abas
++from sigft.app_qt.widgets.module_frame import MARGEM_DA_TELA, ModuleFrame
++# O catálogo de PDMs (2026-09-22): lê a planilha-mestra da Itaipu e faz o
++# pré-filtro de candidatos por item. `cria_fichas_svc` entra pelas guardas
++# (`conferir_pdm`); as classes do serviço (DataManager, GeminiCategorizer,
++# AutomacaoPMIB) vêm por `self.backend(...)`, que avisa se não carregaram.
++from sigft.core import pdm_catalogo
++from sigft.services import cria_fichas as cria_fichas_svc
++
++ABA_CRIACAO = "Criação de Fichas"
++ABA_EDICAO = "Editar código do projeto"
++URL_LISTA = "https://apps.itaipu.gov.br/PMIB/PMIB_DatasheetList"
++MSG_PREPARO = "Certifique-se de que a tela do navegador está na lista principal antes de clicar em OK."
++PLACEHOLDER_PROJETO = (
++    "Ex: SERVIÇOS AUXILIARES ELÉTRICOS / CAP.05 - CONVERSORES ESTÁTICOS DE FREQUENCIA / "
++    "Especificar subsistema | #ST00=B01MSE00&EPB020 / 08934100BAX00-FS00PB-51 | "
++    "Evento de Pagamento: 2835 / 2835 a / 2836")
++
++# Os cinzas que a tela escrevia à mão: #3A3A3A/#454545 é a variante "cinza";
++# #2B2B2B é o botão de PDMs "apagado" (a cor do cartão) no modo "Pular IA".
++CINZA, CINZA_HOVER, CINZA_APAGADO = "#3A3A3A", "#454545", "#2B2B2B"
++COR_ROTULO_APOIO = estilo.cinza_tk("gray")          # text_color="gray" do Tk
++# O grid da tela CTk: linha 1 (Tabview, weight=3) e linha 2 (console,
++# weight=1). O Tk dá a cada linha o que ela PEDE e reparte a sobra (ou a
++# falta) pelos pesos. Pedidos medidos no CTk: Tabview 261, CTkTextbox 200.
++PEDIDO_ABAS, PEDIDO_CONSOLE = 261, 200
++PESO_ABAS, PESO_CONSOLE = 3, 1
++# O CTkScrollableFrame de cada aba: conteúdo 6 px dentro, barra 1 px antes da borda.
++RECUO_ROLAGEM = 6
++
++
++def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str | None = None,
++            largura: int | None = None):
++    """CTkLabel de uma linha, anchor="w", 28 px de altura (`width` fixa se pedida)."""
++    r = blocos.rotulo(texto, tamanho=tamanho, negrito=negrito, cor=cor, alinhar="esquerda")
++    r.setWordWrap(False)
++    r.setFixedHeight(blocos.ALTURA_MINIMA_ROTULO)
++    if largura:
++        r.setFixedWidth(largura)
++    return r
++
++
++def _titulo(texto: str):
++    return _rotulo(texto, tamanho=16, negrito=True, cor=COLORS["accent"])
++
++
++# O "▶" do "Iniciar Robô de Edição": o Roboto não o tem, e a reserva da folha
++# (Noto Emoji) desenha o emoji "play" -- um quadrado com o triângulo dentro. O
++# Tk caía numa fonte de símbolos e mostrava só o triângulo; estas são as de
++# símbolos de cada sistema (Windows, Linux, macOS), antes do Noto Emoji.
++FAMILIAS_COM_SIMBOLO = '"Roboto", "Segoe UI Symbol", "DejaVu Sans", "Apple Symbols", "Noto Emoji"'
++
++
++def _botao(texto: str, *, com_simbolo: bool = False, **kw):
++    """`blocos.botao` sem Enter: o Tk não ligava tecla nenhuma aos botões."""
++    b = blocos.botao(texto, **kw)
++    b.setAutoDefault(False)
++    if com_simbolo:
++        b.setStyleSheet(f"{b.styleSheet()} QPushButton {{ font-family: {FAMILIAS_COM_SIMBOLO}; }}")
++    b.setProperty("_folha_base", b.styleSheet())
++    return b
++
++
++def _pintar(botao, fundo: str, hover: str) -> None:
++    """O `configure(fg_color=...)` do CTk: troca o fundo, mantém o resto da folha.
++    `hover` é o hover_color que o botão já tinha (o configure não o mudava)."""
++    botao.setStyleSheet(f"{botao.property('_folha_base')} QPushButton {{ background: {fundo}; }}"
++                        f" QPushButton:hover {{ background: {hover}; }}")
++
++
++def _cor_rotulo(rotulo, cor: str) -> None:
++    rotulo.setStyleSheet(f"font-size: 13px; background: transparent; color: {cor};")
++
++
++def _cartao(corpo, *, fim: int, recuo: int = 0):
++    """CTkFrame #2B2B2B de cantos 8: peças com padx=15, título com pady 10.
++    `recuo` é o padx do próprio cartão (10 na aba de edição)."""
++    linha = QHBoxLayout()
++    linha.setContentsMargins(recuo, 0, recuo, 0)
++    corpo.addLayout(linha)
++    layout = blocos.cartao(linha)
++    layout.setContentsMargins(15, 10, 15, fim)
++    layout.setSpacing(0)
++    return layout
++
++
++def _linha(layout) -> QHBoxLayout:
++    linha = QHBoxLayout()
++    linha.setContentsMargins(0, 0, 0, 0)
++    linha.setSpacing(0)
++    layout.addLayout(linha)
++    return linha
++
++
++def _area_da_aba(aba: QWidget):
++    """CTkScrollableFrame transparente que ocupa a aba, com a barra sempre à
++    vista (o CTk reserva a faixa mesmo sem nada para rolar). Devolve
++    `(area, corpo)`: o conteúdo tem a largura da aba menos 6 + 17."""
++    area, corpo = blocos.area_rolavel(aba.layout(), margem=RECUO_ROLAGEM)
++    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++    # A barra do CTk fica 1 px antes da borda direita: faixa de 17 com a alça
++    # de 8 a 4 px da esquerda (a mesma da Cópia de Fichas).
++    area.verticalScrollBar().setStyleSheet(
++        estilo.folha_rolagem_ctk(margem_vertical=RECUO_ROLAGEM + 4)
++        + f"\nQScrollBar:vertical {{ width: {estilo.LARGURA_ROLAGEM_CTK + 1}px;"
++        f" margin: {RECUO_ROLAGEM + 4}px 5px {RECUO_ROLAGEM + 4}px 4px; }}")
++    corpo.setContentsMargins(RECUO_ROLAGEM, RECUO_ROLAGEM, 0, RECUO_ROLAGEM)
++    return area, corpo
++
++
++def _barra():
++    """CTkProgressBar(progress_color=accent), pack(fill="x", padx=15, pady=15), em 0."""
++    barra = blocos.barra_progresso(barra=blocos.BarraDeProgresso(), cor=COLORS["accent"])
++    barra.definir(0)
++    return barra
++
++
++# =============================================================================
++# MÓDULO 1: CRIA FICHAS NO PMIB (INTERFACE GE VERNOVA)
++# =============================================================================
++class ModuloCriaFichas(ModuleFrame):
++    def __init__(self, parent=None, controller=None) -> None:
++        # Variáveis de Estado
++        self.file_path_excel = None
++        self.file_path_pdm = None
++        self.df_data_completo = None
++        self.df_data_selecionado = None
++        self.df_processed = None
++        self.df_resumo_final = None
++        self.df_edicao_completo = None
++        self.df_edicao_selecionado = None
++        self.bot = None
++        # Catálogo de PDMs da planilha escolhida. Só existe depois da etapa de
++        # IA; a revisão e a conferência pós-portal o consultam.
++        self.catalogo = None
++        self.api_key_gemini = controller.get_key("GEMINI") if controller is not None else ""
++        # Do clique em "3. Analisar" até a revisão fechar, o botão fica
++        # desligado: nada (nem o "Pular IA") o religa no meio da cadeia.
++        self._ia_em_andamento = False
++        self.janela_resumo = None
++        self._df_da_janela_resumo = None
++        super().__init__(parent, controller, titulo="Módulo de Criação", altura_console=None)
++        # Lá a tela não é o ModuleFrame: header pady=10, Tabview pady=0,
++        # console pady=10, dentro do padx/pady=20 do `show_frame`. Os pady
++        # vizinhos SOMAM: 10 entre header e abas, 10 entre abas e console.
++        raiz = self.layout()
++        raiz.setContentsMargins(MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10,
++                                MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10)
++        raiz.setSpacing(0)
++        raiz.insertSpacing(1, 10)                       # header (…, 10) + abas (0, …)
++        raiz.insertSpacing(3, 10)                       # abas (…, 0) + console (10, …)
++
++    # --- montagem -------------------------------------------------------------
++    def _build_ui(self) -> None:
++        # Tabview dentro de um CTkFrame de fundo padrão: o quadro é gray16.
++        self.abas = Abas(cor_fundo=estilo.FUNDO_QUADRO_INTERNO_CTK)
++        self.content_layout.addWidget(self.abas)
++        self.aba_criacao = self.abas.add(ABA_CRIACAO)
++        self.aba_edicao = self.abas.add(ABA_EDICAO)
++        self._build_ui_criacao()
++        self._build_ui_edicao()
++
++    def _build_ui_criacao(self) -> None:
++        self.area_criacao, corpo = _area_da_aba(self.aba_criacao)
++
++        # --- ETAPA 1: CONFIGURAÇÃO E INPUTS ---
++        corpo.addSpacing(10)                            # frm_config: pady=10
++        config = _cartao(corpo, fim=10)
++        self.cartao_config = config.parentWidget()
++        self.rotulo_etapa1 = _titulo("1. Configuração Inicial")
++        config.addWidget(self.rotulo_etapa1)
++        config.addSpacing(15)                           # título (…, 10) + f_proj (5, …)
++
++        # Código do Projeto
++        linha = _linha(config)
++        self.rotulo_projeto = _rotulo("Código do Projeto:", largura=150)
++        linha.addWidget(self.rotulo_projeto)
++        self.entry_projeto = QLineEdit()  # o visual (28 px) é o do CTkEntry, na folha do app
++        self.entry_projeto.setPlaceholderText(PLACEHOLDER_PROJETO)
++        linha.addWidget(self.entry_projeto, 1)
++        linha.addSpacing(10)                            # entry: padx=(0, 10)
++        config.addSpacing(10)                           # f_proj (…, 5) + f_pmib (5, …)
++
++        # Botão Selecionar PMIB
++        linha = _linha(config)
++        self.rotulo_pmib = _rotulo("Arquivo STATUS_PMIB:", largura=150)
++        linha.addWidget(self.rotulo_pmib)
++        self.btn_pmib = _botao("Selecionar Excel (.xlsx)", variante="cinza", largura=200, altura=28)
++        self.btn_pmib.clicked.connect(self.selecionar_excel_pmib)
++        linha.addWidget(self.btn_pmib)
++        linha.addSpacing(10)                            # lbl_status: padx=10
++        self.lbl_status = _rotulo("Aguardando...", cor=COR_ROTULO_APOIO)
++        linha.addWidget(self.lbl_status)
++        linha.addStretch()
++        config.addSpacing(15)                           # f_pmib (…, 5) + f_opts (10, …)
++
++        # Checkbox Pular IA e Botão PDM
++        linha = _linha(config)
++        self.chk_pular = controles.CaixaDeMarcar("Pular IA (Dados já no Excel)",
++                                                 cor_marcada=COLORS["primary"],
++                                                 cor_hover=COLORS["primary_hover"])
++        self.chk_pular.toggled.connect(self._toggle_pdm_button)
++        linha.addWidget(self.chk_pular)
++        linha.addSpacing(20)                            # btn_pdm: padx=20
++        # Texto de 2026-09-22: o módulo aceita a planilha-mestra da Itaipu
++        # (PDMs SAM-GM) direto -- é dela que vêm a classe FSC e as características.
++        self.btn_pdm = _botao("Selecionar planilha de PDMs (mestra)", variante="cinza",
++                              largura_minima=estilo.LARGURA_BOTAO_CTK, altura=28)
++        self.btn_pdm.clicked.connect(self.selecionar_excel_pdm)
++        linha.addWidget(self.btn_pdm)
++        linha.addSpacing(20)
++        self.lbl_status_pdm = _rotulo("", cor=COR_ROTULO_APOIO)
++        linha.addWidget(self.lbl_status_pdm)
++        linha.addStretch()
++
++        # --- ETAPA 2: PROCESSAMENTO ---
++        corpo.addSpacing(20)                            # frm_config (…, 10) + frm_action (10, …)
++        acoes = _cartao(corpo, fim=15)
++        self.cartao_acoes = acoes.parentWidget()
++        self.rotulo_etapa2 = _titulo("2. Execução")
++        acoes.addWidget(self.rotulo_etapa2)
++        acoes.addSpacing(20)                            # título (…, 10) + grade (10, …)
++
++        # A "tabela invisível" de lá: colunas 0 e 1 dividem o espaço por igual
++        # (uniform, CONTANDO o padx de cada célula: (0, 5) e (5, 15)); a 2 é o
++        # Limpar de 100 px, das duas linhas.
++        grade = _linha(acoes)
++        branco = COLORS["text_white"]
++        self.btn_run_ai = _botao("3. Analisar (IA)", variante="primario", altura=40, tamanho_fonte=14,
++                                 negrito=True, cor_texto=branco)
++        self.btn_run_ai.clicked.connect(self.run_ai_thread)
++        self.btn_run_auto = _botao("4. Robô Web", variante="primario", altura=40, tamanho_fonte=14,
++                                   negrito=True, cor_texto=branco)
++        self.btn_run_auto.clicked.connect(self.run_automation_thread)
++        self.btn_resumo = _botao("Ver Resumo", variante="cinza", altura=40, tamanho_fonte=12,
++                                 negrito=True, cor_texto=branco)
++        self.btn_resumo.clicked.connect(self.abrir_resumo_manual)
++        self.btn_save = _botao("5. Salvar no Excel", variante="primario", altura=40, tamanho_fonte=12,
++                               negrito=True, cor_texto=branco)
++        self.btn_save.clicked.connect(self.salvar_excel)
++        for (cima, baixo), margens in (((self.btn_run_ai, self.btn_resumo), (0, 0, 5, 0)),
++                                       ((self.btn_run_auto, self.btn_save), (5, 0, 15, 0))):
++            coluna = QWidget()
++            coluna.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
++            caixa = QVBoxLayout(coluna)
++            caixa.setContentsMargins(*margens)
++            caixa.setSpacing(10)                        # linha 0 pady=(0, 5) + linha 1 (5, 0)
++            for b in (cima, baixo):
++                b.setEnabled(False)
++                caixa.addWidget(b)
++            grade.addWidget(coluna, 1)
++        self.btn_reset = _botao(estilo.mono("🗑️\nLimpar"), variante="perigo", largura=100,
++                                tamanho_fonte=14, negrito=True, cor_texto=branco)
++        # sticky="nsew" nas duas linhas: a altura é a da grade (90), não a das
++        # duas linhas de texto (Ignored: o emoji não pode alargar a grade).
++        self.btn_reset.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Ignored)
++        self.btn_reset.clicked.connect(self.resetar_processo)
++        grade.addWidget(self.btn_reset)
++        acoes.addSpacing(25)                            # grade (…, 10) + barra (15, …)
++
++        self.progress = _barra()
++        acoes.addWidget(self.progress)
++        corpo.addSpacing(10)                            # frm_action: pady=10
++
++    def _build_ui_edicao(self) -> None:
++        self.area_edicao, corpo = _area_da_aba(self.aba_edicao)
++
++        # --- ETAPA 1: CONFIGURAÇÃO ---
++        corpo.addSpacing(10)                            # frm_config: pady=10, padx=10
++        config = _cartao(corpo, fim=10, recuo=10)
++        self.cartao_config_edicao = config.parentWidget()
++        self.rotulo_etapa1_edicao = _titulo("1. Configuração da Edição")
++        config.addWidget(self.rotulo_etapa1_edicao)
++        config.addSpacing(15)                           # título (…, 10) + f_proj (5, …)
++
++        linha = _linha(config)
++        self.rotulo_novo_projeto = _rotulo("Novo Código do Projeto:", largura=180)
++        linha.addWidget(self.rotulo_novo_projeto)
++        self.entry_novo_projeto = QLineEdit()
++        self.entry_novo_projeto.setPlaceholderText("Ex: NOVO CÓDIGO AQUI...")
++        linha.addWidget(self.entry_novo_projeto, 1)
++        linha.addSpacing(10)                            # entry: padx=(0, 10)
++        config.addSpacing(15)                           # f_proj (…, 5) + f_excel (10, …)
++
++        linha = _linha(config)
++        self.rotulo_excel_edicao = _rotulo("Selecionar Fichas (Excel):", largura=180)
++        linha.addWidget(self.rotulo_excel_edicao)
++        self.btn_excel_edicao = _botao("Abrir Excel e Selecionar", variante="cinza", largura=200, altura=28)
++        self.btn_excel_edicao.clicked.connect(self.selecionar_excel_edicao)
++        linha.addWidget(self.btn_excel_edicao)
++        linha.addSpacing(10)                            # lbl_status_edicao: padx=10
++        self.lbl_status_edicao = _rotulo("Nenhum item selecionado.", cor=COR_ROTULO_APOIO)
++        linha.addWidget(self.lbl_status_edicao)
++        linha.addStretch()
++
++        # --- ETAPA 2: EXECUÇÃO ---
++        corpo.addSpacing(20)                            # frm_config (…, 10) + frm_action (10, …)
++        acoes = _cartao(corpo, fim=15, recuo=10)
++        self.cartao_acoes_edicao = acoes.parentWidget()
++        self.rotulo_etapa2_edicao = _titulo("2. Execução em Massa")
++        acoes.addWidget(self.rotulo_etapa2_edicao)
++        acoes.addSpacing(20)                            # título (…, 10) + f_btns (10, …)
++        self.btn_run_edicao = _botao(estilo.mono("▶ Iniciar Robô de Edição"), variante="primario", altura=40,
++                                     tamanho_fonte=14, negrito=True, cor_texto=COLORS["text_white"],
++                                     com_simbolo=True)
++        self.btn_run_edicao.clicked.connect(self.run_edicao_thread)
++        self.btn_run_edicao.setEnabled(False)
++        acoes.addWidget(self.btn_run_edicao)
++        acoes.addSpacing(25)                            # f_btns (…, 10) + barra (15, …)
++        self.progress_edicao = _barra()
++        acoes.addWidget(self.progress_edicao)
++        corpo.addSpacing(10)
++
++    # --- altura: abas × console como o grid do Tk ---------------------------------
++    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        self._repartir_altura()
++        super().resizeEvent(evento)
++
++    def _repartir_altura(self) -> None:
++        """Abas × console como o grid do Tk: cada um com o que pede, a sobra
++        repartida 3:1 (o Tk trunca a parte das abas; o resto é do console)."""
++        margens = self.layout().contentsMargins()
++        disponivel = (self.height() - margens.top() - margens.bottom()
++                      - self.header.sizeHint().height() - 10 - 10)
++        sobra = disponivel - PEDIDO_ABAS - PEDIDO_CONSOLE
++        abas = PEDIDO_ABAS + int(sobra * PESO_ABAS / (PESO_ABAS + PESO_CONSOLE))
++        self.console.setFixedHeight(max(disponivel - abas, 0))
++
++    # --- Lógica Mantida (apenas ajustada para a nova UI) ---
++    def _toggle_pdm_button(self, *_marcada) -> None:
++        if self.chk_pular.isChecked():
++            self.btn_pdm.setEnabled(False)
++            _pintar(self.btn_pdm, CINZA_APAGADO, CINZA_HOVER)  # Cor "apagada"
++            if not self._ia_em_andamento:
++                self.btn_run_ai.setEnabled(True)
++            self.btn_run_ai.setText("3. Processar (Direto)")
++        else:
++            self.btn_pdm.setEnabled(True)
++            _pintar(self.btn_pdm, CINZA, CINZA_HOVER)
++            self.btn_run_ai.setText("3. Analisar (IA)")
++
++    def selecionar_excel_pmib(self) -> None:
++        # Antes do diálogo: escolher o arquivo para depois ouvir que o módulo
++        # não carregou seria pedir o trabalho à toa.
++        data_manager = self.backend("DataManager")
++        if data_manager is None:
++            return
++        path = file_dialogs.ask_open_file("cria_fichas.excel_pmib", "excel", filetypes=[("Excel", "*.xlsx")])
++        if not path:
++            return
++        self.file_path_excel = path
++        cols = ["DESCRIÇÃO", "CÓDIGO PMIB"]
++
++        df, cod_sug, erro = data_manager.carregar_planilha_inteligente(path, "Lista de Materiais", cols)
++        if df is None:
++            df, cod_sug, erro = data_manager.carregar_planilha_inteligente(path, 0, cols)
++
++        if df is not None:
++            self.df_data_completo = df
++            self.log(f"Carregado: {len(df)} linhas.")
++
++            if cod_sug:
++                self.entry_projeto.setText(cod_sug)  # Escreve o novo código
++                self.log("Código de Projeto preenchido automaticamente.")
++
++            JanelaSelecao(self, df, self.pos_selecao)
++        else:
++            QMessageBox.critical(self, "Erro", erro)
++
++    def pos_selecao(self, indices) -> None:
++        # `reset_index(drop=True)`: o número do item é a CHAVE do casamento da
++        # resposta da IA (`cria_fichas.alinhar_resposta`), e os itens precisam
++        # ser 1, 2, 3 -- não o número da linha na planilha inteira.
++        self.df_data_selecionado = self.df_data_completo.iloc[indices].copy().reset_index(drop=True)
++        self.log(f"Selecionado: {len(self.df_data_selecionado)} itens.")
++        self.lbl_status.setText(f"{len(self.df_data_selecionado)} itens selecionados")
++        _cor_rotulo(self.lbl_status, COLORS["accent"])
++        _pintar(self.btn_pmib, COLORS["primary"], CINZA_HOVER)  # Marca visual de sucesso
++        self._toggle_pdm_button()
++        if not self.chk_pular.isChecked():
++            _pintar(self.btn_pdm, CINZA, CINZA_HOVER)
++
++    def selecionar_excel_pdm(self) -> None:
++        path = file_dialogs.ask_open_file("cria_fichas.excel_pdm", "excel",
++                                          filetypes=[("Arquivos Excel", "*.xlsx;*.xls")])
++        if path:
++            self.file_path_pdm = path
++            if not self._ia_em_andamento:
++                self.btn_run_ai.setEnabled(True)
++            _pintar(self.btn_pdm, COLORS["primary"], CINZA_HOVER)
++
++            # Pega apenas o nome do arquivo final (ex: "planilha.xlsx") ignorando as pastas
++            nome_arquivo = path.split("/")[-1]
++            self.lbl_status_pdm.setText(f"Selecionado: {nome_arquivo}")
++            _cor_rotulo(self.lbl_status_pdm, COLORS["accent"])
++            self.log(f"PDMs carregados: {nome_arquivo}")
++
++    # --- IA: clique -> worker -> revisão (uma cadeia, o botão desligado nela toda)
++    def run_ai_thread(self) -> None:
++        cod_proj = self.entry_projeto.text()
++        if not cod_proj:
++            QMessageBox.warning(self, "Aviso", "Preencha o Código do Projeto.")
++            return
++        pular = self.chk_pular.isChecked()
++        if not pular and not self.file_path_pdm:
++            QMessageBox.warning(self, "Aviso", "Selecione o arquivo de PDMs antes de iniciar a IA.")
++            return
++        categorizador = None
++        if not pular:
++            categorizador = self.backend("GeminiCategorizer")
++            if categorizador is None:
++                return
++        self.api_key_gemini = self.controller.get_key("GEMINI") if self.controller is not None else ""
++
++        self._ia_em_andamento = True
++        self.btn_run_ai.setEnabled(False)
++        blocos.modo_indeterminado(self.progress, True)
++        # Sem `botao=`: o botão NÃO volta no fim do worker -- volta só se a
++        # cadeia falhar ou a revisão for fechada sem confirmar.
++        self.iniciar_tarefa(self._ai_worker, cod_proj, pular, categorizador)
++
++    def _ai_worker(self, cod_proj, pular, categorizador) -> None:
++        ok = False
++        try:
++            final_data = []
++            if pular:
++                self.log("Modo 'Pular IA'. Lendo dados do Excel...")
++                for index, row in self.df_data_selecionado.iterrows():
++                    item_json = {
++                        'item_processado': index,
++                        'codigo_projeto': cod_proj,
++                        'descricao_original': row['DESCRIÇÃO'],
++                        'pdm_escolhido': row.get('PDM', 'NENHUM'),
++                        'descricao_curta': row.get('DESC_CURTA', str(row['DESCRIÇÃO'])[:40]),
++                        'origem': row.get('ORIGEM', 'Nacional'),
++                        'tipo': row.get('TIPO', 'Não Reparável'),
++                        'unidade': row.get('UNIDADE', 'Unidade'),
++                        'tipo de fabricação': row.get('FABRICACAO', 'Catálogo'),
++                    }
++                    final_data.append(item_json)
++                self.log(f"Processados {len(final_data)} itens.")
++            else:
++                # Construir o categorizador ANTES do prompt é o que permite logar
++                # o modelo de verdade (o construtor só resolve config, não chama a API).
++                cat = categorizador(self.api_key_gemini)
++                self.log(f"Processando com IA ({cat.modelo_em_uso})...")
++
++                # A planilha-mestra da Itaipu (abas TEMPLATE_PDM/GRUPOS_CLASES)
++                # direto, ou o formato manipulado antigo.
++                self.catalogo = pdm_catalogo.carregar(self.file_path_pdm)
++                self.log(
++                    f"Catálogo: {len(self.catalogo)} PDMs, "
++                    f"{len(self.catalogo.classes_com_pdm())} classes com PDM."
++                )
++
++                res_json = cat.processar_lote(self.df_data_selecionado, self.catalogo, callback_log=self.log)
++                sem_resposta = 0
++                fora_do_catalogo = 0
++                for i, item_json in enumerate(res_json):
++                    row = self.df_data_selecionado.iloc[i]
++                    if item_json is None:
++                        # A IA não respondeu este item: fica 'NENHUM' para a
++                        # revisão, sem deslocar os seguintes.
++                        sem_resposta += 1
++                        item_json = {"pdm_escolhido": "NENHUM"}
++                        self.log(
++                            f" -> ⚠️ Item {i + 1} sem resposta da IA. Marcado "
++                            f"'NENHUM' para revisão: {str(row['DESCRIÇÃO'])[:40]}"
++                        )
++
++                    ok_pdm, motivo = cria_fichas_svc.conferir_pdm(item_json, self.catalogo)
++                    if not ok_pdm:
++                        # PDM inventado pela IA: não pode chegar ao filtro do
++                        # portal, que aperta ENTER e leva o que estiver destacado.
++                        fora_do_catalogo += 1
++                        self.log(f" -> ⚠️ Item {i + 1}: {motivo}. Marcado 'NENHUM'.")
++                        item_json["pdm_escolhido"] = "NENHUM"
++
++                    item_json['codigo_projeto'] = cod_proj
++                    item_json['descricao_original'] = row['DESCRIÇÃO']
++                    final_data.append(item_json)
++
++                self.log(
++                    f"IA Finalizada. {len(final_data)} itens | "
++                    f"sem resposta: {sem_resposta} | "
++                    f"PDM fora do catálogo: {fora_do_catalogo}"
++                )
++
++            self.df_processed = pd.DataFrame(final_data)
++            self.log("Abrindo janela de Revisão...")
++            ok = True
++        except Exception as e:  # noqa: BLE001 -- vira log, como lá
++            self.log(f"Erro no processamento: {e}")
++        interface.na_interface(self._depois_da_ia, ok)
++
++    def _depois_da_ia(self, ok: bool) -> None:
++        self._parar_progresso()
++        if ok:
++            self.abrir_revisao_pdm()
++        else:
++            self._fim_da_cadeia_da_ia()
++
++    def _parar_progresso(self) -> None:
++        try:
++            blocos.modo_indeterminado(self.progress, False)
++            self.progress.definir(0)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def _fim_da_cadeia_da_ia(self) -> None:
++        """A cadeia acabou sem a revisão confirmada: o botão volta."""
++        self._ia_em_andamento = False
++        try:
++            self.btn_run_ai.setEnabled(True)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def abrir_revisao_pdm(self) -> None:
++        if self.df_processed is not None and not self.df_processed.empty:
++            janela = JanelaRevisaoPDM(self, self.df_processed, self._pos_revisao_concluida,
++                                      catalogo=self.catalogo)
++            janela.finished.connect(self._revisao_fechada)
++        else:
++            QMessageBox.critical(self, "Erro", "Nenhum dado processado.")
++            self._fim_da_cadeia_da_ia()
++
++    def _revisao_fechada(self, resultado) -> None:
++        if resultado == QDialog.DialogCode.Accepted:
++            self._ia_em_andamento = False
++        else:
++            # Fechada no "X": lá o botão ficava desligado até o "Limpar".
++            self._fim_da_cadeia_da_ia()
++
++    def _pos_revisao_concluida(self, df_atualizado) -> None:
++        self.df_processed = df_atualizado
++        self.log(f"Revisão OK. {len(self.df_processed)} itens prontos.")
++        self.btn_run_auto.setEnabled(True)
++        _pintar(self.btn_run_auto, COLORS["accent"], COLORS["primary_hover"])
++        self.btn_run_ai.setEnabled(False)
++        self.btn_run_ai.setText("3. Analisar (OK)")
++
++    # --- robô de criação ---------------------------------------------------------
++    def run_automation_thread(self) -> None:
++        automacao = self.backend("AutomacaoPMIB")
++        if automacao is None:
++            return
++        self.iniciar_tarefa(self._bot_worker, automacao, botao=self.btn_run_auto)
++
++    def _definir_progresso(self, barra, fracao) -> None:
++        try:
++            barra.definir(fracao)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def _bot_worker(self, automacao) -> None:
++        self.bot = automacao()
++        try:
++            self.bot.iniciar_driver()
++            self.bot.abrir_portal(URL_LISTA)
++            # A instrução de QUAL página abrir: a janela nasce na thread da
++            # interface e este worker espera o "Continuar".
++            self.pausar_e_esperar(MSG_LOGIN_NOVA_FICHA)
++            self.log("Iniciando Robô...")
++            sucessos = []
++            total = len(self.df_processed)
++
++            # Variável de controle para abortar o loop principal (STOP)
++            abortar_automacao = False
++
++            for idx, row in self.df_processed.iterrows():
++                if abortar_automacao:
++                    break
++
++                interface.na_interface(self._definir_progresso, self.progress, (idx + 1) / total)
++                self.log(f"Processando Item {idx + 1}/{total}: {row['descricao_original'][:30]}...")
++
++                # Cópia mutável da linha, para permitir alterar o PDM
++                row_atual = row.copy()
++                retry = True
++
++                while retry:
++                    status, res = self.bot.processar_item_individual(row_atual)
++
++                    if status == "SUCESSO":
++                        self.log(f" -> ✅ SUCESSO: PMIB {res[0]} | PDM {res[1]}")
++                        self._conferir_pdm_do_portal(
++                            pedido=row_atual.get('pdm_escolhido', ''),
++                            gravado=res[1],
++                            pmib=res[0],
++                        )
++                        sucessos.append((row_atual['descricao_original'], res[0], res[1]))
++                        retry = False
++
++                    elif status == "PULAR":
++                        self.log(" -> ⏭️ PULADO automaticamente (PDM era 'NENHUM').")
++                        sucessos.append((row_atual['descricao_original'], "VERIFICAR (PULADO)",
++                                         "VERIFICAR (PULADO)"))
++                        retry = False
++
++                    else:
++                        self.log(f" -> ❌ ERRO no Selenium: {res}")
++
++                        # A janela abre na thread da interface; o robô espera a decisão.
++                        decisao = JanelaAcaoRobo(self, msg_erro=res, pdm_atual=row_atual.get('pdm_escolhido', ''))
++                        escolha = decisao.escolha
++
++                        if escolha == "RETRY":
++                            self.log(" -> 🔄 Retentativa solicitada pelo usuário.")
++                            # SEGURA o robô até o OK (a pessoa arruma o navegador).
++                            self.avisar("Preparo", MSG_PREPARO, esperar=True)
++                            # O loop 'while' continua (retry = True)
++
++                        elif escolha == "CHANGE_PDM":
++                            novo_pdm = decisao.novo_pdm
++                            self.log(f" -> ✏️ PDM alterado pelo usuário para: {novo_pdm}")
++                            row_atual['pdm_escolhido'] = novo_pdm
++                            self.avisar("Preparo", MSG_PREPARO, esperar=True)
++                            # O loop 'while' continua com o 'row_atual' modificado
++
++                        elif escolha == "SKIP":
++                            self.log(" -> ⏭️ Item PULADO pelo usuário.")
++                            sucessos.append((row_atual['descricao_original'], "VERIFICAR (PULADO)",
++                                             "VERIFICAR (PULADO)"))
++                            # Força o reset da tela para o próximo item do laço iniciar limpo
++                            try:
++                                self.bot.abrir_portal(URL_LISTA)
++                            except Exception:  # noqa: BLE001 -- como lá: segue para o próximo
++                                pass
++                            retry = False
++
++                        elif escolha == "STOP":
++                            self.log(" -> 🛑 Automação interrompida pelo usuário. Salvando progresso parcial...")
++                            # Registro de erro apenas para o item que estava quebrado
++                            sucessos.append((row_atual['descricao_original'], "INTERROMPIDO", "INTERROMPIDO"))
++                            retry = False
++                            abortar_automacao = True  # Quebra o for principal
++
++            # --- Fim do Loop (ou Interrupção) ---
++            self.log("Montando resumo final...")
++            df_selenium = pd.DataFrame(sucessos, columns=['descricao_original', 'PMIB_CRIADO', 'PDM_COM_REVISAO'])
++            self.df_resumo_final = pd.merge(self.df_processed, df_selenium, on='descricao_original', how='inner')
++
++            interface.na_interface(self._fim_do_robo)
++
++            # Finaliza o driver
++            try:
++                self.bot.driver.quit()
++            except Exception:  # noqa: BLE001 -- navegador já fechado
++                pass
++
++        except Exception as e:  # noqa: BLE001 -- vira log, como lá
++            self.log(f"Erro Fatal na Thread do Robô: {e}")
++
++    def _fim_do_robo(self) -> None:
++        try:
++            self._mostrar_resumo()
++            self.btn_save.setEnabled(True)
++            self.btn_resumo.setEnabled(True)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def _conferir_pdm_do_portal(self, pedido, gravado, pmib) -> None:
++        """O PDM que o portal gravou é o que pedimos?
++
++        O fluxo do portal é filtrar-e-apertar-ENTER: uma string que casa vários
++        PDMs, ou nenhum, leva o que estiver destacado. Divergência aqui é a
++        única forma de descobrir isso sem reabrir a ficha. Só registra no log:
++        a ficha já foi criada, e decidir o que fazer com ela é do usuário.
++        """
++        codigo_pedido = cria_fichas_svc.codigo_do_pdm(pedido)
++        codigo_gravado = cria_fichas_svc.codigo_do_pdm(gravado)
++        if not codigo_pedido or not codigo_gravado:
++            return
++        if codigo_pedido != codigo_gravado:
++            self.log(
++                f" -> ⚠️ DIVERGÊNCIA no PMIB {pmib}: pedimos {codigo_pedido} "
++                f"e o portal gravou {codigo_gravado}. Confira a ficha."
++            )
++            return
++
++        self._conferir_revisao_do_pdm(codigo_gravado, gravado, pmib)
++
++    def _conferir_revisao_do_pdm(self, codigo, gravado, pmib) -> None:
++        """A ficha saiu com a revisão mais nova do PDM? (É o que a Itaipu cobra.)
++
++        - **portal < Master**: a ficha foi criada com uma revisão velha;
++        - **portal > Master**: o Master local está desatualizado (o aviso é
++          para pedir um novo à Itaipu).
++        """
++        revisao_gravada = cria_fichas_svc.revisao_do_pdm(gravado)
++        if revisao_gravada is None or self.catalogo is None:
++            return
++        pdm = self.catalogo.por_codigo(codigo)
++        if pdm is None or pdm.revisao is None:
++            return
++
++        if revisao_gravada < pdm.revisao:
++            self.log(
++                f" -> ⚠️ PMIB {pmib}: a ficha ficou na revisão R{revisao_gravada} "
++                f"do {codigo}, mas o catálogo já tem R{pdm.revisao}. A Itaipu "
++                f"costuma pedir a revisão mais nova."
++            )
++        elif revisao_gravada > pdm.revisao:
++            self.log(
++                f" -> ℹ️ PMIB {pmib}: o portal usou R{revisao_gravada} do "
++                f"{codigo} e a sua planilha de PDMs só tem até R{pdm.revisao}. "
++                f"Vale pedir um Master atualizado à Itaipu."
++            )
++
++    # --- resumo e Excel ------------------------------------------------------------
++    def abrir_resumo_manual(self) -> None:
++        if self.df_resumo_final is not None:
++            self._mostrar_resumo()
++
++    def _mostrar_resumo(self) -> None:
++        """Uma janela de resumo só: o segundo clique traz a aberta para a frente.
++        Um lote novo fecha a do lote anterior e abre a dele."""
++        janela = self.janela_resumo
++        try:
++            aberta = janela is not None and janela.isVisible()
++        except RuntimeError:
++            aberta = False  # destruída pelo Qt
++        if aberta and self._df_da_janela_resumo is self.df_resumo_final:
++            janela.raise_()
++            janela.activateWindow()
++            return
++        if aberta:
++            janela.close()
++        self.janela_resumo = JanelaResumo(self, self.df_resumo_final)
++        self._df_da_janela_resumo = self.df_resumo_final
++
++    def salvar_excel(self) -> None:
++        if self.df_resumo_final is not None:
++            data_manager = self.backend("DataManager")
++            if data_manager is None:
++                return
++            lista = [(r['descricao_original'], r['PMIB_CRIADO'], r['PDM_COM_REVISAO'])
++                     for _, r in self.df_resumo_final.iterrows()]
++
++            salvo_com_sucesso = False
++            while not salvo_com_sucesso:
++                ok, msg = data_manager.atualizar_excel_final(self.file_path_excel, "Lista de Materiais", lista)
++
++                if ok:
++                    QMessageBox.information(self, "Sucesso", f"Planilha atualizada!\n{msg}")
++                    self.log(f"✅ Excel salvo com sucesso: {msg}")
++                    salvo_com_sucesso = True
++                elif "ABERTO" in msg.upper() or "PERMISSION" in msg.upper():
++                    # Erro de permissão (arquivo aberto): o `askretrycancel` de lá.
++                    botoes = QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel
++                    resposta = QMessageBox.warning(
++                        self, "Arquivo Aberto",
++                        "O arquivo Excel está ABERTO ou bloqueado.\n\nPor favor, FECHE o arquivo "
++                        "_STATUS_PMIB no Excel e clique em 'Repetir' para tentar salvar novamente.",
++                        botoes)
++                    if resposta != QMessageBox.StandardButton.Retry:  # "Cancelar" ou o "X"
++                        self.log("⚠️ Salvamento cancelado pelo usuário. Os dados não foram gravados no Excel.")
++                        break
++                else:
++                    # Outro erro inesperado (ex: aba não encontrada). Interrompe o loop.
++                    QMessageBox.critical(self, "Erro ao Salvar", msg)
++                    self.log(f"❌ Erro ao salvar Excel: {msg}")
++                    break
++        else:
++            QMessageBox.warning(self, "Aviso", "Não há dados processados para salvar.")
++
++    def resetar_processo(self) -> None:
++        """Limpa todo o estado do módulo para iniciar um novo lote limpo."""
++        # 1. Limpa variáveis de backend
++        self.file_path_excel = None
++        self.file_path_pdm = None
++        self.df_data_completo = None
++        self.df_data_selecionado = None
++        self.df_processed = None
++        self.df_resumo_final = None
++        if self.bot:
++            try:
++                self.bot.driver.quit()
++            except Exception:  # noqa: BLE001 -- navegador já fechado
++                pass
++            self.bot = None
++
++        # 2. Reseta a UI visualmente
++        self.lbl_status.setText("Aguardando...")
++        _cor_rotulo(self.lbl_status, COR_ROTULO_APOIO)
++        _pintar(self.btn_pmib, CINZA, CINZA_HOVER)
++
++        self.lbl_status_pdm.setText("")
++        _cor_rotulo(self.lbl_status_pdm, COR_ROTULO_APOIO)
++        if not self.chk_pular.isChecked():
++            _pintar(self.btn_pdm, CINZA, CINZA_HOVER)
++
++        self.entry_projeto.clear()
++
++        blocos.modo_indeterminado(self.progress, False)
++        self.progress.definir(0)  # Zera a barrinha
++
++        self.console.clear()
++        self.log("Sistema limpo. Pronto para iniciar um novo lote.")
++
++        # 3. Retorna os botões da Criação
++        self.btn_run_ai.setEnabled(False)
++        self.btn_run_ai.setText("3. Analisar (IA)")
++        self.btn_run_auto.setEnabled(False)
++        _pintar(self.btn_run_auto, COLORS["primary"], COLORS["primary_hover"])
++        self.btn_resumo.setEnabled(False)
++        self.btn_save.setEnabled(False)
++
++        # 4. Limpa as variáveis e visuais da Aba de Edição
++        self.df_edicao_completo = None
++        self.df_edicao_selecionado = None
++        self.lbl_status_edicao.setText("Nenhum item selecionado.")
++        _cor_rotulo(self.lbl_status_edicao, COR_ROTULO_APOIO)
++        _pintar(self.btn_excel_edicao, CINZA, CINZA_HOVER)
++        self.entry_novo_projeto.clear()
++        self.progress_edicao.definir(0)
++        self.btn_run_edicao.setEnabled(False)
++
++    # ---------------------------------------------------------
++    # FUNÇÕES DA ABA DE EDIÇÃO
++    # ---------------------------------------------------------
++    def selecionar_excel_edicao(self) -> None:
++        data_manager = self.backend("DataManager")
++        if data_manager is None:
++            return
++        path = file_dialogs.ask_open_file("cria_fichas.excel_edicao", "excel", filetypes=[("Excel", "*.xlsx")])
++        if not path:
++            return
++        cols = ["DESCRIÇÃO", "CÓDIGO PMIB"]
++        df, cod_sug, erro = data_manager.carregar_planilha_inteligente(path, "Lista de Materiais", cols)
++        if df is None:
++            df, cod_sug, erro = data_manager.carregar_planilha_inteligente(path, 0, cols)
++        if df is not None:
++            # FILTRO INTELIGENTE: só as linhas que têm PMIB (não se edita item não criado)
++            df_valido = df[df['CÓDIGO PMIB'].astype(str).str.strip() != ""]
++            df_valido = df_valido.dropna(subset=['CÓDIGO PMIB'])
++
++            if df_valido.empty:
++                QMessageBox.warning(self, "Aviso", "Nenhum CÓDIGO PMIB encontrado nesta planilha. "
++                                                   "Certifique-se de que as fichas já foram criadas.")
++                return
++
++            self.df_edicao_completo = df_valido.reset_index(drop=True)
++            self.log(f"Aba Edição: Carregado {len(self.df_edicao_completo)} itens válidos com PMIB.")
++
++            # Aproveita a mesma inteligência de sugerir o projeto
++            if cod_sug:
++                self.entry_novo_projeto.setText(cod_sug)
++
++            JanelaSelecao(self, self.df_edicao_completo, self.pos_selecao_edicao)
++        else:
++            QMessageBox.critical(self, "Erro", erro)
++
++    def pos_selecao_edicao(self, indices) -> None:
++        self.df_edicao_selecionado = self.df_edicao_completo.iloc[indices].copy()
++        qtd = len(self.df_edicao_selecionado)
++
++        self.log(f"Aba Edição: Selecionado {qtd} fichas para editar.")
++        self.lbl_status_edicao.setText(f"{qtd} fichas selecionadas")
++        _cor_rotulo(self.lbl_status_edicao, COLORS["accent"])
++        _pintar(self.btn_excel_edicao, COLORS["primary"], CINZA_HOVER)
++        self.btn_run_edicao.setEnabled(qtd > 0)
++
++    def run_edicao_thread(self) -> None:
++        novo_projeto = self.entry_novo_projeto.text().strip()
++        if not novo_projeto:
++            QMessageBox.warning(self, "Aviso", "Preencha o Novo Código do Projeto.")
++            return
++
++        if self.df_edicao_selecionado is None or self.df_edicao_selecionado.empty:
++            QMessageBox.warning(self, "Aviso", "Selecione ao menos uma ficha no Excel para editar.")
++            return
++
++        # Extrai automaticamente a lista de PMIBs da coluna do DataFrame
++        lista_pmibs = self.df_edicao_selecionado['CÓDIGO PMIB'].apply(
++            lambda x: str(x).strip() if pd.notna(x) else "").tolist()
++        # Filtro extra de segurança (remove eventuais 'nan')
++        lista_pmibs = [p for p in lista_pmibs if p and p.lower() != 'nan']
++
++        automacao = self.backend("AutomacaoPMIB")
++        if automacao is None:
++            return
++        self.iniciar_tarefa(self._edicao_worker, lista_pmibs, novo_projeto, automacao,
++                            botao=self.btn_run_edicao)
++
++    def _edicao_worker(self, lista_pmibs, novo_projeto, automacao) -> None:
++        self.bot = automacao()
++        try:
++            self.bot.iniciar_driver()
++            self.bot.abrir_portal(URL_LISTA)
++            # A instrução da página PRINCIPAL; o worker espera o "Continuar".
++            self.pausar_e_esperar(MSG_LOGIN_PAGINA_PRINCIPAL)
++
++            self.log(f"Iniciando Edição em Massa de {len(lista_pmibs)} fichas...")
++
++            for idx, pmib in enumerate(lista_pmibs):
++                interface.na_interface(self._definir_progresso, self.progress_edicao,
++                                       (idx + 1) / len(lista_pmibs))
++                self.log(f"Editando PMIB [{idx + 1}/{len(lista_pmibs)}]: {pmib}...")
++
++                status, msg = self.bot.atualizar_projeto_em_massa(pmib, novo_projeto)
++
++                if status == "SUCESSO":
++                    self.log(f" -> ✅ SUCESSO: Projeto do {pmib} atualizado.")
++                else:
++                    # Registra e tenta o próximo, para não travar o lote
++                    self.log(f" -> ❌ ERRO no {pmib}: {msg}")
++
++            self.log("Edição em massa concluída!")
++            self.avisar("Concluído", "Processo de edição em massa finalizado. Verifique o log.")
++
++        except Exception as e:  # noqa: BLE001 -- vira log, como lá
++            self.log(f"Erro Fatal na Edição: {e}")
++        finally:
++            try:
++                self.bot.driver.quit()
++            except Exception:  # noqa: BLE001 -- navegador já fechado
++                pass
+diff --git a/sigft/app_qt/widgets/blocos.py b/sigft/app_qt/widgets/blocos.py
+index cf47bd8..358ee06 100644
+--- a/sigft/app_qt/widgets/blocos.py
++++ b/sigft/app_qt/widgets/blocos.py
+@@ -261,3 +261,24 @@ def slider(*, minimo: int = 0, maximo: int = 100, largura: int = 200, cor_botao:
+     if folha:
+         s.setStyleSheet(folha.strip())
+     return s
++
++
++class BarraDeProgresso(QProgressBar):
++    """CTkProgressBar que guarda a fração e a redesenha quando a largura muda.
++
++    `definir_progresso` converte a fração em valor PELA LARGURA da barra (as
++    pontas redondas); sem refazer a conta no resize, o `set(0)` feito antes de
++    a tela aparecer viraria um trecho de 8 % numa barra de 870 px. Estilizar com
++    `barra_progresso(barra=BarraDeProgresso(), ...)`. (Era `_BarraDeProgresso`
++    da Cópia de Fichas; a Criação de Fichas precisa da mesma.)
++    """
++
++    fracao = 0.0
++
++    def definir(self, fracao: float) -> None:
++        self.fracao = float(fracao)
++        definir_progresso(self, self.fracao)
++
++    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        super().resizeEvent(evento)
++        definir_progresso(self, self.fracao)
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+index ff6afbd..1c03f95 100644
+--- a/sigft/app_qt/widgets/espera.py
++++ b/sigft/app_qt/widgets/espera.py
+@@ -102,10 +102,18 @@ class DialogosDeEspera:
+             return texto if ok else None
+         return self._na_interface_e_esperar(pedir)
+ 
+-    def avisar(self, titulo: str, mensagem: str, tipo: str = "info") -> None:
+-        """Mostra e segue: o worker não espera a pessoa fechar o aviso."""
++    def avisar(self, titulo: str, mensagem: str, tipo: str = "info", *, esperar: bool = False) -> None:
++        """Mostra e segue: o worker não espera a pessoa fechar o aviso.
++
++        `esperar=True`: o worker só segue depois do OK -- o `messagebox`
++        chamado de dentro do worker no CustomTkinter, que bloqueava ali (o
++        "Preparo" do robô de Criação de Fichas é uma pausa de propósito).
++        """
+         funcao = {"info": QMessageBox.information, "aviso": QMessageBox.warning,
+                   "erro": QMessageBox.critical}[tipo]
++        if esperar:
++            self._na_interface_e_esperar(lambda: funcao(self, titulo, mensagem))
++            return
+         if interface.na_thread_da_interface():
+             funcao(self, titulo, mensagem)
+         else:
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+index 5b90bfd..d197f4e 100644
+--- a/tests/test_qt_espera.py
++++ b/tests/test_qt_espera.py
+@@ -219,3 +219,41 @@ def test_falha_ao_construir_o_dialogo_solta_o_worker(qt_interface, qtbot, monkey
+     assert terminou == [True]
+     assert respostas == [False]
+     assert "falha de construcao" in capsys.readouterr().err
++
++
++def test_avisar_e_esperar_segura_o_worker_ate_o_ok(qt_interface, qtbot, monkeypatch):
++    # E4.9: o "Preparo" do robô de Criação de Fichas era um `showinfo` chamado
++    # de dentro do worker, e SEGURAVA o robô até o OK (é a pausa para arrumar o
++    # navegador). `avisar(..., esperar=True)` abre na thread da interface e só
++    # devolve depois que a caixa fechou.
++    from sigft.app_qt.widgets import espera
++
++    seguiu = threading.Event()
++    chamadas = []
++    # Enquanto a "caixa" está aberta, o worker não pode ter seguido.
++    monkeypatch.setattr(espera.QMessageBox, "information", lambda parent, titulo, mensagem: chamadas.append(
++        (titulo, mensagem, threading.current_thread() is threading.main_thread(), seguiu.wait(0.3))))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    t = threading.Thread(target=lambda: (tela.avisar("Preparo", "Arrume o navegador", esperar=True),
++                                         seguiu.set()), daemon=True)
++    t.start()
++    qtbot.waitUntil(seguiu.is_set, timeout=3000)
++    assert chamadas == [("Preparo", "Arrume o navegador", True, False)]
++
++
++def test_avisar_sem_esperar_nao_segura_o_worker(qt_interface, qtbot, monkeypatch):
++    from sigft.app_qt.widgets import espera
++
++    seguiu = threading.Event()
++    chamadas = []
++    # A caixa só "fecha" depois de ver o worker seguir: se `avisar` segurasse
++    # o worker, isto esperaria à toa e anotaria False.
++    monkeypatch.setattr(espera.QMessageBox, "warning",
++                        lambda *a: chamadas.append((a[1:], seguiu.wait(2))))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    t = threading.Thread(target=lambda: (tela.avisar("T", "M", tipo="aviso"), seguiu.set()), daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: bool(chamadas), timeout=3000)
++    assert chamadas == [(("T", "M"), True)]
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index 967b427..84557ce 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -67,6 +67,7 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.views.upload_conditions",
+     "sigft.app_qt.views.upload_tech_specs",
+     "sigft.app_qt.views.correcao_pdm",
++    "sigft.app_qt.views.cria_fichas",
+     "sigft.app_qt.widgets.controles",
+     "sigft.app.atualizacao_textos",
+     "sigft.app_qt.atualizacao",
+diff --git a/tests/test_qt_tela_cria_fichas.py b/tests/test_qt_tela_cria_fichas.py
+new file mode 100644
+index 0000000..76c0070
+--- /dev/null
++++ b/tests/test_qt_tela_cria_fichas.py
+@@ -0,0 +1,1027 @@
++"""Tela "Criação de Fichas" (Cria Fichas PMIB) na interface Qt.
++
++Comportamento com backends, IA e robô FALSOS (nada de portal: os seletores e o
++fluxo do portal são do serviço, que não muda), e medidas contra a tela CTk.
++
++O conftest dubla o pandas; os testes que dependem de DataFrame de verdade usam
++a fixture `pandas_real` (o CI instala o pandas; sem ele, são pulados).
++"""
++import contextlib
++import importlib
++import sys
++import threading
++
++import pytest
++from PySide6.QtWidgets import QDialog
++
++from sigft.app import backends, theme
++from sigft.app.textos_dialogos import MSG_LOGIN_NOVA_FICHA, MSG_LOGIN_PAGINA_PRINCIPAL
++from sigft.app_qt import estilo
++from sigft.app_qt.views import cria_fichas as tela_mod
++from sigft.app_qt.views.janelas import DecisaoRobo
++
++COLORS = theme.COLORS
++
++
++# --- pandas de verdade --------------------------------------------------------------
++
++@contextlib.contextmanager
++def _pacote_real(nome):
++    antes = {k: v for k, v in sys.modules.items() if k == nome or k.startswith(nome + ".")}
++    for chave in antes:
++        del sys.modules[chave]
++    try:
++        modulo = importlib.import_module(nome)
++    except ImportError:
++        sys.modules.update(antes)
++        yield None
++        return
++    try:
++        yield modulo
++    finally:
++        for chave in [k for k in list(sys.modules) if k == nome or k.startswith(nome + ".")]:
++            del sys.modules[chave]
++        sys.modules.update(antes)
++
++
++@pytest.fixture
++def pd(monkeypatch):
++    """O pandas real, também DENTRO da tela (ela fez `import pandas as pd` com o dublê)."""
++    with _pacote_real("pandas") as modulo:
++        if modulo is None or not isinstance(getattr(modulo, "DataFrame", None), type):
++            pytest.skip("pandas real não instalado neste ambiente")
++        monkeypatch.setattr(tela_mod, "pd", modulo)
++        yield modulo
++
++
++# --- dublês -------------------------------------------------------------------------
++
++class JanelaFalsa:
++    """Registra quem abriu e em que thread; `isVisible`/`raise_` para o resumo."""
++
++    def __init__(self, registro, *args, **kw):
++        self.args, self.kw = args, kw
++        self.na_interface = threading.current_thread() is threading.main_thread()
++        self.visivel = True
++        self.levantada = 0
++        self.fechada = False
++        registro.append(self)
++
++    def isVisible(self):  # noqa: N802 -- API Qt
++        return self.visivel
++
++    def raise_(self):
++        self.levantada += 1
++
++    def activateWindow(self):  # noqa: N802 -- API Qt
++        pass
++
++    def close(self):
++        self.visivel = False
++        self.fechada = True
++
++
++class RevisaoFalsa(JanelaFalsa):
++    """JanelaRevisaoPDM: `finished` é chamado pelo teste (confirmar ou fechar no X)."""
++
++    def __init__(self, registro, parent, df, callback, catalogo=None):
++        super().__init__(registro, parent, df, callback, catalogo=catalogo)
++        self.df, self.callback, self.catalogo = df, callback, catalogo
++        self._ao_terminar = []
++        self.finished = self
++
++    def connect(self, funcao):
++        self._ao_terminar.append(funcao)
++
++    def confirmar(self, df=None):
++        self.callback(self.df if df is None else df)
++        for f in self._ao_terminar:
++            f(QDialog.DialogCode.Accepted)
++
++    def fechar_no_x(self):
++        for f in self._ao_terminar:
++            f(QDialog.DialogCode.Rejected)
++
++
++class DfFalso:
++    """Só o `len()` que a tela lê de uma planilha recém-carregada."""
++
++    def __init__(self, linhas):
++        self.linhas = linhas
++
++    def __len__(self):
++        return self.linhas
++
++
++class DataManagerFalso:
++    respostas = {}
++    chamadas = []
++    salvamentos = []
++    respostas_salvar = []
++
++    @classmethod
++    def carregar_planilha_inteligente(cls, path, aba, cols):
++        cls.chamadas.append((path, aba, cols))
++        return cls.respostas.get(aba, (None, None, f"Aba {aba!r} não encontrada"))
++
++    @classmethod
++    def atualizar_excel_final(cls, path, aba, lista):
++        cls.salvamentos.append((path, aba, lista))
++        return cls.respostas_salvar.pop(0)
++
++
++class CatalogoFalso:
++    def __init__(self, revisoes=None):
++        self.revisoes = revisoes or {}
++
++    def __len__(self):
++        return 7
++
++    def classes_com_pdm(self):
++        return [1, 2, 3]
++
++    def contem(self, texto):
++        return texto.startswith("PDM.1111")
++
++    def resolver(self, texto):
++        return None
++
++    def por_codigo(self, codigo):
++        if codigo not in self.revisoes:
++            return None
++        return type("P", (), {"revisao": self.revisoes[codigo]})()
++
++
++@pytest.fixture
++def tela(qt_interface, qtbot, monkeypatch):
++    t = tela_mod.ModuloCriaFichas(None, None)
++    qtbot.addWidget(t)
++    t.selecoes, t.revisoes, t.resumos, t.avisos = [], [], [], []
++    monkeypatch.setattr(tela_mod, "JanelaSelecao", lambda p, df, cb: t.selecoes.append(
++        (df, cb, threading.current_thread() is threading.main_thread())))
++    monkeypatch.setattr(tela_mod, "JanelaRevisaoPDM", lambda *a, **k: RevisaoFalsa(t.revisoes, *a, **k))
++    monkeypatch.setattr(tela_mod, "JanelaResumo", lambda *a: JanelaFalsa(t.resumos, *a))
++    caixas = {}
++    for nome in ("warning", "critical", "information"):
++        caixas[nome] = (lambda n: lambda parent, titulo, msg, *a: t.avisos.append((n, titulo, msg)))(nome)
++        monkeypatch.setattr(tela_mod.QMessageBox, nome, caixas[nome])
++    DataManagerFalso.respostas, DataManagerFalso.chamadas = {}, []
++    DataManagerFalso.salvamentos, DataManagerFalso.respostas_salvar = [], []
++    monkeypatch.setattr(backends, "DataManager", DataManagerFalso)
++    return t
++
++
++def _texto(tela):
++    return tela.console.toPlainText()
++
++
++def _esperar_log(qtbot, tela, trecho, timeout=3000):
++    qtbot.waitUntil(lambda: trecho in _texto(tela), timeout=timeout)
++
++
++def _folha(w):
++    return w.styleSheet()
++
++
++# --- montagem -------------------------------------------------------------------------
++
++def test_monta_com_os_textos_e_estados(tela):
++    assert tela.label_titulo.text() == "Módulo de Criação"
++    assert list(tela.abas.abas) == ["Criação de Fichas", "Editar código do projeto"]
++    assert tela.abas.get() == "Criação de Fichas"
++    assert tela.rotulo_etapa1.text() == "1. Configuração Inicial"
++    assert tela.rotulo_projeto.text() == "Código do Projeto:"
++    assert tela.entry_projeto.placeholderText().startswith("Ex: SERVIÇOS AUXILIARES ELÉTRICOS / CAP.05")
++    assert tela.entry_projeto.placeholderText().endswith("Evento de Pagamento: 2835 / 2835 a / 2836")
++    assert tela.rotulo_pmib.text() == "Arquivo STATUS_PMIB:"
++    assert tela.btn_pmib.text() == "Selecionar Excel (.xlsx)"
++    assert tela.lbl_status.text() == "Aguardando..."
++    assert tela.chk_pular.text() == "Pular IA (Dados já no Excel)" and not tela.chk_pular.isChecked()
++    assert tela.btn_pdm.text() == "Selecionar planilha de PDMs (mestra)" and tela.btn_pdm.isEnabled()
++    assert tela.lbl_status_pdm.text() == ""
++    assert tela.rotulo_etapa2.text() == "2. Execução"
++    assert tela.btn_run_ai.text() == "3. Analisar (IA)"
++    assert tela.btn_run_auto.text() == "4. Robô Web"
++    assert tela.btn_resumo.text() == "Ver Resumo"
++    assert tela.btn_save.text() == "5. Salvar no Excel"
++    assert tela.btn_reset.text() == estilo.mono("🗑️\nLimpar")      # emoji fixo: preto e branco
++    for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo, tela.btn_save):
++        assert not b.isEnabled()
++    assert tela.btn_reset.isEnabled() and tela.btn_pmib.isEnabled()
++    assert tela.progress.fracao == 0.0
++    # aba de edição
++    assert tela.rotulo_etapa1_edicao.text() == "1. Configuração da Edição"
++    assert tela.rotulo_novo_projeto.text() == "Novo Código do Projeto:"
++    assert tela.entry_novo_projeto.placeholderText() == "Ex: NOVO CÓDIGO AQUI..."
++    assert tela.rotulo_excel_edicao.text() == "Selecionar Fichas (Excel):"
++    assert tela.btn_excel_edicao.text() == "Abrir Excel e Selecionar"
++    assert tela.lbl_status_edicao.text() == "Nenhum item selecionado."
++    assert tela.rotulo_etapa2_edicao.text() == "2. Execução em Massa"
++    assert tela.btn_run_edicao.text() == estilo.mono("▶ Iniciar Robô de Edição")
++    assert not tela.btn_run_edicao.isEnabled()
++    assert tela.progress_edicao.fracao == 0.0
++
++
++def test_cores_dos_botoes_e_rotulos(tela):
++    for b in (tela.btn_pmib, tela.btn_pdm, tela.btn_resumo, tela.btn_excel_edicao):
++        assert b.property("variante") == "cinza"
++    for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_save, tela.btn_run_edicao):
++        assert b.property("variante") == "primario"
++    assert tela.btn_reset.property("variante") == "perigo"
++    for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo, tela.btn_save, tela.btn_reset,
++              tela.btn_run_edicao):
++        assert f"color: {COLORS['text_white']}" in _folha(b)
++    assert "font-size: 14px" in _folha(tela.btn_run_ai) and "bold" in _folha(tela.btn_run_ai)
++    assert "font-size: 12px" in _folha(tela.btn_resumo) and "font-size: 12px" in _folha(tela.btn_save)
++    for r in (tela.rotulo_etapa1, tela.rotulo_etapa2, tela.rotulo_etapa1_edicao, tela.rotulo_etapa2_edicao):
++        assert COLORS["accent"] in _folha(r) and "16px" in _folha(r)
++    assert "#808080" in _folha(tela.lbl_status) and "#808080" in _folha(tela.lbl_status_edicao)
++    assert COLORS["accent"] in tela.progress.styleSheet()
++    assert COLORS["accent"] in tela.progress_edicao.styleSheet()
++    # O "▶" sai da fonte de símbolos (só o triângulo, como no Tk), não do Noto
++    # Emoji (o "play" dentro de um quadrado).
++    familias = _folha(tela.btn_run_edicao)
++    assert familias.index("Segoe UI Symbol") < familias.index("DejaVu Sans") < familias.index("Noto Emoji")
++    assert tela.chk_pular._cor_marcada == COLORS["primary"]
++    assert tela.chk_pular._cor_hover == COLORS["primary_hover"]
++
++
++def test_enter_nao_dispara_nenhum_botao(tela):
++    # Lá o Tk não ligava tecla nenhuma aos botões da tela.
++    for b in (tela.btn_pmib, tela.btn_pdm, tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo,
++              tela.btn_save, tela.btn_reset, tela.btn_excel_edicao, tela.btn_run_edicao):
++        assert not b.autoDefault() and not b.isDefault()
++
++
++# --- Pular IA ---------------------------------------------------------------------------
++
++def test_pular_ia_desliga_o_pdm_e_liga_o_processar(tela):
++    tela.chk_pular.click()
++    assert tela.chk_pular.isChecked()
++    assert not tela.btn_pdm.isEnabled() and "background: #2B2B2B" in _folha(tela.btn_pdm)
++    assert tela.btn_run_ai.isEnabled() and tela.btn_run_ai.text() == "3. Processar (Direto)"
++    tela.chk_pular.click()
++    assert tela.btn_pdm.isEnabled() and "background: #3A3A3A" in _folha(tela.btn_pdm)
++    # Desmarcar não desliga o botão (como lá): só volta o texto.
++    assert tela.btn_run_ai.isEnabled() and tela.btn_run_ai.text() == "3. Analisar (IA)"
++
++
++# --- planilha do STATUS_PMIB --------------------------------------------------------------
++
++def test_cancelar_o_dialogo_nao_faz_nada(tela, monkeypatch):
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: pedidos.append((a, k)) or "")
++    tela.btn_pmib.click()
++    assert pedidos == [(("cria_fichas.excel_pmib", "excel"), {"filetypes": [("Excel", "*.xlsx")]})]
++    assert tela.file_path_excel is None and DataManagerFalso.chamadas == []
++
++
++def test_sem_o_backend_avisa_antes_do_dialogo(tela, monkeypatch):
++    monkeypatch.setattr(backends, "DataManager", None)
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: pedidos.append(a) or "")
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning", lambda *a: tela.avisos.append(a[1]))
++    tela.selecionar_excel_pmib()
++    assert pedidos == []
++    assert tela.avisos == ["Módulo indisponível"]
++
++
++def test_planilha_carregada_preenche_o_projeto_e_abre_a_selecao(tela, qtbot, monkeypatch):
++    df = DfFalso(12)
++    DataManagerFalso.respostas = {"Lista de Materiais": (df, "PROJ-123", None)}
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/_STATUS_PMIB.xlsx")
++    tela.selecionar_excel_pmib()
++    assert DataManagerFalso.chamadas == [("/d/_STATUS_PMIB.xlsx", "Lista de Materiais", ["DESCRIÇÃO", "CÓDIGO PMIB"])]
++    assert tela.file_path_excel == "/d/_STATUS_PMIB.xlsx" and tela.df_data_completo is df
++    assert tela.entry_projeto.text() == "PROJ-123"
++    assert tela.selecoes == [(df, tela.pos_selecao, True)]
++    _esperar_log(qtbot, tela, "> Código de Projeto preenchido automaticamente.")
++    assert "> Carregado: 12 linhas." in _texto(tela)
++
++
++def test_planilha_sem_a_aba_cai_na_primeira_e_sem_codigo_nao_mexe_no_projeto(tela, monkeypatch):
++    df = DfFalso(3)
++    DataManagerFalso.respostas = {0: (df, None, None)}
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/x.xlsx")
++    tela.entry_projeto.setText("JA DIGITADO")
++    tela.selecionar_excel_pmib()
++    assert [c[1] for c in DataManagerFalso.chamadas] == ["Lista de Materiais", 0]
++    assert tela.entry_projeto.text() == "JA DIGITADO"
++    assert len(tela.selecoes) == 1
++
++
++def test_planilha_que_nao_abre_mostra_o_erro(tela, monkeypatch):
++    DataManagerFalso.respostas = {0: (None, None, "Colunas não encontradas")}
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/x.xlsx")
++    tela.selecionar_excel_pmib()
++    assert tela.avisos == [("critical", "Erro", "Colunas não encontradas")]
++    assert tela.selecoes == []
++
++
++def test_pos_selecao_numera_do_zero_e_marca_o_botao(tela, qtbot, pd):
++    tela.df_data_completo = pd.DataFrame({"DESCRIÇÃO": [f"ITEM {i}" for i in range(6)],
++                                          "CÓDIGO PMIB": [""] * 6})
++    tela.pos_selecao([2, 4, 5])
++    assert list(tela.df_data_selecionado.index) == [0, 1, 2]
++    assert list(tela.df_data_selecionado["DESCRIÇÃO"]) == ["ITEM 2", "ITEM 4", "ITEM 5"]
++    assert tela.lbl_status.text() == "3 itens selecionados"
++    assert COLORS["accent"] in _folha(tela.lbl_status)
++    assert f"background: {COLORS['primary']}" in _folha(tela.btn_pmib)
++    assert "#454545" in _folha(tela.btn_pmib)          # o hover continua o de antes
++    assert "background: #3A3A3A" in _folha(tela.btn_pdm)
++    _esperar_log(qtbot, tela, "> Selecionado: 3 itens.")
++
++
++def test_planilha_de_pdms(tela, qtbot, monkeypatch):
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file",
++                        lambda *a, **k: pedidos.append((a, k)) or "/d/pdms/PDM_MASTER.xlsx")
++    tela.btn_pdm.click()
++    assert pedidos == [(("cria_fichas.excel_pdm", "excel"), {"filetypes": [("Arquivos Excel", "*.xlsx;*.xls")]})]
++    assert tela.file_path_pdm == "/d/pdms/PDM_MASTER.xlsx"
++    assert tela.btn_run_ai.isEnabled()
++    assert f"background: {COLORS['primary']}" in _folha(tela.btn_pdm)
++    assert tela.lbl_status_pdm.text() == "Selecionado: PDM_MASTER.xlsx"
++    assert COLORS["accent"] in _folha(tela.lbl_status_pdm)
++    _esperar_log(qtbot, tela, "> PDMs carregados: PDM_MASTER.xlsx")
++
++
++def test_planilha_de_pdms_cancelada(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "")
++    tela.selecionar_excel_pdm()
++    assert tela.file_path_pdm is None and not tela.btn_run_ai.isEnabled()
++
++
++# --- IA ---------------------------------------------------------------------------------
++
++def test_ia_sem_projeto_ou_sem_pdms_avisa(tela):
++    tela.btn_run_ai.setEnabled(True)
++    tela.run_ai_thread()
++    assert tela.avisos == [("warning", "Aviso", "Preencha o Código do Projeto.")]
++    tela.entry_projeto.setText("PROJ")
++    tela.run_ai_thread()
++    assert tela.avisos[1] == ("warning", "Aviso", "Selecione o arquivo de PDMs antes de iniciar a IA.")
++    assert tela.revisoes == [] and tela.btn_run_ai.isEnabled()
++
++
++def _selecionar_pular_ia(tela, pd):
++    tela.df_data_completo = pd.DataFrame({
++        "DESCRIÇÃO": ["VALVULA ESFERA 2 POL", "MOTOR ELETRICO TRIFASICO 50 CV"],
++        "CÓDIGO PMIB": ["", ""],
++        "PDM": ["PDM.1111.001 - VALVULA", "PDM.2222.002 - MOTOR"],
++        "UNIDADE": ["Peça", "Unidade"],
++    })
++    tela.pos_selecao([0, 1])
++    tela.entry_projeto.setText("PROJ-9")
++    tela.chk_pular.click()
++
++
++def test_pular_ia_le_o_excel_e_abre_a_revisao(tela, qtbot, pd):
++    _selecionar_pular_ia(tela, pd)
++    tela.btn_run_ai.click()
++    # Desligado NO CLIQUE e com a barra andando (modo indeterminado).
++    assert not tela.btn_run_ai.isEnabled()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    revisao = tela.revisoes[0]
++    assert revisao.na_interface and revisao.catalogo is None
++    df = revisao.df
++    assert list(df["item_processado"]) == [0, 1]
++    assert list(df["codigo_projeto"]) == ["PROJ-9", "PROJ-9"]
++    assert list(df["pdm_escolhido"]) == ["PDM.1111.001 - VALVULA", "PDM.2222.002 - MOTOR"]
++    assert list(df["descricao_curta"]) == ["VALVULA ESFERA 2 POL", "MOTOR ELETRICO TRIFASICO 50 CV"[:40]]
++    assert list(df["origem"]) == ["Nacional"] * 2 and list(df["tipo"]) == ["Não Reparável"] * 2
++    assert list(df["unidade"]) == ["Peça", "Unidade"]
++    assert list(df["tipo de fabricação"]) == ["Catálogo"] * 2
++    _esperar_log(qtbot, tela, "> Abrindo janela de Revisão...")
++    texto = _texto(tela)
++    assert "> Modo 'Pular IA'. Lendo dados do Excel..." in texto
++    assert "> Processados 2 itens." in texto
++    # A barra parou e voltou a zero; o botão continua desligado enquanto a
++    # revisão está aberta (a cadeia é uma tarefa só).
++    qtbot.waitUntil(lambda: tela.progress.maximum() == 1000, timeout=2000)
++    assert tela.progress.fracao == 0.0
++    assert not tela.btn_run_ai.isEnabled()
++
++
++def test_pular_ia_durante_a_tarefa_nao_religa_o_botao(tela, qtbot, pd):
++    _selecionar_pular_ia(tela, pd)
++    tela.btn_run_ai.click()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    tela.chk_pular.click()
++    tela.chk_pular.click()
++    assert not tela.btn_run_ai.isEnabled()
++    assert tela.btn_run_ai.text() == "3. Processar (Direto)"
++
++
++def test_revisao_confirmada_libera_o_robo(tela, qtbot, pd):
++    _selecionar_pular_ia(tela, pd)
++    tela.btn_run_ai.click()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    revisado = pd.DataFrame({"descricao_original": ["A", "B", "C"]})
++    tela.revisoes[0].confirmar(revisado)
++    assert tela.df_processed is revisado
++    assert tela.btn_run_auto.isEnabled()
++    assert f"background: {COLORS['accent']}" in _folha(tela.btn_run_auto)
++    assert not tela.btn_run_ai.isEnabled() and tela.btn_run_ai.text() == "3. Analisar (OK)"
++    _esperar_log(qtbot, tela, "> Revisão OK. 3 itens prontos.")
++    # Depois da cadeia, o "Pular IA" volta a religar o botão (como lá).
++    tela.chk_pular.click()
++    tela.chk_pular.click()
++    assert tela.btn_run_ai.isEnabled()
++
++
++def test_revisao_fechada_no_x_devolve_o_botao(tela, qtbot, pd):
++    _selecionar_pular_ia(tela, pd)
++    tela.btn_run_ai.click()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    tela.revisoes[0].fechar_no_x()
++    assert tela.btn_run_ai.isEnabled() and tela.btn_run_ai.text() == "3. Processar (Direto)"
++    assert not tela.btn_run_auto.isEnabled()
++
++
++def test_ia_falhando_vira_log_e_devolve_o_botao(tela, qtbot):
++    tela.entry_projeto.setText("PROJ")
++    tela.chk_pular.click()           # sem planilha selecionada: o worker estoura no None
++    tela.btn_run_ai.click()
++    _esperar_log(qtbot, tela, "> Erro no processamento:")
++    qtbot.waitUntil(tela.btn_run_ai.isEnabled, timeout=2000)
++    assert tela.revisoes == []
++    assert tela.progress.maximum() == 1000
++
++
++def test_ia_com_catalogo(tela, qtbot, pd, monkeypatch):
++    lotes = []
++
++    class Categorizador:
++        modelo_em_uso = "openrouter/google/gemini-2.5-flash"
++
++        def __init__(self, chave):
++            self.chave = chave
++
++        def processar_lote(self, df, catalogo, callback_log=None):
++            lotes.append((self.chave, len(df), catalogo, threading.current_thread() is threading.main_thread()))
++            callback_log("lote 1/1")
++            return [{"pdm_escolhido": "PDM.1111.001 - VALVULA", "item_processado": 1},
++                    None,
++                    {"pdm_escolhido": "PDM.9999.999 - INVENTADO", "item_processado": 3}]
++
++    catalogo = CatalogoFalso()
++    carregados = []
++    monkeypatch.setattr(backends, "GeminiCategorizer", Categorizador)
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: carregados.append(p) or catalogo)
++    tela.controller = type("C", (), {"get_key": lambda self, k: f"chave-{k}"})()
++    tela.df_data_completo = pd.DataFrame({"DESCRIÇÃO": ["VALVULA", "PARAFUSO SEXTAVADO M8", "CABO"],
++                                          "CÓDIGO PMIB": ["", "", ""]})
++    tela.pos_selecao([0, 1, 2])
++    tela.entry_projeto.setText("PROJ-1")
++    tela.file_path_pdm = "/d/PDM_MASTER.xlsx"
++    tela.btn_run_ai.setEnabled(True)
++    tela.btn_run_ai.click()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    assert carregados == ["/d/PDM_MASTER.xlsx"]
++    assert lotes == [("chave-GEMINI", 3, catalogo, False)]
++    df = tela.revisoes[0].df
++    assert tela.revisoes[0].catalogo is catalogo and tela.catalogo is catalogo
++    assert list(df["pdm_escolhido"]) == ["PDM.1111.001 - VALVULA", "NENHUM", "NENHUM"]
++    assert list(df["codigo_projeto"]) == ["PROJ-1"] * 3
++    assert list(df["descricao_original"]) == ["VALVULA", "PARAFUSO SEXTAVADO M8", "CABO"]
++    _esperar_log(qtbot, tela, "> Abrindo janela de Revisão...")
++    texto = _texto(tela)
++    assert "> Processando com IA (openrouter/google/gemini-2.5-flash)..." in texto
++    assert "> Catálogo: 7 PDMs, 3 classes com PDM." in texto
++    assert "> lote 1/1" in texto
++    assert (">  -> ⚠️ Item 2 sem resposta da IA. Marcado 'NENHUM' para revisão: "
++            "PARAFUSO SEXTAVADO M8") in texto
++    assert ">  -> ⚠️ Item 3: PDM fora do catalogo: 'PDM.9999.999 - INVENTADO'. Marcado 'NENHUM'." in texto
++    assert "> IA Finalizada. 3 itens | sem resposta: 1 | PDM fora do catálogo: 1" in texto
++
++
++def test_ia_sem_o_backend_nao_comeca(tela, monkeypatch):
++    monkeypatch.setattr(backends, "GeminiCategorizer", None)
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning", lambda *a: tela.avisos.append(a[1]))
++    tela.entry_projeto.setText("PROJ")
++    tela.file_path_pdm = "/d/p.xlsx"
++    tela.btn_run_ai.setEnabled(True)
++    tela.run_ai_thread()
++    assert tela.avisos == ["Módulo indisponível"]
++    assert tela.btn_run_ai.isEnabled() and tela.progress.maximum() == 1000
++
++
++def test_revisao_sem_dados_avisa_e_devolve_o_botao(tela, pd):
++    tela.df_processed = pd.DataFrame([])
++    tela.abrir_revisao_pdm()
++    assert tela.avisos == [("critical", "Erro", "Nenhum dado processado.")]
++    assert tela.btn_run_ai.isEnabled() and tela.revisoes == []
++
++
++# --- robô de criação ----------------------------------------------------------------------
++
++class RoboFalso:
++    """AutomacaoPMIB: respostas por descrição, na ordem em que são pedidas."""
++
++    instancias = []
++    roteiro = {}
++
++    def __init__(self):
++        self.portais = []
++        self.itens = []
++        self.driver = self
++        self.saiu = False
++        self.threads = set()
++        RoboFalso.instancias.append(self)
++
++    def iniciar_driver(self):
++        self.threads.add(threading.current_thread() is threading.main_thread())
++
++    def abrir_portal(self, url):
++        self.portais.append(url)
++
++    def processar_item_individual(self, row):
++        self.itens.append((row["descricao_original"], row["pdm_escolhido"]))
++        return RoboFalso.roteiro[row["descricao_original"]].pop(0)
++
++    def quit(self):
++        self.saiu = True
++
++    def atualizar_projeto_em_massa(self, pmib, novo):
++        self.itens.append((pmib, novo))
++        return RoboFalso.roteiro.get(pmib, ("SUCESSO", ""))
++
++
++@pytest.fixture
++def robo(tela, monkeypatch, pd):
++    RoboFalso.instancias, RoboFalso.roteiro = [], {}
++    estado = {"pausas": [], "decisoes": [], "perguntas": [], "preparos": []}
++    monkeypatch.setattr(backends, "AutomacaoPMIB", RoboFalso)
++    monkeypatch.setattr(tela, "pausar_e_esperar", lambda msg, **k: estado["pausas"].append(
++        (msg, threading.current_thread() is threading.main_thread())))
++
++    def acao(parent, msg_erro, pdm_atual):
++        estado["perguntas"].append((msg_erro, pdm_atual, threading.current_thread() is threading.main_thread()))
++        return estado["decisoes"].pop(0)
++
++    monkeypatch.setattr(tela_mod, "JanelaAcaoRobo", acao)
++    original = tela.avisar
++
++    def avisar(titulo, msg, tipo="info", *, esperar=False):
++        if titulo == "Preparo":
++            estado["preparos"].append((msg, esperar))
++            return
++        original(titulo, msg, tipo, esperar=esperar)
++
++    monkeypatch.setattr(tela, "avisar", avisar)
++    tela.df_processed = pd.DataFrame([
++        {"descricao_original": "VALVULA ESFERA 2 POL INOX", "pdm_escolhido": "PDM.1111.001 - VALVULA"},
++        {"descricao_original": "MOTOR 50CV", "pdm_escolhido": "NENHUM"},
++        {"descricao_original": "CABO FLEXIVEL", "pdm_escolhido": "PDM.3333.003 - CABO"},
++        {"descricao_original": "PARAFUSO", "pdm_escolhido": "PDM.4444.004 - PARAFUSO"},
++    ])
++    tela._pos_revisao_concluida(tela.df_processed)
++    return estado
++
++
++def test_robo_completo(tela, robo, qtbot):
++    RoboFalso.roteiro = {
++        "VALVULA ESFERA 2 POL INOX": [("SUCESSO", ("4500001.0001", "PDM.1111.001 - VALVULA, R1"))],
++        "MOTOR 50CV": [("PULAR", None)],
++        "CABO FLEXIVEL": [("ERRO", "Timeout no combo"), ("ERRO", "de novo"),
++                          ("SUCESSO", ("4500001.0003", "PDM.5555.005 - CABO NOVO, R0"))],
++        "PARAFUSO": [("ERRO", "Botão não achado")],
++    }
++    robo["decisoes"] = [DecisaoRobo("RETRY"), DecisaoRobo("CHANGE_PDM", "PDM.5555.005 - CABO NOVO"),
++                        DecisaoRobo("SKIP")]
++    tela.btn_run_auto.click()
++    assert not tela.btn_run_auto.isEnabled()                       # desligado NO CLIQUE
++    qtbot.waitUntil(lambda: bool(tela.resumos), timeout=3000)
++    qtbot.waitUntil(tela.btn_run_auto.isEnabled, timeout=2000)
++
++    bot = RoboFalso.instancias[0]
++    assert bot.threads == {False}
++    assert robo["pausas"] == [(MSG_LOGIN_NOVA_FICHA, False)]
++    url = "https://apps.itaipu.gov.br/PMIB/PMIB_DatasheetList"
++    assert bot.portais == [url, url]                                 # abriu + reset do SKIP
++    assert bot.itens == [
++        ("VALVULA ESFERA 2 POL INOX", "PDM.1111.001 - VALVULA"),
++        ("MOTOR 50CV", "NENHUM"),
++        ("CABO FLEXIVEL", "PDM.3333.003 - CABO"),
++        ("CABO FLEXIVEL", "PDM.3333.003 - CABO"),
++        ("CABO FLEXIVEL", "PDM.5555.005 - CABO NOVO"),
++        ("PARAFUSO", "PDM.4444.004 - PARAFUSO"),
++    ]
++    assert robo["perguntas"] == [("Timeout no combo", "PDM.3333.003 - CABO", False),
++                                 ("de novo", "PDM.3333.003 - CABO", False),
++                                 ("Botão não achado", "PDM.4444.004 - PARAFUSO", False)]
++    msg = "Certifique-se de que a tela do navegador está na lista principal antes de clicar em OK."
++    assert robo["preparos"] == [(msg, True), (msg, True)]          # RETRY e CHANGE_PDM ESPERAM o OK
++    assert bot.saiu
++
++    resumo = tela.df_resumo_final
++    assert list(resumo["descricao_original"]) == ["VALVULA ESFERA 2 POL INOX", "MOTOR 50CV", "CABO FLEXIVEL",
++                                                  "PARAFUSO"]
++    assert list(resumo["PMIB_CRIADO"]) == ["4500001.0001", "VERIFICAR (PULADO)", "4500001.0003",
++                                           "VERIFICAR (PULADO)"]
++    assert tela.resumos[0].args == (tela, resumo) and tela.resumos[0].na_interface
++    assert tela.btn_save.isEnabled() and tela.btn_resumo.isEnabled()
++
++    _esperar_log(qtbot, tela, "> Montando resumo final...")
++    texto = _texto(tela)
++    for linha in (
++        "> Iniciando Robô...",
++        "> Processando Item 1/4: VALVULA ESFERA 2 POL INOX...",
++        ">  -> ✅ SUCESSO: PMIB 4500001.0001 | PDM PDM.1111.001 - VALVULA, R1",
++        ">  -> ⏭️ PULADO automaticamente (PDM era 'NENHUM').",
++        ">  -> ❌ ERRO no Selenium: Timeout no combo",
++        ">  -> 🔄 Retentativa solicitada pelo usuário.",
++        ">  -> ✏️ PDM alterado pelo usuário para: PDM.5555.005 - CABO NOVO",
++        ">  -> ⏭️ Item PULADO pelo usuário.",
++        "> Montando resumo final...",
++    ):
++        assert linha in texto, linha
++    # O progresso do último item (4/4) chegou à barra pela thread da interface.
++    qtbot.waitUntil(lambda: tela.progress.fracao == 1.0, timeout=2000)
++
++
++def test_robo_parar_salva_o_parcial(tela, robo, qtbot):
++    RoboFalso.roteiro = {
++        "VALVULA ESFERA 2 POL INOX": [("SUCESSO", ("4500001.0001", "PDM.1111.001 - VALVULA, R1"))],
++        "MOTOR 50CV": [("ERRO", "falhou")],
++    }
++    robo["decisoes"] = [DecisaoRobo("STOP")]
++    tela.run_automation_thread()
++    qtbot.waitUntil(lambda: bool(tela.resumos), timeout=3000)
++    assert [i[0] for i in RoboFalso.instancias[0].itens] == ["VALVULA ESFERA 2 POL INOX", "MOTOR 50CV"]
++    assert list(tela.df_resumo_final["PMIB_CRIADO"]) == ["4500001.0001", "INTERROMPIDO"]
++    _esperar_log(qtbot, tela, ">  -> 🛑 Automação interrompida pelo usuário. Salvando progresso parcial...")
++
++
++def test_robo_erro_fatal_vira_log_e_devolve_o_botao(tela, robo, qtbot):
++    RoboFalso.roteiro = {}                                     # KeyError no primeiro item
++    tela.run_automation_thread()
++    _esperar_log(qtbot, tela, "> Erro Fatal na Thread do Robô:")
++    qtbot.waitUntil(tela.btn_run_auto.isEnabled, timeout=2000)
++    assert tela.resumos == [] and not tela.btn_save.isEnabled()
++
++
++def test_robo_sem_o_backend_nao_comeca(tela, robo, monkeypatch):
++    monkeypatch.setattr(backends, "AutomacaoPMIB", None)
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning", lambda *a: tela.avisos.append(a[1]))
++    tela.run_automation_thread()
++    assert tela.avisos == ["Módulo indisponível"] and tela.btn_run_auto.isEnabled()
++
++
++@pytest.mark.parametrize("pedido, gravado, revisoes, esperado", [
++    ("PDM.1111.001 - VALVULA", "PDM.2222.002 - OUTRO, R1", {},
++     ">  -> ⚠️ DIVERGÊNCIA no PMIB 45.1: pedimos PDM.1111.001 e o portal gravou PDM.2222.002. Confira a ficha."),
++    ("PDM.1111.001 - VALVULA", "PDM.1111.001 - VALVULA, R0", {"PDM.1111.001": 2},
++     ">  -> ⚠️ PMIB 45.1: a ficha ficou na revisão R0 do PDM.1111.001, mas o catálogo já tem R2. "
++     "A Itaipu costuma pedir a revisão mais nova."),
++    ("PDM.1111.001 - VALVULA", "PDM.1111.001 - VALVULA, R3", {"PDM.1111.001": 1},
++     ">  -> ℹ️ PMIB 45.1: o portal usou R3 do PDM.1111.001 e a sua planilha de PDMs só tem até R1. "
++     "Vale pedir um Master atualizado à Itaipu."),
++    ("PDM.1111.001 - VALVULA", "PDM.1111.001 - VALVULA, R1", {"PDM.1111.001": 1}, None),
++    ("NENHUM", "PDM.1111.001 - VALVULA, R1", {}, None),
++])
++def test_conferencia_do_pdm_gravado(tela, qtbot, pedido, gravado, revisoes, esperado):
++    tela.catalogo = CatalogoFalso(revisoes)
++    tela._conferir_pdm_do_portal(pedido=pedido, gravado=gravado, pmib="45.1")
++    tela.log("fim")
++    _esperar_log(qtbot, tela, "> fim")
++    if esperado is None:
++        assert _texto(tela) == "> fim"
++    else:
++        assert esperado in _texto(tela)
++
++
++# --- resumo e salvar ---------------------------------------------------------------------
++
++def test_ver_resumo_nao_abre_duas_janelas(tela):
++    tela.abrir_resumo_manual()
++    assert tela.resumos == []
++    df = object()
++    tela.df_resumo_final = df
++    tela.btn_resumo.setEnabled(True)
++    tela.btn_resumo.click()
++    tela.btn_resumo.click()
++    assert len(tela.resumos) == 1 and tela.resumos[0].levantada == 1
++    tela.resumos[0].visivel = False                    # a pessoa fechou: abre de novo
++    tela.btn_resumo.click()
++    assert len(tela.resumos) == 2
++    tela.df_resumo_final = object()                    # lote novo: a janela velha dá lugar à nova
++    tela.btn_resumo.click()
++    assert len(tela.resumos) == 3 and tela.resumos[1].fechada
++
++
++def _resumo(pd):
++    return pd.DataFrame({"descricao_original": ["A", "B"], "PMIB_CRIADO": ["45.1", "VERIFICAR (PULADO)"],
++                         "PDM_COM_REVISAO": ["PDM.1, R1", "VERIFICAR (PULADO)"]})
++
++
++def test_salvar_sem_dados_avisa(tela):
++    tela.salvar_excel()
++    assert tela.avisos == [("warning", "Aviso", "Não há dados processados para salvar.")]
++
++
++def test_salvar_ok(tela, qtbot, pd):
++    tela.file_path_excel = "/d/_STATUS_PMIB.xlsx"
++    tela.df_resumo_final = _resumo(pd)
++    DataManagerFalso.respostas_salvar = [(True, "2 linhas")]
++    tela.salvar_excel()
++    assert DataManagerFalso.salvamentos == [("/d/_STATUS_PMIB.xlsx", "Lista de Materiais", [
++        ("A", "45.1", "PDM.1, R1"), ("B", "VERIFICAR (PULADO)", "VERIFICAR (PULADO)")])]
++    assert tela.avisos == [("information", "Sucesso", "Planilha atualizada!\n2 linhas")]
++    _esperar_log(qtbot, tela, "> ✅ Excel salvo com sucesso: 2 linhas")
++
++
++def test_salvar_com_o_arquivo_aberto_pergunta_e_repete(tela, qtbot, pd, monkeypatch):
++    tela.file_path_excel = "/d/_STATUS_PMIB.xlsx"
++    tela.df_resumo_final = _resumo(pd)
++    DataManagerFalso.respostas_salvar = [(False, "Arquivo aberto"), (False, "PermissionError"),
++                                         (True, "ok")]
++    perguntas = []
++    respostas = [tela_mod.QMessageBox.StandardButton.Retry, tela_mod.QMessageBox.StandardButton.Retry]
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning",
++                        lambda parent, titulo, msg, botoes=None, *a: perguntas.append((titulo, msg, botoes))
++                        or respostas.pop(0))
++    tela.salvar_excel()
++    assert len(DataManagerFalso.salvamentos) == 3
++    titulo, msg, botoes = perguntas[0]
++    assert titulo == "Arquivo Aberto"
++    assert msg == ("O arquivo Excel está ABERTO ou bloqueado.\n\nPor favor, FECHE o arquivo _STATUS_PMIB "
++                   "no Excel e clique em 'Repetir' para tentar salvar novamente.")
++    assert botoes == tela_mod.QMessageBox.StandardButton.Retry | tela_mod.QMessageBox.StandardButton.Cancel
++    assert tela.avisos == [("information", "Sucesso", "Planilha atualizada!\nok")]
++
++
++def test_salvar_cancelado(tela, qtbot, pd, monkeypatch):
++    tela.file_path_excel = "/d/x.xlsx"
++    tela.df_resumo_final = _resumo(pd)
++    DataManagerFalso.respostas_salvar = [(False, "arquivo ABERTO")]
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning",
++                        lambda *a: tela_mod.QMessageBox.StandardButton.Cancel)
++    tela.salvar_excel()
++    _esperar_log(qtbot, tela, "> ⚠️ Salvamento cancelado pelo usuário. Os dados não foram gravados no Excel.")
++    assert len(DataManagerFalso.salvamentos) == 1
++
++
++def test_salvar_outro_erro(tela, qtbot, pd):
++    tela.file_path_excel = "/d/x.xlsx"
++    tela.df_resumo_final = _resumo(pd)
++    DataManagerFalso.respostas_salvar = [(False, "Aba não encontrada")]
++    tela.salvar_excel()
++    assert tela.avisos == [("critical", "Erro ao Salvar", "Aba não encontrada")]
++    _esperar_log(qtbot, tela, "> ❌ Erro ao salvar Excel: Aba não encontrada")
++
++
++# --- limpar --------------------------------------------------------------------------------
++
++def test_limpar_volta_tudo_ao_comeco(tela, qtbot, pd):
++    bot = RoboFalso()
++    tela.bot = bot
++    tela.file_path_excel, tela.file_path_pdm = "/d/a.xlsx", "/d/p.xlsx"
++    tela.df_resumo_final = _resumo(pd)
++    tela.entry_projeto.setText("PROJ")
++    tela.lbl_status.setText("3 itens selecionados")
++    tela.lbl_status_pdm.setText("Selecionado: p.xlsx")
++    for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo, tela.btn_save, tela.btn_run_edicao):
++        b.setEnabled(True)
++    tela.btn_run_ai.setText("3. Analisar (OK)")
++    tela._pos_revisao_concluida(_resumo(pd))
++    tela.progress.definir(0.5)
++    tela.progress_edicao.definir(0.5)
++    tela.entry_novo_projeto.setText("NOVO")
++    tela.log("linha velha")
++    _esperar_log(qtbot, tela, "linha velha")
++
++    tela.btn_reset.click()
++    assert bot.saiu and tela.bot is None
++    assert tela.file_path_excel is None and tela.file_path_pdm is None
++    assert tela.df_processed is None and tela.df_resumo_final is None
++    assert tela.df_edicao_completo is None and tela.df_edicao_selecionado is None
++    assert tela.entry_projeto.text() == "" and tela.entry_novo_projeto.text() == ""
++    assert tela.lbl_status.text() == "Aguardando..." and "#808080" in _folha(tela.lbl_status)
++    assert tela.lbl_status_pdm.text() == ""
++    assert "background: #3A3A3A" in _folha(tela.btn_pmib) and "background: #3A3A3A" in _folha(tela.btn_pdm)
++    assert tela.btn_run_ai.text() == "3. Analisar (IA)"
++    for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo, tela.btn_save, tela.btn_run_edicao):
++        assert not b.isEnabled()
++    assert f"background: {COLORS['primary']}" in _folha(tela.btn_run_auto)
++    assert tela.progress.fracao == 0.0 and tela.progress_edicao.fracao == 0.0
++    assert tela.lbl_status_edicao.text() == "Nenhum item selecionado."
++    _esperar_log(qtbot, tela, "> Sistema limpo. Pronto para iniciar um novo lote.")
++    assert "linha velha" not in _texto(tela)
++
++
++# --- aba de edição -------------------------------------------------------------------------
++
++def test_edicao_filtra_as_linhas_sem_pmib(tela, qtbot, pd, monkeypatch):
++    df = pd.DataFrame({"DESCRIÇÃO": ["A", "B", "C", "D"],
++                       "CÓDIGO PMIB": ["4500.1", "  ", None, "4500.4"]})
++    DataManagerFalso.respostas = {"Lista de Materiais": (df, "PROJ-SUGERIDO", None)}
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file",
++                        lambda *a, **k: pedidos.append((a, k)) or "/d/fichas.xlsx")
++    tela.btn_excel_edicao.click()
++    assert pedidos == [(("cria_fichas.excel_edicao", "excel"), {"filetypes": [("Excel", "*.xlsx")]})]
++    assert list(tela.df_edicao_completo["DESCRIÇÃO"]) == ["A", "D"]
++    assert list(tela.df_edicao_completo.index) == [0, 1]
++    assert tela.entry_novo_projeto.text() == "PROJ-SUGERIDO"
++    assert tela.selecoes[0][1] == tela.pos_selecao_edicao
++    _esperar_log(qtbot, tela, "> Aba Edição: Carregado 2 itens válidos com PMIB.")
++
++
++def test_edicao_sem_pmib_avisa(tela, pd, monkeypatch):
++    df = pd.DataFrame({"DESCRIÇÃO": ["A"], "CÓDIGO PMIB": [""]})
++    DataManagerFalso.respostas = {"Lista de Materiais": (df, None, None)}
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/f.xlsx")
++    tela.selecionar_excel_edicao()
++    assert tela.avisos == [("warning", "Aviso", "Nenhum CÓDIGO PMIB encontrado nesta planilha. "
++                                                "Certifique-se de que as fichas já foram criadas.")]
++    assert tela.selecoes == []
++
++
++def test_edicao_planilha_com_erro(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/f.xlsx")
++    tela.selecionar_excel_edicao()
++    assert tela.avisos == [("critical", "Erro", "Aba 0 não encontrada")]
++
++
++def test_pos_selecao_edicao(tela, qtbot, pd):
++    tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A", "B", "C"], "CÓDIGO PMIB": ["1", "2", "3"]})
++    tela.pos_selecao_edicao([0, 2])
++    assert tela.lbl_status_edicao.text() == "2 fichas selecionadas"
++    assert COLORS["accent"] in _folha(tela.lbl_status_edicao)
++    assert f"background: {COLORS['primary']}" in _folha(tela.btn_excel_edicao)
++    assert tela.btn_run_edicao.isEnabled()
++    _esperar_log(qtbot, tela, "> Aba Edição: Selecionado 2 fichas para editar.")
++    tela.pos_selecao_edicao([])
++    assert not tela.btn_run_edicao.isEnabled()
++
++
++def test_edicao_valida_antes_de_comecar(tela, pd):
++    tela.btn_run_edicao.setEnabled(True)
++    tela.run_edicao_thread()
++    assert tela.avisos == [("warning", "Aviso", "Preencha o Novo Código do Projeto.")]
++    tela.entry_novo_projeto.setText("  NOVO  ")
++    tela.run_edicao_thread()
++    assert tela.avisos[1] == ("warning", "Aviso", "Selecione ao menos uma ficha no Excel para editar.")
++
++
++def test_robo_de_edicao(tela, robo, qtbot, pd, monkeypatch):
++    avisos = []
++    monkeypatch.setattr(tela, "avisar", lambda *a, **k: avisos.append((a, k, threading.current_thread()
++                                                                        is threading.main_thread())))
++    tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A", "B", "C"],
++                                            "CÓDIGO PMIB": [" 4500.1 ", "4500.2", "nan"]})
++    tela.pos_selecao_edicao([0, 1, 2])
++    tela.entry_novo_projeto.setText("  NOVO PROJ  ")
++    RoboFalso.roteiro = {"4500.2": ("ERRO", "ficha travada")}
++    tela.btn_run_edicao.click()
++    assert not tela.btn_run_edicao.isEnabled()
++    _esperar_log(qtbot, tela, "> Edição em massa concluída!")
++    qtbot.waitUntil(tela.btn_run_edicao.isEnabled, timeout=2000)
++    bot = RoboFalso.instancias[0]
++    assert bot.itens == [("4500.1", "NOVO PROJ"), ("4500.2", "NOVO PROJ")]
++    assert bot.portais == ["https://apps.itaipu.gov.br/PMIB/PMIB_DatasheetList"] and bot.saiu
++    assert robo["pausas"] == [(MSG_LOGIN_PAGINA_PRINCIPAL, False)]
++    texto = _texto(tela)
++    assert "> Iniciando Edição em Massa de 2 fichas..." in texto
++    assert "> Editando PMIB [1/2]: 4500.1..." in texto
++    assert ">  -> ✅ SUCESSO: Projeto do 4500.1 atualizado." in texto
++    assert ">  -> ❌ ERRO no 4500.2: ficha travada" in texto
++    assert avisos == [(("Concluído", "Processo de edição em massa finalizado. Verifique o log."), {}, False)]
++    qtbot.waitUntil(lambda: tela.progress_edicao.fracao == 1.0, timeout=2000)
++
++
++def test_robo_de_edicao_erro_fatal(tela, robo, qtbot, pd, monkeypatch):
++    def quebra(self):
++        raise RuntimeError("chrome não abriu")
++
++    monkeypatch.setattr(RoboFalso, "iniciar_driver", quebra)
++    tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A"], "CÓDIGO PMIB": ["4500.1"]})
++    tela.pos_selecao_edicao([0])
++    tela.entry_novo_projeto.setText("NOVO")
++    tela.run_edicao_thread()
++    _esperar_log(qtbot, tela, "> Erro Fatal na Edição: chrome não abriu")
++    qtbot.waitUntil(tela.btn_run_edicao.isEnabled, timeout=2000)
++    assert RoboFalso.instancias[0].saiu
++
++
++def test_tarefas_em_thread_comum(tela, robo, qtbot):
++    # Thread comum (não daemon): é tarefa da pessoa, o "X" pergunta antes de fechar.
++    liberar = threading.Event()
++    RoboFalso.roteiro = {}
++    original = RoboFalso.iniciar_driver
++    RoboFalso.iniciar_driver = lambda self: liberar.wait(3)
++    try:
++        antes = set(threading.enumerate())
++        tela.run_automation_thread()
++        novas = [t for t in threading.enumerate() if t not in antes]
++        assert novas and not any(t.daemon for t in novas)
++    finally:
++        liberar.set()
++        RoboFalso.iniciar_driver = original
++    qtbot.waitUntil(tela.btn_run_auto.isEnabled, timeout=3000)
++
++
++# --- medidas --------------------------------------------------------------------------------
++
++def _medir(qt_interface, qtbot, altura=850):
++    from sigft.app_qt import estilo
++
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    t = tela_mod.ModuloCriaFichas(None, None)
++    qtbot.addWidget(t)
++    t.resize(1003, altura)
++    t.show()
++    qtbot.waitExposed(t)
++    return t
++
++
++def _r(t, w):
++    p = w.mapTo(t, w.rect().topLeft())
++    return (p.x(), p.y(), w.width(), w.height())
++
++
++def test_medidas_iguais_as_do_customtkinter(qt_interface, qtbot):
++    # Medidas da tela CTk (janela 1280x850, winfo_*, x menos os 277 da barra
++    # lateral): título (40, 30) h29; Tabview (40, 69) 923x471, aba (46, 112)
++    # 911x422; área rolável recuada 6 (largura 888), barra em x=940;
++    # cartão 1 (52, 128) 888x172: título (67, 138) h28, "Código do Projeto:"
++    # 150 de largura, campo (217, 181) 698x28, botão 200x28 em (217, 219),
++    # rótulo em x=427, caixa (67, 264) h24, botão de PDMs 20 depois dela;
++    # cartão 2 (52, 320) 888x196: botões 374/359x40 em y=378 e 428, Limpar
++    # 100x90 em (825, 378), barra 858x8 em (67, 493); console (40, 550) 923x270.
++    anterior = qt_interface.styleSheet()
++    try:
++        t = _medir(qt_interface, qtbot)
++        qtbot.waitUntil(lambda: t.abas.height() == 471, timeout=1000)
++        assert _r(t, t.label_titulo)[:2] == (40, 30) and _r(t, t.label_titulo)[3] == 29
++        assert _r(t, t.abas) == (40, 69, 923, 471)
++        assert _r(t, t.abas.tab("Criação de Fichas")) == (46, 112, 911, 422)
++        assert _r(t, t.area_criacao.verticalScrollBar())[0] == 940
++        assert _r(t, t.cartao_config) == (52, 128, 888, 172)
++        assert _r(t, t.rotulo_etapa1)[:2] == (67, 138) and _r(t, t.rotulo_etapa1)[3] == 28
++        assert _r(t, t.rotulo_projeto) == (67, 181, 150, 28)
++        assert _r(t, t.entry_projeto) == (217, 181, 698, 28)
++        assert _r(t, t.rotulo_pmib) == (67, 219, 150, 28)
++        assert _r(t, t.btn_pmib) == (217, 219, 200, 28)
++        assert _r(t, t.lbl_status)[:2] == (427, 219) and _r(t, t.lbl_status)[3] == 28
++        x, y, w, h = _r(t, t.chk_pular)
++        assert (x, y, h) == (67, 264, 24)
++        xb, yb, wb, hb = _r(t, t.btn_pdm)
++        assert (xb, yb, hb) == (x + w + 20, 262, 28)
++        assert abs(wb - 231) <= 6                                  # texto + 7 de cada lado
++        assert _r(t, t.lbl_status_pdm)[0] == xb + wb + 20
++        assert _r(t, t.cartao_acoes) == (52, 320, 888, 196)
++        assert _r(t, t.rotulo_etapa2)[:2] == (67, 330)
++        assert _r(t, t.btn_run_ai) == (67, 378, 374, 40)
++        assert _r(t, t.btn_run_auto) == (451, 378, 359, 40)
++        assert _r(t, t.btn_resumo) == (67, 428, 374, 40)
++        assert _r(t, t.btn_save) == (451, 428, 359, 40)
++        assert _r(t, t.btn_reset) == (825, 378, 100, 90)
++        assert _r(t, t.progress) == (67, 493, 858, 8)
++        assert t.progress.value() == 9                             # set(0): o ponto de 8 px
++        assert _r(t, t.console) == (40, 550, 923, 270)
++    finally:
++        qt_interface.setStyleSheet(anterior)
++
++
++def test_medidas_da_aba_de_edicao(qt_interface, qtbot):
++    # CTk: cartões com padx=10 -> (62, 128) 868x134 e (62, 282) 868x146;
++    # "Novo Código do Projeto:" 180 de largura, campo (257, 181) 648x28;
++    # botão (257, 224) 200x28, rótulo em x=467; Iniciar (77, 340) 838x40;
++    # barra (77, 405) 838x8.
++    anterior = qt_interface.styleSheet()
++    try:
++        t = _medir(qt_interface, qtbot)
++        t.abas.botoes["Editar código do projeto"].click()
++        assert t.abas.get() == "Editar código do projeto"
++        qtbot.waitUntil(lambda: t.cartao_config_edicao.width() == 868, timeout=1000)
++        assert _r(t, t.cartao_config_edicao) == (62, 128, 868, 134)
++        assert _r(t, t.rotulo_etapa1_edicao)[:2] == (77, 138)
++        assert _r(t, t.rotulo_novo_projeto) == (77, 181, 180, 28)
++        assert _r(t, t.entry_novo_projeto) == (257, 181, 648, 28)
++        assert _r(t, t.rotulo_excel_edicao) == (77, 224, 180, 28)
++        assert _r(t, t.btn_excel_edicao) == (257, 224, 200, 28)
++        assert _r(t, t.lbl_status_edicao)[:2] == (467, 224)
++        assert _r(t, t.cartao_acoes_edicao) == (62, 282, 868, 146)
++        assert _r(t, t.rotulo_etapa2_edicao)[:2] == (77, 292)
++        assert _r(t, t.btn_run_edicao) == (77, 340, 838, 40)
++        assert _r(t, t.progress_edicao) == (77, 405, 838, 8)
++        assert _r(t, t.area_edicao.verticalScrollBar())[0] == 940
++    finally:
++        qt_interface.setStyleSheet(anterior)
++
++
++@pytest.mark.parametrize("altura_janela, abas, console", [
++    (850, 471, 270), (700, 358, 233), (600, 283, 208), (1000, 583, 308), (640, 313, 218), (500, 209, 182),
++])
++def test_abas_e_console_dividem_a_altura_como_o_grid_do_tk(qt_interface, qtbot, altura_janela, abas, console):
++    # grid do Tk: linha 1 (Tabview, weight=3, pede 261) e linha 2 (console,
++    # weight=1, pede 200) repartem a SOBRA 3:1. Medido no CTk em seis alturas.
++    anterior = qt_interface.styleSheet()
++    try:
++        t = _medir(qt_interface, qtbot, altura_janela)
++        qtbot.waitUntil(lambda: (t.abas.height(), t.console.height()) == (abas, console), timeout=1000)
++    finally:
++        qt_interface.setStyleSheet(anterior)
+-- 
+2.43.0
+

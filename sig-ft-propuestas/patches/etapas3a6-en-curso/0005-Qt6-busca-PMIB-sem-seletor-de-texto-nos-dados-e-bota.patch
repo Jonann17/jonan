@@ -1,7 +1,7 @@
 From c7ede7ac01f248d2cf1ef1deeac8a5df1c03dba7 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:25:51 +0000
-Subject: [PATCH 05/14] Qt6: busca PMIB sem seletor de texto nos dados e botao
+Subject: [PATCH 05/16] Qt6: busca PMIB sem seletor de texto nos dados e botao
  cinza do blocos
 
 mono() so nos rotulos com emoji: amostra e caminho chegam intactos e a

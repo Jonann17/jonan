@@ -1,0 +1,171 @@
+From d0590eddda6516b60f54481d237f408d249c89da Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 16:16:06 +0000
+Subject: [PATCH 16/16] Qt6: todas as telas portadas no menu, importadas na
+ primeira visita
+
+CriaFichas, PDM, Analyzer, Upload de Condicoes e de Specs, Copia de Fichas,
+PMIB Manager e Busca PMIB entram em TELAS; Correcao de PDM tambem, mas segue
+bloqueada no menu. AutoSpec continua com o aviso ate o porte terminar.
+
+Cada tela importa dentro da sua fabrica: o app nao paga o import de todas ao
+abrir, e uma tela que nao importa vira a tela de erro dela em vez de impedir
+a janela de abrir. O import fica por extenso para o PyInstaller enxergar.
+tests/test_qt_registro_telas.py cobra que todo item do menu esteja registrado.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/main.py            | 66 ++++++++++++++++++++++++++++++++-
+ tests/test_qt_registro_telas.py | 57 ++++++++++++++++++++++++++++
+ 2 files changed, 121 insertions(+), 2 deletions(-)
+ create mode 100644 tests/test_qt_registro_telas.py
+
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index 70c7e58..442b323 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -45,13 +45,75 @@ desviar_saida_para_arquivo()
+ 
+ _RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ 
+-# Registro das telas migradas: nome -> fábrica(parent, controller). Cada plano
+-# de etapa acrescenta as suas aqui.
++# As telas das etapas 3 a 5 importam na PRIMEIRA visita, dentro da fábrica:
++# abrir o app não paga o import de todas, e uma tela que não importa (falta
++# uma dependência) vira a tela de erro DELA em `show_frame`, em vez de impedir
++# a janela de abrir. O import fica escrito por extenso (não `importlib`) para o
++# PyInstaller enxergar o módulo.
++def _cria_fichas(parent, controller):
++    from sigft.app_qt.views.cria_fichas import ModuloCriaFichas
++    return ModuloCriaFichas(parent, controller)
++
++
++def _pdm(parent, controller):
++    from sigft.app_qt.views.pdm import ModuloPDM
++    return ModuloPDM(parent, controller)
++
++
++def _analyzer(parent, controller):
++    from sigft.app_qt.views.analyzer import ModuloAnalyzer
++    return ModuloAnalyzer(parent, controller)
++
++
++def _upload_conditions(parent, controller):
++    from sigft.app_qt.views.upload_conditions import ModuloUploadConditions
++    return ModuloUploadConditions(parent, controller)
++
++
++def _upload_specs(parent, controller):
++    from sigft.app_qt.views.upload_tech_specs import ModuloUploadTechSpecs
++    return ModuloUploadTechSpecs(parent, controller)
++
++
++def _correcao_pdm(parent, controller):
++    # Continua bloqueada no menu (`catalogo.TELAS_BLOQUEADAS`); registrada para
++    # abrir assim que for liberada.
++    from sigft.app_qt.views.correcao_pdm import ModuloCorrecaoPDM
++    return ModuloCorrecaoPDM(parent, controller)
++
++
++def _copia_fichas(parent, controller):
++    from sigft.app_qt.views.copia_fichas import ModuloCopiaFichas
++    return ModuloCopiaFichas(parent, controller)
++
++
++def _pmib_manager(parent, controller):
++    from sigft.app_qt.views.pmib_manager import ModuloPMIBManager
++    return ModuloPMIBManager(parent, controller)
++
++
++def _busca_pmib(parent, controller):
++    from sigft.app_qt.views.busca_pmib import ModuloBuscaPMIB
++    return ModuloBuscaPMIB(parent, controller)
++
++
++# Registro das telas migradas: nome -> fábrica(parent, controller). O teste
++# `tests/test_qt_registro_telas.py` cobra que todo item do menu esteja aqui.
+ TELAS = {
+     "Home": lambda parent, controller: HomeView(parent, controller),
+     # Etapa 2 (pilotos): Tradutor e a seção Aplicação LMR (Upload + Exclusão).
+     "Translator": lambda parent, controller: ModuloTranslator(parent, controller),
+     "LMR": lambda parent, controller: ModuloAplicacaoLMR(parent, controller),
++    # Etapas 3 a 5.
++    "CriaFichas": _cria_fichas,
++    "PDM": _pdm,
++    "Analyzer": _analyzer,
++    "UploadConditions": _upload_conditions,
++    "UploadSpecs": _upload_specs,
++    "CorrecaoPDM": _correcao_pdm,
++    "CopiaFichas": _copia_fichas,
++    "PMIBManager": _pmib_manager,
++    "SearchPMIB": _busca_pmib,
+ }
+ 
+ 
+diff --git a/tests/test_qt_registro_telas.py b/tests/test_qt_registro_telas.py
+new file mode 100644
+index 0000000..3cfb338
+--- /dev/null
++++ b/tests/test_qt_registro_telas.py
+@@ -0,0 +1,57 @@
++"""Toda tela do menu abre a tela Qt de verdade, não o aviso de "ainda não migrada".
++
++Rede de segurança do corte: o menu (`catalogo.MENU`) e o registro (`main.TELAS`)
++moram em arquivos diferentes, e uma tela portada que ninguém registrou passaria
++despercebida -- o app abriria normalmente e mostraria o aviso.
++"""
++from __future__ import annotations
++
++import pytest
++
++from sigft.app_qt import catalogo
++from sigft.app_qt import main as qmain
++from sigft.app_qt.views.nao_migrada import TelaComErro, TelaNaoMigrada
++
++# Telas ainda em porte. Esvaziar quando a última entrar em `TELAS`.
++PENDENTES = {"AutoSpec"}
++
++CHAVES_DO_MENU = [item[2] for item in catalogo.MENU if item[0] == "botao"]
++
++
++def test_menu_e_cards_falam_das_mesmas_telas():
++    assert set(CHAVES_DO_MENU) == {chave for chave, *_ in catalogo.MODULOS}
++
++
++@pytest.mark.parametrize("chave", [c for c in CHAVES_DO_MENU if c not in PENDENTES])
++def test_tela_do_menu_esta_registrada(chave):
++    assert chave in qmain.TELAS
++
++
++def test_pendentes_ainda_nao_registradas():
++    # Se uma pendente entrou em `TELAS`, tire-a de `PENDENTES` (o teste acima
++    # passa a cobri-la).
++    assert not PENDENTES & set(qmain.TELAS)
++
++
++@pytest.fixture
++def janela(qt_interface, qtbot, tmp_path, monkeypatch):
++    monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
++    j = qmain.SIG_FT_App()
++    qtbot.addWidget(j)
++    return j
++
++
++@pytest.mark.parametrize("chave", [c for c in CHAVES_DO_MENU
++                                   if c not in PENDENTES and c not in catalogo.TELAS_BLOQUEADAS])
++def test_tela_registrada_monta_sem_erro(janela, chave):
++    janela.show_frame(chave)
++    tela = janela.pilha.currentWidget()
++    assert not isinstance(tela, (TelaNaoMigrada, TelaComErro)), chave
++
++
++def test_tela_bloqueada_continua_fechada(janela):
++    antes = janela.pilha.currentWidget()
++    for chave in catalogo.TELAS_BLOQUEADAS:
++        janela.show_frame(chave)
++        assert janela.pilha.currentWidget() is antes
++        assert not janela.botoes_menu[chave].isEnabled()
+-- 
+2.43.0
+
