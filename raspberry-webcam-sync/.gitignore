@@ -1,0 +1,16 @@
+# Archivos generados en tiempo de ejecución (no van al repositorio)
+__pycache__/
+*.pyc
+
+# Estado en caliente que guarda el servidor
+.config_runtime.json
+**/.config_runtime.json
+
+# Registro de fotos ya subidas por la cámara
+.subidas.txt
+**/.subidas.txt
+
+# Carpetas de fotos (no queremos subir las imágenes al repo)
+fotos_camara/
+nube_fotos/
+fotos_descargadas/

@@ -34,3 +34,21 @@ def asegurar_carpeta(ruta):
     """Crea la carpeta si no existe (no falla si ya existe)."""
     os.makedirs(ruta, exist_ok=True)
     return ruta
+
+
+def puerto_arduino(puerto="auto"):
+    """Devuelve el puerto serie del Arduino.
+
+    Con "auto" lo busca solo: primero un Arduino enchufado por USB
+    (/dev/ttyACM*, o /dev/ttyUSB* en los clones con chip CH340) y, si no
+    hay, los pines GPIO 14/15 del Pi (/dev/serial0). Así se puede pasar
+    del cable USB a los pines (o al revés) sin tocar config.ini.
+    """
+    if puerto and puerto != "auto":
+        return puerto
+    import glob
+    for patron in ("/dev/serial/by-id/*Arduino*", "/dev/ttyACM*", "/dev/ttyUSB*"):
+        encontrados = sorted(glob.glob(patron))
+        if encontrados:
+            return encontrados[0]
+    return "/dev/serial0"
