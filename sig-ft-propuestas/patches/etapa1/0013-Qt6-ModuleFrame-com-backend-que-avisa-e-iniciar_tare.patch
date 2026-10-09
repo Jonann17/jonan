@@ -1,0 +1,224 @@
+From 7e75724bca1e2d72e5c6a9dc7a85ef86968c6062 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:04:47 +0000
+Subject: [PATCH 13/26] Qt6: ModuleFrame com backend() que avisa e
+ iniciar_tarefa() que trava o botao no clique
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/module_frame.py | 122 +++++++++++++++++++++++++++
+ tests/test_qt_module_frame.py        |  72 ++++++++++++++++
+ 2 files changed, 194 insertions(+)
+ create mode 100644 sigft/app_qt/widgets/module_frame.py
+ create mode 100644 tests/test_qt_module_frame.py
+
+diff --git a/sigft/app_qt/widgets/module_frame.py b/sigft/app_qt/widgets/module_frame.py
+new file mode 100644
+index 0000000..6c374c5
+--- /dev/null
++++ b/sigft/app_qt/widgets/module_frame.py
+@@ -0,0 +1,122 @@
++"""O esqueleto de uma tela: cabeçalho + conteúdo + (progresso) + console.
++
++Mesma ideia e mesmos parâmetros do `ModuleFrame` CustomTkinter, mais duas
++coisas que lá eram disciplina e aqui são mecanismo:
++
++* `backend(nome)`: um backend que não carregou vira aviso com o motivo, nunca
++  `AttributeError: 'NoneType'` (defeito 3 da revisão de 2026-10-07);
++* `iniciar_tarefa(...)`: desabilita o botão NO CLIQUE (dois cliques não sobem
++  dois robôs -- defeito 5), roda numa thread comum (o "X" pergunta antes de
++  fechar) e, aconteça o que acontecer, devolve o botão e loga a exceção.
++"""
++from __future__ import annotations
++
++import threading
++import traceback
++
++from PySide6.QtWidgets import (
++    QLabel, QMessageBox, QProgressBar, QScrollArea, QVBoxLayout, QWidget,
++)
++
++from sigft.app import backends, theme
++from sigft.app_qt import interface
++from sigft.app_qt.widgets.console import ConsoleFrame
++from sigft.app_qt.widgets.espera import DialogosDeEspera
++
++
++class ModuleFrame(DialogosDeEspera, QWidget):
++    def __init__(
++        self,
++        parent=None,
++        controller=None,
++        *,
++        titulo: str,
++        cor_titulo: str | None = None,
++        peso_conteudo: int = 1,
++        altura_console: int | None = theme.ALTURA_CONSOLE,
++        com_progresso: bool = False,
++        construir: bool = True,
++        embutida: bool = False,
++        console_externo=None,
++    ) -> None:
++        super().__init__(parent)
++        self.setObjectName("tela")
++        self.controller = controller
++        self.embutida = embutida
++        raiz = QVBoxLayout(self)
++        raiz.setContentsMargins(theme.PADDING_X, theme.PADDING_Y, theme.PADDING_X, theme.PADDING_Y)
++        raiz.setSpacing(theme.PADDING_Y)
++
++        self.content = QWidget()
++        self.content_layout = QVBoxLayout(self.content)
++        self.content_layout.setContentsMargins(0, 0, 0, 0)
++
++        if embutida:
++            # Dentro da aba de outra tela: sem cabeçalho nem console próprios, e
++            # ROLÁVEL -- numa aba sobra menos altura, e o que não cabe sumiria.
++            self.header = None
++            self.label_titulo = None
++            self.progress_bar = None
++            self.console = console_externo
++            rolagem = QScrollArea()
++            rolagem.setWidgetResizable(True)
++            rolagem.setWidget(self.content)
++            raiz.setContentsMargins(0, 0, 0, 0)
++            raiz.addWidget(rolagem)
++        else:
++            self.header = QWidget()
++            linha_header = QVBoxLayout(self.header)
++            linha_header.setContentsMargins(0, 0, 0, 0)
++            self.label_titulo = QLabel(titulo, objectName="titulo_modulo")
++            if cor_titulo:
++                self.label_titulo.setStyleSheet(f"color: {cor_titulo};")
++            linha_header.addWidget(self.label_titulo)
++            self.header.setFixedHeight(theme.ALTURA_HEADER)
++            raiz.addWidget(self.header)
++            raiz.addWidget(self.content, peso_conteudo)
++            self.progress_bar = None
++            if com_progresso:
++                self.progress_bar = QProgressBar()
++                self.progress_bar.setRange(0, 1000)
++                self.progress_bar.setTextVisible(False)
++                raiz.addWidget(self.progress_bar)
++            self.console = ConsoleFrame(altura=altura_console)
++            raiz.addWidget(self.console, 0 if altura_console is not None else 1)
++
++        if construir:
++            self._build_ui()
++
++    def _build_ui(self) -> None:
++        raise NotImplementedError(f"{type(self).__name__} precisa implementar _build_ui().")
++
++    def log(self, msg: object, nivel: str = "info", contexto: object | None = None) -> None:
++        if self.console is not None:
++            self.console.log(msg, nivel, contexto)
++
++    def backend(self, nome: str):
++        """O backend `nome`, ou `None` depois de avisar a pessoa do porquê."""
++        try:
++            return backends.exigir(nome)
++        except backends.BackendIndisponivel as erro:
++            self.log(f"[ERRO] {erro}")
++            QMessageBox.warning(self, "Módulo indisponível", str(erro))
++            return None
++
++    def iniciar_tarefa(self, alvo, *args, botao=None) -> threading.Thread:
++        """Roda `alvo(*args)` numa thread comum. Chamar da thread da interface."""
++        if botao is not None:
++            botao.setEnabled(False)
++
++        def rodar() -> None:
++            try:
++                alvo(*args)
++            except Exception as erro:  # noqa: BLE001 -- vira log, e o botão volta
++                self.log(f"[ERRO] {type(erro).__name__}: {erro}")
++                traceback.print_exc()
++            finally:
++                if botao is not None:
++                    interface.na_interface(botao.setEnabled, True)
++
++        thread = threading.Thread(target=rodar, name=f"tarefa:{type(self).__name__}")
++        thread.start()
++        return thread
+diff --git a/tests/test_qt_module_frame.py b/tests/test_qt_module_frame.py
+new file mode 100644
+index 0000000..5667b03
+--- /dev/null
++++ b/tests/test_qt_module_frame.py
+@@ -0,0 +1,72 @@
++import threading
++
++import pytest
++
++from sigft.app import backends
++from sigft.app_qt.widgets.module_frame import ModuleFrame
++
++
++class Tela(ModuleFrame):
++    def _build_ui(self):
++        self.construida = True
++
++
++def test_monta_cabecalho_conteudo_console(qt_interface, qtbot):
++    t = Tela(titulo="Tradutor Técnico")
++    qtbot.addWidget(t)
++    assert t.construida and t.label_titulo.text() == "Tradutor Técnico"
++    assert t.progress_bar is None and t.console is not None
++
++
++def test_com_progresso(qt_interface, qtbot):
++    t = Tela(titulo="x", com_progresso=True)
++    qtbot.addWidget(t)
++    assert t.progress_bar.maximum() == 1000
++
++
++def test_embutida_usa_console_do_pai(qt_interface, qtbot):
++    pai = Tela(titulo="pai")
++    qtbot.addWidget(pai)
++    filha = Tela(titulo="filha", embutida=True, console_externo=pai.console)
++    qtbot.addWidget(filha)
++    assert filha.header is None and filha.console is pai.console
++
++
++def test_backend_que_falhou_vira_aviso_e_nao_excecao(qt_interface, qtbot, monkeypatch):
++    monkeypatch.setattr(backends, "lmr_backend", None)
++    monkeypatch.setattr(backends, "falhas", {"lmr_backend": ImportError("sem xlwings")})
++    avisos = []
++    monkeypatch.setattr("sigft.app_qt.widgets.module_frame.QMessageBox.warning",
++                        lambda *a, **k: avisos.append(a[2]))
++    t = Tela(titulo="x")
++    qtbot.addWidget(t)
++    assert t.backend("lmr_backend") is None
++    assert "sem xlwings" in avisos[0]
++    qtbot.waitUntil(lambda: "sem xlwings" in t.console.toPlainText(), timeout=2000)
++
++
++def test_tarefa_desabilita_o_botao_no_clique_e_reabilita_no_fim(qt_interface, qtbot):
++    from PySide6.QtWidgets import QPushButton
++    t = Tela(titulo="x")
++    qtbot.addWidget(t)
++    botao = QPushButton("Rodar")
++    qtbot.addWidget(botao)
++    liberar = threading.Event()
++    thread = t.iniciar_tarefa(liberar.wait, 5, botao=botao)
++    assert not botao.isEnabled()          # desabilitado ANTES de a thread rodar
++    assert not thread.daemon              # tarefa da pessoa: o "X" pergunta antes
++    liberar.set()
++    thread.join(3)
++    qtbot.waitUntil(botao.isEnabled, timeout=2000)
++
++
++def test_excecao_no_worker_vai_para_o_console_e_solta_o_botao(qt_interface, qtbot):
++    from PySide6.QtWidgets import QPushButton
++    t = Tela(titulo="x")
++    qtbot.addWidget(t)
++    botao = QPushButton("Rodar")
++    qtbot.addWidget(botao)
++    thread = t.iniciar_tarefa(lambda: 1 / 0, botao=botao)
++    thread.join(3)
++    qtbot.waitUntil(lambda: "ZeroDivisionError" in t.console.toPlainText(), timeout=2000)
++    qtbot.waitUntil(botao.isEnabled, timeout=2000)
+-- 
+2.43.0
+

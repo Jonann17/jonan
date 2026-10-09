@@ -1,0 +1,262 @@
+From 56e1a58d4f185ba3f81b292a7f3138d7419d5fc5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:37:47 +0000
+Subject: [PATCH 23/26] Qt6: main() faz os passos de partida do app atual (log,
+ .env, migracao, navegador do RPA)
+
+sigft/core/saida_log.py e a copia compartilhada de _desviar_saida_para_arquivo
+(a de sigft/app/main.py fica ate o corte, travada por test_distribuicao_box).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/main.py    | 32 ++++++++++++++++++++
+ sigft/core/saida_log.py | 51 +++++++++++++++++++++++++++++++
+ tests/test_qt_main.py   | 37 +++++++++++++++++++++++
+ tests/test_saida_log.py | 67 +++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 187 insertions(+)
+ create mode 100644 sigft/core/saida_log.py
+ create mode 100644 tests/test_saida_log.py
+
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index 848b1a7..6fc4e06 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -20,6 +20,7 @@ import threading
+ import time
+ import traceback
+ 
++from dotenv import load_dotenv
+ from PySide6.QtCore import Qt, Signal
+ from PySide6.QtGui import QIcon, QPixmap
+ from PySide6.QtWidgets import (
+@@ -33,6 +34,12 @@ from sigft.app_qt import catalogo, estilo, interface
+ from sigft.app_qt.views.home import HomeView
+ from sigft.app_qt.views.nao_migrada import TelaNaoMigrada
+ from sigft.core import instancia
++from sigft.core.saida_log import desviar_saida_para_arquivo
++
++# Sem console (o .exe), `print` e traceback vão para `logs/sigft.log`: é o canal
++# de diagnóstico da primeira execução em máquina nova. Na mesma posição do app
++# CustomTkinter -- no import, antes de qualquer coisa imprimir.
++desviar_saida_para_arquivo()
+ 
+ _RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ 
+@@ -48,6 +55,9 @@ def resource_path(relativo: str) -> str:
+     return os.path.join(base, relativo)
+ 
+ 
++load_dotenv(resource_path(".env"))
++
++
+ def _arquivo_de_chaves() -> str:
+     from sigft.config import caminho_config
+ 
+@@ -260,6 +270,28 @@ def _preparar_qt() -> QApplication:
+ 
+ def main() -> None:
+     instancia.preparar()
++
++    # Traz `api_config.json`, `user_prefs.json` e o `.env` da pasta do programa
++    # para `Documentos\SIG-FT\`, uma vez. Silenciosa quando não há o que
++    # migrar, e nunca levanta. Ver `sigft/core/dados_usuario.py`.
++    from sigft.core.dados_usuario import migrar_se_preciso
++
++    if (trazidos := migrar_se_preciso()):
++        print(f"[SIG-FT] Configuracao importada para a pasta de dados: "
++              f"{', '.join(trazidos)}")
++
++    # Acha o Chrome/Edge da máquina para o RPA e repassa o certificado da
++    # empresa ao processo Node do Playwright. `None` é resultado válido: o app
++    # abre igual, e só o robô reclama quando for usado. Ver
++    # `sigft/core/rpa/navegador.py`.
++    from sigft.core.rpa.navegador import preparar_ambiente_do_rpa
++
++    if (navegador_do_rpa := preparar_ambiente_do_rpa()):
++        print(f"[SIG-FT] Navegador do RPA: {navegador_do_rpa}")
++    else:
++        print("[SIG-FT] Nenhum Chrome/Edge encontrado. O app abre normalmente; "
++              "so o robo do portal vai reclamar de navegador quando for usado.")
++
+     app = _preparar_qt()
+     splash = SplashScreen()
+     janela: list[SIG_FT_App] = []
+diff --git a/sigft/core/saida_log.py b/sigft/core/saida_log.py
+new file mode 100644
+index 0000000..a2acd58
+--- /dev/null
++++ b/sigft/core/saida_log.py
+@@ -0,0 +1,51 @@
++"""Sem console, o `print` vai para `Documentos\\SIG-FT\\logs\\sigft.log`.
++
++Esta é a cópia COMPARTILHADA de `_desviar_saida_para_arquivo` de
++`sigft/app/main.py`, para a interface Qt (`sigft/app_qt/main.py`) fazer o mesmo
++sem importar a interface CustomTkinter. A cópia de `sigft/app/main.py` continua
++onde está porque `tests/test_distribuicao_box.py` a trava lá; as duas se juntam
++no corte (Etapa 6), quando `sigft/app/` sair.
++
++Só biblioteca padrão: nenhum import de interface aqui.
++"""
++from __future__ import annotations
++
++import os
++import sys
++import time
++
++
++def desviar_saida_para_arquivo() -> None:
++    """Sem console, manda `print` e traceback para `logs/sigft.log`.
++
++    Só age no executável compilado (`sys.frozen`) e só quando o PyInstaller
++    de fato não deu console (`sys.stdout is None`). Rodando do `.py` nada
++    muda -- o terminal continua sendo o lugar certo.
++
++    Nunca levanta: se não der para abrir o arquivo (pasta somente-leitura,
++    disco cheio), o app tem que subir assim mesmo. Perder o log é ruim;
++    não abrir é pior.
++    """
++    if not getattr(sys, "frozen", False):
++        return
++    if sys.stdout is not None and sys.stderr is not None:
++        return
++    try:
++        # `Documentos\SIG-FT\logs\`, e não ao lado do `.exe`: sob `Program
++        # Files` a pasta do programa é somente-leitura, e este é o pior lugar
++        # para falhar em silêncio -- é justamente este log que explicaria
++        # qualquer outra falha da abertura.
++        from sigft.core.dados_usuario import pasta_logs
++
++        destino = open(
++            os.path.join(str(pasta_logs()), "sigft.log"),
++            "a", encoding="utf-8", buffering=1,
++        )
++        if sys.stdout is None:
++            sys.stdout = destino
++        if sys.stderr is None:
++            sys.stderr = destino
++        destino.write(chr(10))
++        print("===== SIG-FT iniciado em %s =====" % time.strftime("%d/%m/%Y %H:%M:%S"))
++    except Exception:  # noqa: BLE001 -- perder o log é ruim, não abrir é pior
++        pass
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index 0f9865b..b5a7434 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -105,3 +105,40 @@ def test_smoke_nao_pergunta_nada_mesmo_com_thread_comum_viva(qt_interface, monke
+     finally:
+         liberar.set()
+         viva.join(3)
++
++
++def test_main_prepara_dados_e_navegador_antes_da_splash(qt_interface, monkeypatch, capsys):
++    """Mesmos passos de partida do app CustomTkinter, na mesma ordem."""
++    from sigft.core import dados_usuario, instancia
++    from sigft.core.rpa import navegador
++
++    eventos = []
++
++    class SplashFalsa:
++        pronta = type("S", (), {"connect": lambda self, f: eventos.append("conectou")})()
++
++        def __init__(self):
++            eventos.append("splash")
++
++        def show(self):
++            eventos.append("show")
++
++        def carregar(self):
++            eventos.append("carregar")
++
++    monkeypatch.setattr(instancia, "preparar", lambda: eventos.append("preparar"))
++    monkeypatch.setattr(instancia, "encerrar", lambda codigo=0: eventos.append(("encerrar", codigo)))
++    monkeypatch.setattr(dados_usuario, "migrar_se_preciso",
++                        lambda: eventos.append("migrou") or ["api_config.json"])
++    monkeypatch.setattr(navegador, "preparar_ambiente_do_rpa",
++                        lambda: eventos.append("navegador") or None)
++    monkeypatch.setattr(qmain, "_preparar_qt",
++                        lambda: type("A", (), {"exec": lambda self: eventos.append("exec")})())
++    monkeypatch.setattr(qmain, "SplashScreen", SplashFalsa)
++    qmain.main()
++    assert eventos.index("migrou") < eventos.index("splash")
++    assert eventos.index("navegador") < eventos.index("splash")
++    assert eventos[-1] == ("encerrar", 0)
++    saida = capsys.readouterr().out
++    assert "[SIG-FT] Configuracao importada para a pasta de dados: api_config.json" in saida
++    assert "[SIG-FT] Nenhum Chrome/Edge encontrado." in saida
+diff --git a/tests/test_saida_log.py b/tests/test_saida_log.py
+new file mode 100644
+index 0000000..87b5f00
+--- /dev/null
++++ b/tests/test_saida_log.py
+@@ -0,0 +1,67 @@
++"""`sigft.core.saida_log`: sem console, o `print` do .exe vai para o sigft.log."""
++import sys
++
++from sigft.core import dados_usuario, saida_log
++
++
++def test_fora_do_exe_nao_mexe_em_nada(monkeypatch, tmp_path):
++    monkeypatch.delattr(sys, "frozen", raising=False)
++    monkeypatch.setattr(sys, "stdout", None)
++    monkeypatch.setattr(dados_usuario, "pasta_logs", lambda: tmp_path)
++    saida_log.desviar_saida_para_arquivo()
++    assert sys.stdout is None
++    assert not (tmp_path / "sigft.log").exists()
++
++
++def test_exe_com_console_nao_mexe_em_nada(monkeypatch, tmp_path):
++    monkeypatch.setattr(sys, "frozen", True, raising=False)
++    monkeypatch.setattr(dados_usuario, "pasta_logs", lambda: tmp_path)
++    antes = (sys.stdout, sys.stderr)
++    saida_log.desviar_saida_para_arquivo()
++    assert (sys.stdout, sys.stderr) == antes
++    assert not (tmp_path / "sigft.log").exists()
++
++
++def test_exe_sem_console_grava_no_log(monkeypatch, tmp_path):
++    monkeypatch.setattr(sys, "frozen", True, raising=False)
++    monkeypatch.setattr(sys, "stdout", None)
++    monkeypatch.setattr(sys, "stderr", None)
++    monkeypatch.setattr(dados_usuario, "pasta_logs", lambda: tmp_path)
++    saida_log.desviar_saida_para_arquivo()
++    try:
++        assert sys.stdout is not None and sys.stderr is sys.stdout
++        print("linha de teste")
++        sys.stdout.flush()
++    finally:
++        arquivo = sys.stdout
++        sys.stdout = sys.stderr = None  # o monkeypatch restaura depois
++        if arquivo is not None:
++            arquivo.close()
++    texto = (tmp_path / "sigft.log").read_text(encoding="utf-8")
++    assert "===== SIG-FT iniciado em" in texto
++    assert "linha de teste" in texto
++
++
++def test_nunca_levanta_se_nao_da_para_abrir_o_log(monkeypatch):
++    monkeypatch.setattr(sys, "frozen", True, raising=False)
++    monkeypatch.setattr(sys, "stdout", None)
++    monkeypatch.setattr(sys, "stderr", None)
++
++    def quebra():
++        raise OSError("disco cheio")
++
++    monkeypatch.setattr(dados_usuario, "pasta_logs", quebra)
++    saida_log.desviar_saida_para_arquivo()  # nao levanta
++    assert sys.stdout is None
++
++
++def test_modulo_nao_importa_interface():
++    import ast
++    from pathlib import Path
++
++    arvore = ast.parse(Path(saida_log.__file__).read_text(encoding="utf-8"))
++    nomes = {n.module if isinstance(n, ast.ImportFrom) else a.name
++             for n in ast.walk(arvore) if isinstance(n, (ast.Import, ast.ImportFrom))
++             for a in (n.names if isinstance(n, ast.Import) else [n])}
++    assert not any(n and n.split(".")[0] in {"tkinter", "customtkinter", "PySide6"}
++                   for n in nomes)
+-- 
+2.43.0
+

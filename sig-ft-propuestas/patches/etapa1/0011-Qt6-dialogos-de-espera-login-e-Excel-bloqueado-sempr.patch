@@ -1,0 +1,255 @@
+From f5fdba95e00063765c3f8c44bbce7eefb1cdbda2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 19:44:04 +0000
+Subject: [PATCH 11/26] Qt6: dialogos de espera (login e Excel bloqueado)
+ sempre na thread da interface
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/dialogs.py | 95 +++++++++++++++++++++++++++++++++
+ sigft/app_qt/widgets/espera.py  | 44 +++++++++++++++
+ tests/test_qt_espera.py         | 78 +++++++++++++++++++++++++++
+ 3 files changed, 217 insertions(+)
+ create mode 100644 sigft/app_qt/widgets/dialogs.py
+ create mode 100644 sigft/app_qt/widgets/espera.py
+ create mode 100644 tests/test_qt_espera.py
+
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+new file mode 100644
+index 0000000..090b0d0
+--- /dev/null
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -0,0 +1,95 @@
++"""Janelas que param o robô à espera da pessoa. Mesmos textos de hoje.
++
++Regra que não pode ser esquecida: fechar no "X" SEMPRE solta o worker, com a
++resposta mais segura (continuar o login; não repetir a gravação). Sem isso, a
++thread do robô fica presa em `Event.wait()` para sempre.
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
++
++from sigft.app.widgets.dialogs import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
++
++
++class _DialogoDeAcaoManual(QDialog):
++    def __init__(self, parent, *, titulo: str, mensagem: str, largura: int, altura: int) -> None:
++        super().__init__(parent)
++        self.setWindowTitle(titulo)
++        self.setFixedSize(largura, altura)
++        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
++        self._decidido = False
++        self.layout_principal = QVBoxLayout(self)
++        self.layout_principal.setContentsMargins(20, 20, 20, 20)
++        self.rotulo = QLabel(mensagem)
++        self.rotulo.setWordWrap(True)
++        self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.rotulo.setStyleSheet("font-size: 13px;")
++        self.layout_principal.addWidget(self.rotulo, 1)
++
++    def _ao_fechar_sem_decidir(self) -> None:
++        raise NotImplementedError
++
++    def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        if not self._decidido:
++            self._ao_fechar_sem_decidir()
++        super().closeEvent(evento)
++
++
++class PausaLoginDialog(_DialogoDeAcaoManual):
++    """"Ação Manual Necessária" com um botão: continuar a automação."""
++
++    def __init__(self, parent, *, mensagem: str, evento_espera, texto_botao: str = TEXTO_CONTINUAR) -> None:
++        super().__init__(parent, titulo="Ação Manual Necessária", mensagem=mensagem,
++                         largura=450, altura=250)
++        self._evento = evento_espera
++        self.botao = QPushButton(texto_botao)
++        self.botao.setMinimumHeight(45)
++        self.botao.setStyleSheet("font-size: 14px; font-weight: bold;")
++        self.botao.clicked.connect(self.liberar)
++        self.layout_principal.addWidget(self.botao, 0, Qt.AlignmentFlag.AlignHCenter)
++
++    def liberar(self) -> None:
++        self._decidido = True
++        self._evento.set()
++        self.accept()
++
++    def _ao_fechar_sem_decidir(self) -> None:
++        self._decidido = True
++        self._evento.set()
++
++
++class RetryLockDialog(_DialogoDeAcaoManual):
++    """"Arquivo Bloqueado": Tentar Novamente × Ignorar e Continuar (chave "retry")."""
++
++    def __init__(self, parent, *, mensagem: str = MSG_EXCEL_BLOQUEADO, evento_espera, resultado: dict) -> None:
++        super().__init__(parent, titulo="Arquivo Bloqueado", mensagem=mensagem,
++                         largura=450, altura=200)
++        self._evento = evento_espera
++        self._resultado = resultado
++        linha = QHBoxLayout()
++        self.botao_repetir = QPushButton("Tentar Novamente")
++        self.botao_cancelar = QPushButton("Ignorar e Continuar")
++        self.botao_cancelar.setProperty("variante", "contorno")
++        for botao in (self.botao_repetir, self.botao_cancelar):
++            botao.setFixedSize(150, 40)
++            linha.addWidget(botao)
++        self.botao_repetir.clicked.connect(self.repetir)
++        self.botao_cancelar.clicked.connect(self.cancelar)
++        self.layout_principal.addLayout(linha)
++
++    def _responder(self, repetir: bool) -> None:
++        self._decidido = True
++        self._resultado["retry"] = repetir
++        self._evento.set()
++
++    def repetir(self) -> None:
++        self._responder(True)
++        self.accept()
++
++    def cancelar(self) -> None:
++        self._responder(False)
++        self.reject()
++
++    def _ao_fechar_sem_decidir(self) -> None:
++        self._responder(False)
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+new file mode 100644
+index 0000000..0a64860
+--- /dev/null
++++ b/sigft/app_qt/widgets/espera.py
+@@ -0,0 +1,44 @@
++"""`pausar_e_esperar` e `perguntar_retry_excel` para as telas Qt.
++
++Mesma API e mesma regra da versão CustomTkinter:
++* chamado de um worker: a janela nasce na thread da interface (`na_interface`)
++  e o worker espera num `threading.Event`;
++* chamado da própria thread da interface: `exec()`, que bloqueia SEM parar o
++  laço de eventos -- `Event.wait()` ali congelaria o app.
++"""
++from __future__ import annotations
++
++import threading
++
++from sigft.app.widgets.dialogs import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
++from sigft.app_qt import interface
++from sigft.app_qt.widgets import dialogs
++
++
++class DialogosDeEspera:
++    def _abrir_e_esperar(self, construir_dialogo) -> dict:
++        evento = threading.Event()
++        resultado: dict = {}
++        if interface.na_thread_da_interface():
++            dialogo = construir_dialogo(evento, resultado)
++            dialogo.exec()
++            return resultado
++
++        def abrir() -> None:
++            dialogo = construir_dialogo(evento, resultado)
++            self._dialogo_aberto = dialogo  # segura a referência enquanto está aberto
++            dialogo.show()
++
++        interface.na_interface(abrir)
++        evento.wait()
++        return resultado
++
++    def pausar_e_esperar(self, mensagem: str, texto_botao: str = TEXTO_CONTINUAR) -> None:
++        self._abrir_e_esperar(lambda evento, _res: dialogs.PausaLoginDialog(
++            self, mensagem=mensagem, evento_espera=evento, texto_botao=texto_botao))
++
++    def perguntar_retry_excel(self, caminho: object = None) -> bool:
++        mensagem = msg_excel_bloqueado(caminho) if caminho is not None else MSG_EXCEL_BLOQUEADO
++        resultado = self._abrir_e_esperar(lambda evento, res: dialogs.RetryLockDialog(
++            self, mensagem=mensagem, evento_espera=evento, resultado=res))
++        return bool(resultado.get("retry", False))
+diff --git a/tests/test_qt_espera.py b/tests/test_qt_espera.py
+new file mode 100644
+index 0000000..6d5757a
+--- /dev/null
++++ b/tests/test_qt_espera.py
+@@ -0,0 +1,78 @@
++import threading
++
++from PySide6.QtWidgets import QWidget
++
++from sigft.app_qt.widgets import dialogs as qd
++from sigft.app_qt.widgets.espera import DialogosDeEspera
++
++
++class Tela(DialogosDeEspera, QWidget):
++    pass
++
++
++def _abertos(tipo):
++    from PySide6.QtWidgets import QApplication
++    return [w for w in QApplication.topLevelWidgets() if isinstance(w, tipo) and w.isVisible()]
++
++
++def test_worker_espera_o_login_e_e_solto(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    terminou = []
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("Faça login"), terminou.append(True)))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
++    assert terminou == []
++    _abertos(qd.PausaLoginDialog)[0].botao.click()
++    t.join(3)
++    assert terminou == [True]
++
++
++def test_fechar_no_x_tambem_solta_o_worker(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    terminou = []
++    t = threading.Thread(target=lambda: (tela.pausar_e_esperar("x"), terminou.append(True)))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
++    _abertos(qd.PausaLoginDialog)[0].close()
++    t.join(3)
++    assert terminou == [True]
++
++
++def test_retry_excel_devolve_a_escolha(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel("C:/a.xlsx")))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
++    dialogo = _abertos(qd.RetryLockDialog)[0]
++    assert "a.xlsx" in dialogo.rotulo.text()
++    dialogo.botao_repetir.click()
++    t.join(3)
++    assert respostas == [True]
++
++
++def test_retry_excel_fechar_no_x_e_cancelar(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_retry_excel()))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.RetryLockDialog)) == 1, timeout=2000)
++    _abertos(qd.RetryLockDialog)[0].close()
++    t.join(3)
++    assert respostas == [False]
++
++
++def test_janela_nasce_na_thread_da_interface(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    t = threading.Thread(target=lambda: tela.pausar_e_esperar("x"))
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.PausaLoginDialog)) == 1, timeout=2000)
++    dialogo = _abertos(qd.PausaLoginDialog)[0]
++    assert dialogo.thread() is tela.thread()
++    dialogo.botao.click()
++    t.join(3)
+-- 
+2.43.0
+

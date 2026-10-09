@@ -1,0 +1,27 @@
+From dcde92298f26cef581400e6ef3ec78826d31820a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:35:48 +0000
+Subject: [PATCH 18/26] Qt6: tira import pytest sem uso (ruff F401 vermelho no
+ CI)
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ tests/test_qt_module_frame.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/tests/test_qt_module_frame.py b/tests/test_qt_module_frame.py
+index 5667b03..94173c5 100644
+--- a/tests/test_qt_module_frame.py
++++ b/tests/test_qt_module_frame.py
+@@ -1,7 +1,5 @@
+ import threading
+ 
+-import pytest
+-
+ from sigft.app import backends
+ from sigft.app_qt.widgets.module_frame import ModuleFrame
+ 
+-- 
+2.43.0
+

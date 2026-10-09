@@ -1,0 +1,79 @@
+From 691f044f8abc6a4ef7f9c582369341e330de83ed Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 12:38:12 +0000
+Subject: [PATCH 07/14] Qt6: hover do botao perigo, STATUS dentro do try e
+ testes do glossario do Tradutor
+
+- perigo:hover #B71C1C, o hover_color que as telas CTk passam (sem a regra
+  o botao nao reagia ao mouse).
+- _worker: o STATUS do backend passa a ser lido dentro do try, para o
+  finally sempre desligar o PARAR AGORA.
+- abrir_glossario testado no caminho que abre e no que vira aviso.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py           |  1 +
+ sigft/app_qt/views/translator.py |  2 +-
+ tests/test_qt_tela_translator.py | 21 +++++++++++++++++++++
+ 3 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 1274ffb..041a2d5 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -160,6 +160,7 @@ QPushButton[variante="acento"]:hover {{ background: {c['accent_hover']}; }}
+ QPushButton[variante="neutro"] {{ background: #3A3A3A; }}
+ QPushButton[variante="neutro"]:hover {{ background: #4A4A4A; }}
+ QPushButton[variante="perigo"] {{ background: {c['danger']}; }}
++QPushButton[variante="perigo"]:hover {{ background: #B71C1C; }}  /* o hover_color das telas CTk */
+ QPushButton[variante="contorno"] {{ background: transparent;
+     border: {BORDA_DA_VARIANTE['contorno']}px solid #555555; color: {cinza_tk('gray')}; }}
+ QPushButton[variante="contorno_padrao"] {{ background: transparent;
+diff --git a/sigft/app_qt/views/translator.py b/sigft/app_qt/views/translator.py
+index f7b6f9b..41ce4a0 100644
+--- a/sigft/app_qt/views/translator.py
++++ b/sigft/app_qt/views/translator.py
+@@ -96,9 +96,9 @@ class ModuloTranslator(ModuleFrame):
+             QMessageBox.critical(self, "Glossário", f"Não consegui abrir o glossário: {e}")
+ 
+     def _worker(self, files) -> None:
+-        status = backends.exigir("translator_backend").STATUS
+         ultimo_erro = ""
+         try:
++            status = backends.exigir("translator_backend").STATUS
+             for msg in self.tradutor.processar_arquivos(files, retry_lock=self.perguntar_retry_excel):
+                 if msg == "PARADO":
+                     self.log("Processo interrompido pelo usuário.")
+diff --git a/tests/test_qt_tela_translator.py b/tests/test_qt_tela_translator.py
+index 665bb7e..2958f09 100644
+--- a/tests/test_qt_tela_translator.py
++++ b/tests/test_qt_tela_translator.py
+@@ -114,3 +114,24 @@ def test_medidas_iguais_as_do_customtkinter(qt_interface, qtbot):
+         assert pos(cartao).y() + cartao.height() - (pos(t.btn_glossario).y() + 32) == 20
+     finally:
+         qt_interface.setStyleSheet(anterior)
++
++
++def test_glossario_abre_no_sistema(tela, monkeypatch):
++    _com_backend(monkeypatch, [])
++    abertos = []
++    monkeypatch.setattr(tela_mod.plataforma, "abrir_no_sistema", abertos.append)
++    tela.abrir_glossario()
++    assert abertos == ["/tmp/glossario.csv"]
++
++
++def test_glossario_que_nao_abre_vira_aviso(tela, monkeypatch):
++    _com_backend(monkeypatch, [])
++    criticos = []
++
++    def falha(caminho):
++        raise OSError("sem programa associado")
++
++    monkeypatch.setattr(tela_mod.plataforma, "abrir_no_sistema", falha)
++    monkeypatch.setattr(tela_mod.QMessageBox, "critical", staticmethod(lambda *a: criticos.append(a[2])))
++    tela.abrir_glossario()
++    assert criticos == ["Não consegui abrir o glossário: sem programa associado"]
+-- 
+2.43.0
+

@@ -1,0 +1,103 @@
+From 26a4e5c741401fe457526e7bfe7069930a67522f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 19:14:10 +0000
+Subject: [PATCH 04/26] Conferir Python 3.10+ na abertura, com mensagem clara
+
+Com Python 3.9 o app abria pela metade e a pessoa nao tinha como saber que
+o problema era a versao. A conferencia roda antes de qualquer import pesado
+do frontend e encerra com codigo 1 e a mensagem indicando o Python atual.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ frontend.py                 |  5 +++++
+ sigft/core/python_minimo.py | 29 +++++++++++++++++++++++++++++
+ tests/test_python_minimo.py | 24 ++++++++++++++++++++++++
+ 3 files changed, 58 insertions(+)
+ create mode 100644 sigft/core/python_minimo.py
+ create mode 100644 tests/test_python_minimo.py
+
+diff --git a/frontend.py b/frontend.py
+index 30a5b5f..69970f5 100644
+--- a/frontend.py
++++ b/frontend.py
+@@ -29,6 +29,11 @@ agora é `sigft/app/theme.py`, e há teste travando os dois juntos.
+ """
+ from __future__ import annotations
+ 
++# Antes de tudo: com Python antigo o app abria pela metade, com erro enigmático.
++from sigft.core.python_minimo import exigir_python_minimo
++
++exigir_python_minimo()
++
+ # ⚠️ ANTES do import pesado logo abaixo, e isto é o que faz o Release funcionar.
+ #
+ # Este arquivo é o que o `SIG-FT.spec` empacota — dentro do `.exe`, quem é
+diff --git a/sigft/core/python_minimo.py b/sigft/core/python_minimo.py
+new file mode 100644
+index 0000000..a9f64aa
+--- /dev/null
++++ b/sigft/core/python_minimo.py
+@@ -0,0 +1,29 @@
++"""Confere a versão do Python ANTES de qualquer import do SIG-FT.
++
++Com Python 3.9 o app abria pela metade: três módulos falhavam na splash com
++"unsupported operand type(s) for |" e a pessoa não tinha como saber que o
++problema era a versão (aconteceu num Mac com o Python 3.9.6 que vem no sistema).
++
++Este arquivo tem de compilar em Python antigo: sem `X | None`, sem `match`.
++Há teste travando isso (`tests/test_python_minimo.py`).
++"""
++import sys
++
++MINIMO = (3, 10)
++
++MENSAGEM = (
++    "O SIG-FT precisa do Python 3.10 ou mais novo, e este é o {atual}.\n"
++    "Instale um Python novo em https://www.python.org/downloads/ "
++    "(no Windows, marque \"Add python.exe to PATH\") e abra de novo."
++)
++
++
++def exigir_python_minimo(versao=None, sair=sys.exit, avisar=print):
++    """Avisa e encerra com código 1 se o Python for menor que `MINIMO`."""
++    if versao is None:
++        versao = sys.version_info
++    if tuple(versao[:2]) >= MINIMO:
++        return
++    atual = ".".join(str(parte) for parte in versao[:3])
++    avisar(MENSAGEM.format(atual=atual))
++    sair(1)
+diff --git a/tests/test_python_minimo.py b/tests/test_python_minimo.py
+new file mode 100644
+index 0000000..f881850
+--- /dev/null
++++ b/tests/test_python_minimo.py
+@@ -0,0 +1,24 @@
++from sigft.core import python_minimo as pm
++
++
++def test_versao_suficiente_nao_faz_nada():
++    chamadas = []
++    pm.exigir_python_minimo((3, 10, 0), sair=chamadas.append, avisar=chamadas.append)
++    assert chamadas == []
++
++
++def test_versao_antiga_avisa_e_sai_com_codigo_1():
++    avisos, saidas = [], []
++    pm.exigir_python_minimo((3, 9, 6), sair=saidas.append, avisar=avisos.append)
++    assert saidas == [1]
++    assert "3.9.6" in avisos[0] and "3.10" in avisos[0]
++
++
++def test_arquivo_compila_em_sintaxe_antiga():
++    # O modulo roda ANTES de saber se o Python serve: nada de `X | None`,
++    # `match` ou walrus fora de string.
++    import ast
++    import inspect
++
++    fonte = inspect.getsource(pm)
++    ast.parse(fonte, feature_version=(3, 6))
+-- 
+2.43.0
+

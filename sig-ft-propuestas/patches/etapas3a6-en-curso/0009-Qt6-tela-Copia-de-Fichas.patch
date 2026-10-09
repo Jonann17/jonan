@@ -1,0 +1,914 @@
+From 0b8921fd745f8686da1680fc6ca7fe6817cd39a3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 18:40:16 +0000
+Subject: [PATCH 09/14] Qt6: tela Copia de Fichas
+
+Porte de sigft/app/views/copia_fichas.py (layout atual, pos CP 5.5):
+leitura do _STATUS_PMIB por iniciar_tarefa, selecao e revisao pelas janelas
+Qt, robo novo com a caixa de auditoria lida no clique e a pausa de login por
+pausar_e_esperar(MSG_LOGIN_LOTE). Quadro rolavel e console repartem a altura
+como o grid do Tk (pedido + sobra 3:1).
+
+PausaLoginDialog (compartilhado): botao de 45 px e texto com as medidas do CTk.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/copia_fichas.py | 395 ++++++++++++++++++++++++++
+ sigft/app_qt/widgets/dialogs.py    |  12 +-
+ tests/test_qt_sem_tkinter.py       |   1 +
+ tests/test_qt_tela_copia_fichas.py | 442 +++++++++++++++++++++++++++++
+ 4 files changed, 848 insertions(+), 2 deletions(-)
+ create mode 100644 sigft/app_qt/views/copia_fichas.py
+ create mode 100644 tests/test_qt_tela_copia_fichas.py
+
+diff --git a/sigft/app_qt/views/copia_fichas.py b/sigft/app_qt/views/copia_fichas.py
+new file mode 100644
+index 0000000..6066ae5
+--- /dev/null
++++ b/sigft/app_qt/views/copia_fichas.py
+@@ -0,0 +1,395 @@
++"""Tela "Cópia de Fichas" (fichas duplicadas) na interface Qt.
++
++Mesma tela de `sigft/app/views/copia_fichas.py`: identifica as fichas
++duplicadas a partir do `_STATUS_PMIB`, deixa a pessoa escolher e revisar os
++pares original/alvo, e copia o conteúdo de uma para a outra no portal (o robô
++novo, Playwright, de `services/duplicadas_robo.py`).
++
++Layout = o ATUAL da tela CTk (depois do CP 5.5, que tirou o robô Selenium e o
++"Salvar COMPLETO"): cartão 1 com o botão do `_STATUS_PMIB` e o rótulo; cartão
++2 com os dois botões, o interruptor do log de auditoria e a barra de progresso.
++
++O que muda é só COMO as threads falam com a interface: lá `self.after(0, ...)`
++(disciplina) e a leitura da caixa do log de auditoria de dentro do worker;
++aqui `iniciar_tarefa`/`interface.na_interface` (mecanismo), a caixa lida no
++clique, e a pausa de login por `pausar_e_esperar` (a janela nasce na thread da
++interface e o worker espera).
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QHBoxLayout, QProgressBar, QSizePolicy
++
++from sigft import config as sigft_config
++from sigft.app.textos_dialogos import MSG_LOGIN_LOTE
++from sigft.app.theme import COLORS
++from sigft.app_qt import estilo, file_dialogs, interface
++from sigft.app_qt.views.janelas import JanelaRevisaoEdicao, JanelaSelecaoDuplicadas
++from sigft.app_qt.widgets import blocos, controles
++from sigft.app_qt.widgets.module_frame import MARGEM_DA_TELA, ModuleFrame
++from sigft.services import duplicadas
++
++# O #3A3A3A/#454545 que a tela escrevia à mão (a variante "cinza").
++COR_HOVER_CINZA = "#454545"
++# O grid da tela CTk: linha 1 (quadro rolável, weight=3) e linha 2 (console,
++# weight=1). O Tk dá a cada linha o que ela PEDE e reparte a sobra (ou a
++# falta) pelos pesos -- não a altura toda, como o stretch do Qt. Pedidos
++# medidos no CTk: CTkScrollableFrame 212, CTkTextbox 200.
++PEDIDO_ROLAVEL, PEDIDO_CONSOLE = 212, 200
++PESO_ROLAVEL, PESO_CONSOLE = 3, 1
++# O CTkScrollableFrame: conteúdo 6 px dentro do quadro, barra 1 px antes da borda.
++RECUO_ROLAGEM = 6
++
++
++def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str | None = None):
++    """CTkLabel de uma linha, anchor="w", 28 px de altura."""
++    r = blocos.rotulo(texto, tamanho=tamanho, negrito=negrito, cor=cor, alinhar="esquerda")
++    r.setWordWrap(False)
++    r.setFixedHeight(blocos.ALTURA_MINIMA_ROTULO)
++    return r
++
++
++class _BarraDeProgresso(QProgressBar):
++    """CTkProgressBar que guarda a fração e a redesenha quando a largura muda.
++
++    `blocos.definir_progresso` converte a fração em valor PELA LARGURA da barra
++    (as pontas redondas); sem refazer a conta no resize, o `set(0)` feito antes
++    de a tela aparecer viraria um trecho de 8 % numa barra de 870 px.
++    """
++
++    fracao = 0.0
++
++    def definir(self, fracao: float) -> None:
++        self.fracao = float(fracao)
++        blocos.definir_progresso(self, self.fracao)
++
++    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        super().resizeEvent(evento)
++        blocos.definir_progresso(self, self.fracao)
++
++
++# =============================================================================
++# MÓDULO 7: UPLOAD DE FICHAS DUPLICADAS (INTERFACE GE VERNOVA)
++# =============================================================================
++class ModuloCopiaFichas(ModuleFrame):
++    def __init__(self, parent=None, controller=None) -> None:
++        # Variáveis de Estado
++        self.caminho_status = None
++        self.fila_completa: list[dict] = []
++        self.fila_selecionada: list[dict] = []
++        # Duplicadas encontradas que o robô NÃO consegue processar (sem ficha
++        # original ou sem código do material). Ficam fora da fila, mas contadas
++        # e explicadas -- ver `_worker_leitura_excel`.
++        self.impedidas = []
++        self.janela_selecao = None
++        super().__init__(parent, controller, titulo="Módulo: Cópia de Fichas PMIB", altura_console=None)
++        # Lá a tela não é o ModuleFrame: header pady=10, quadro rolável pady=0,
++        # console pady=10, dentro do padx/pady=20 do `show_frame`. Os pady
++        # vizinhos SOMAM: 10 entre header e quadro, 10 entre quadro e console.
++        raiz = self.layout()
++        raiz.setContentsMargins(MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10,
++                                MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10)
++        raiz.setSpacing(0)
++        raiz.insertSpacing(1, 10)                       # header (…, 10) + quadro (0, …)
++        raiz.insertSpacing(3, 10)                       # quadro (…, 0) + console (10, …)
++
++    # --- montagem -------------------------------------------------------------
++    def _build_ui(self) -> None:
++        # Container Principal: CTkScrollableFrame transparente, com a barra
++        # sempre à vista (o CTk reserva a faixa mesmo sem nada para rolar; sem
++        # ela, os cartões ficariam 11 px mais largos).
++        self.area, corpo = blocos.area_rolavel(self.content_layout, margem=RECUO_ROLAGEM)
++        self.area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        # A barra do CTk fica 1 px antes da borda direita (x 946..962 numa área
++        # que acaba em 963): faixa de 17 com a alça de 8 a 4 px da esquerda, e
++        # o conteúdo vai até a barra (900 = 923 - 6 - 17).
++        self.area.verticalScrollBar().setStyleSheet(
++            estilo.folha_rolagem_ctk(margem_vertical=RECUO_ROLAGEM + 4)
++            + f"\nQScrollBar:vertical {{ width: {estilo.LARGURA_ROLAGEM_CTK + 1}px;"
++            f" margin: {RECUO_ROLAGEM + 4}px 5px {RECUO_ROLAGEM + 4}px 4px; }}")
++        corpo.setContentsMargins(RECUO_ROLAGEM, RECUO_ROLAGEM, 0, RECUO_ROLAGEM)
++
++        # --- ETAPA 1: CONFIGURAÇÃO ---
++        corpo.addSpacing(10)                            # frm_config: pady=10
++        config = self._cartao(corpo, fim=10)
++        self.cartao_config = config.parentWidget()
++        self.rotulo_etapa1 = _rotulo("1. Selecionar Arquivo Base", tamanho=16, negrito=True,
++                                     cor=COLORS["accent"])
++        config.addWidget(self.rotulo_etapa1)
++        config.addSpacing(20)                           # título (…, 10) + f_pmib (10, …)
++
++        linha = QHBoxLayout()
++        linha.setContentsMargins(0, 0, 0, 0)
++        linha.setSpacing(0)
++        self.btn_status = blocos.botao("Selecionar _STATUS_PMIB", variante="cinza", largura=250, altura=28)
++        self._folha_btn_status = self.btn_status.styleSheet()
++        self.btn_status.clicked.connect(self.selecionar_excel_pmib)
++        linha.addWidget(self.btn_status)
++        linha.addSpacing(15)                            # lbl_status: padx=15
++        self.lbl_status = _rotulo("Aguardando seleção...", cor=estilo.cinza_tk("gray"))
++        linha.addWidget(self.lbl_status)
++        linha.addStretch()
++        config.addLayout(linha)
++
++        # --- ETAPA 2: AÇÕES ---
++        corpo.addSpacing(20)                            # frm_config (…, 10) + frm_action (10, …)
++        acoes = self._cartao(corpo, fim=15)
++        self.cartao_acoes = acoes.parentWidget()
++        self.rotulo_etapa2 = _rotulo("2. Execução", tamanho=16, negrito=True, cor=COLORS["accent"])
++        acoes.addWidget(self.rotulo_etapa2)
++        acoes.addSpacing(20)                            # título (…, 10) + grade (10, …)
++
++        # Duas colunas iguais (uniform="cols"), padx=(0, 5) e (5, 0).
++        grade = QHBoxLayout()
++        grade.setContentsMargins(0, 0, 0, 0)
++        grade.setSpacing(10)
++        self.btn_resumo = blocos.botao("1. Revisar / Editar Fichas", variante="cinza", altura=40)
++        self.btn_resumo.clicked.connect(self.abrir_revisao)
++        # CP 5.5: aqui havia TRÊS botões -- "2. Iniciar Robô Web" (o robô em
++        # Selenium), "3. Salvar 'COMPLETO' no Excel" e este. Os dois primeiros
++        # saíram com o Selenium; quem marca o COMPLETO agora é
++        # `duplicadas_robo.marcar_status_na_planilha`, seção por seção, e o
++        # robô já a chama sozinho no fim do lote.
++        self.btn_robo_novo = blocos.botao("2. Iniciar Robô Web", variante="primario", altura=40)
++        self.btn_robo_novo.clicked.connect(self.run_robo_novo_thread)
++        for b in (self.btn_resumo, self.btn_robo_novo):
++            b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
++            b.setEnabled(False)
++            grade.addWidget(b, 1)
++        acoes.addLayout(grade)
++        acoes.addSpacing(18)                            # grade (…, 10) + interruptor (8, …)
++
++        # Log de auditoria (2026-08-18): ligado, grava em `logs/` TUDO que
++        # aparece no console mais o HTML de cada seção que o robô visita. O
++        # HTML vai só para o arquivo; o console continua legível.
++        self.switch_auditoria = controles.Interruptor(
++            "Gravar log de auditoria (com a estrutura das telas)", cor_ligado=COLORS["primary"])
++        self.switch_auditoria.setChecked(True)
++        acoes.addWidget(self.switch_auditoria, 0, Qt.AlignmentFlag.AlignLeft)
++        acoes.addSpacing(15)                            # interruptor (…, 0) + barra (15, …)
++
++        # Progresso: CTkProgressBar(progress_color=accent), pack(fill="x", pady=15).
++        self.progress = blocos.barra_progresso(barra=_BarraDeProgresso(), cor=COLORS["accent"])
++        self.progress.definir(0)
++        acoes.addWidget(self.progress)
++
++        corpo.addSpacing(10)                            # frm_action: pady=10
++
++    @staticmethod
++    def _cartao(corpo, *, fim: int):
++        """CTkFrame #2B2B2B de cantos 8: peças com padx=15, título com pady 10."""
++        layout = blocos.cartao(corpo)
++        layout.setContentsMargins(15, 10, 15, fim)
++        layout.setSpacing(0)
++        return layout
++
++    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        self._repartir_altura()
++        super().resizeEvent(evento)
++
++    def _repartir_altura(self) -> None:
++        """Quadro rolável × console como o grid do Tk: cada um com o que pede,
++        a sobra repartida 3:1 (o Tk trunca a parte do quadro; o resto é do console)."""
++        margens = self.layout().contentsMargins()
++        disponivel = (self.height() - margens.top() - margens.bottom()
++                      - self.header.sizeHint().height() - 10 - 10)
++        sobra = disponivel - PEDIDO_ROLAVEL - PEDIDO_CONSOLE
++        rolavel = PEDIDO_ROLAVEL + int(sobra * PESO_ROLAVEL / (PESO_ROLAVEL + PESO_CONSOLE))
++        self.console.setFixedHeight(max(disponivel - rolavel, 0))
++
++    # =========================================================================
++    # LÓGICA DE INTERFACE
++    # =========================================================================
++    def selecionar_excel_pmib(self) -> None:
++        path = file_dialogs.ask_open_file("copia_fichas.status_pmib", "excel",
++                                          filetypes=[("Excel", "*.xlsx;*.xlsm")])
++        if not path:
++            return
++        self.caminho_status = path
++
++        self.log("Lendo arquivo Excel, aguarde...")
++        # O botão desliga NO CLIQUE e volta no fim da leitura, dê no que der.
++        # Thread comum: ler o Excel é tarefa da pessoa (o "X" pergunta antes).
++        self.iniciar_tarefa(self._worker_leitura_excel, botao=self.btn_status)
++
++    def _worker_leitura_excel(self) -> None:
++        # CP 6.2: quem identifica as duplicadas é `sigft/services/duplicadas.py`
++        # (prefixo `PDM.9900.000` na coluna do PDM usado). As impedidas viram
++        # log em vez de sumirem caladas.
++        try:
++            fichas, mensagem = duplicadas.localizar_duplicadas(
++                self.caminho_status, callback_log=self.log)
++            self.log(mensagem)
++
++            self.impedidas = [f for f in fichas if not f.pronta_para_duplicar]
++            for ficha in self.impedidas:
++                self.log(f"   [Fora da fila] linha {ficha.linha} "
++                         f"({ficha.pmib or 'sem código PMIB'}): falta "
++                         f"{ficha.motivo_de_impedimento}.")
++
++            # OBSERVAÇÕES sem código PMIB: a ficha ENTRA na fila (o texto pode
++            # ser o código em outra grafia), mas com aviso. O botão
++            # "1. Revisar / Editar Fichas" corrige à mão.
++            for ficha in fichas:
++                if ficha.pronta_para_duplicar and not ficha.original_e_codigo_pmib:
++                    self.log(f"   [Atenção] linha {ficha.linha} ({ficha.pmib}): "
++                             f"OBSERVAÇÕES não tem código PMIB -- o robô vai tentar "
++                             f"com {ficha.ficha_original!r}. Confira em 'Revisar / Editar'.")
++
++            # O robô precisa das duas pontas -- original e alvo. Sem elas a
++            # ficha fica fora da fila, mas saiu no log acima com o motivo.
++            self.fila_completa = [
++                {
++                    "descricao": ficha.descricao or "Sem Descrição",
++                    "pmib_original": ficha.ficha_original,
++                    "pmib_alvo": ficha.pmib,
++                    "codigo_material": ficha.codigo_material,
++                    "codigo_fornecedor": ficha.codigo_fornecedor,
++                    "linha_excel": ficha.linha,
++                }
++                for ficha in fichas if ficha.pronta_para_duplicar
++            ]
++            interface.na_interface(self._pos_leitura_sucesso)
++        except Exception as e:  # noqa: BLE001 -- vira log, como lá
++            self.log(f"Falha na leitura: {e}")
++
++    def _pos_leitura_sucesso(self) -> None:
++        self.btn_status.setEnabled(True)
++        # Lá: configure(fg_color=primary) -- o hover_color continua o #454545.
++        self.btn_status.setStyleSheet(
++            self._folha_btn_status + f" QPushButton {{ background: {COLORS['primary']}; }}"
++            f" QPushButton:hover {{ background: {COR_HOVER_CINZA}; }}")
++        texto = f"Planilha carregada. Encontradas {len(self.fila_completa)} duplicadas."
++        if self.impedidas:
++            texto += f" ({len(self.impedidas)} sem dados para o robô. Ver log.)"
++        self.lbl_status.setText(texto)
++        self._pintar_status(COLORS["accent"])
++        self.log(f"{len(self.fila_completa)} fichas identificadas como cópia.")
++
++        if self.fila_completa:
++            # Abre imediatamente a janela para selecionar quais processar
++            self.janela_selecao = JanelaSelecaoDuplicadas(self, self.fila_completa, self._pos_selecao)
++
++    def _pintar_status(self, cor: str) -> None:
++        self.lbl_status.setStyleSheet(f"font-size: 13px; background: transparent; color: {cor};")
++
++    def _pos_selecao(self, selecionados) -> None:
++        self.fila_selecionada = selecionados
++        self.lbl_status.setText(f"{len(self.fila_selecionada)} fichas na fila para processar.")
++        self.log(f"Fila final configurada com {len(self.fila_selecionada)} fichas.")
++
++        ligado = bool(self.fila_selecionada)
++        self.btn_resumo.setEnabled(ligado)
++        self.btn_robo_novo.setEnabled(ligado)
++
++    def abrir_revisao(self) -> None:
++        if self.fila_selecionada:
++            JanelaRevisaoEdicao(self, self.fila_selecionada)
++
++    # =========================================================================
++    # ROBÔ NOVO (Fase 6) — Playwright, sem uma linha de Selenium
++    # =========================================================================
++    def run_robo_novo_thread(self) -> None:
++        if not self.fila_selecionada:
++            return
++        # Os botões desligam AQUI, na thread da interface, e voltam no fim do
++        # worker por `na_interface`.
++        for botao in (self.btn_robo_novo, self.btn_resumo, self.btn_status):
++            botao.setEnabled(False)
++        # A caixa é lida no clique: o worker não toca widget.
++        self.iniciar_tarefa(self._worker_robo_novo, self.switch_auditoria.isChecked())
++
++    def _fichas_para_o_robo_novo(self):
++        """Os dicts da fila viram `FichaDuplicada` de novo.
++
++        Reconstruir do DICT é o que faz a edição manual valer:
++        `JanelaRevisaoEdicao` altera `pmib_original`/`pmib_alvo` no dicionário.
++        """
++        return [
++            duplicadas.FichaDuplicada(
++                pmib=item["pmib_alvo"],
++                descricao=item.get("descricao", ""),
++                pdm_usado="",
++                codigo_material=item.get("codigo_material", ""),
++                codigo_fornecedor=item.get("codigo_fornecedor", ""),
++                ficha_original=item["pmib_original"],
++                linha=item.get("linha_excel", 0),
++            )
++            for item in self.fila_selecionada
++        ]
++
++    def _definir_progresso(self, fracao) -> None:
++        try:
++            self.progress.definir(fracao)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def _religar_botoes(self) -> None:
++        try:
++            for botao in (self.btn_robo_novo, self.btn_resumo, self.btn_status):
++                botao.setEnabled(True)
++        except RuntimeError:
++            pass  # tela já destruída
++
++    def _worker_robo_novo(self, gravar_auditoria: bool) -> None:
++        # Import tardio de propósito: puxa o Playwright, e quem nunca clica
++        # neste botão não deve pagar por isso na abertura do aplicativo.
++        from sigft.core import log_execucao
++        from sigft.services import duplicadas_robo
++
++        engine = None
++        log_auditoria = None
++        registrar = self.log
++        try:
++            fichas = self._fichas_para_o_robo_novo()
++
++            if gravar_auditoria:
++                log_auditoria = log_execucao.LogDeExecucao(
++                    "duplicadas", contexto={"fichas": len(fichas)})
++                # `envolver` grava no arquivo E repassa para o console.
++                registrar = log_auditoria.envolver(self.log)
++                self.log(f"[Auditoria] Gravando em: {log_auditoria.caminho}")
++
++            registrar(f"[Robô novo] {len(fichas)} ficha(s) na fila. Abrindo o navegador...")
++            engine, portal = duplicadas_robo.iniciar()
++            engine.goto(sigft_config.PORTAL_URL)
++
++            # O portal exige login manual: a janela nasce na thread da
++            # interface e este worker espera o "Continuar".
++            self.pausar_e_esperar(MSG_LOGIN_LOTE)
++
++            resultados = duplicadas_robo.processar_lote(
++                fichas,
++                callback_log=registrar,
++                callback_progresso=lambda fracao: interface.na_interface(self._definir_progresso, fracao),
++                portal=portal,
++                log_auditoria=log_auditoria,
++            )
++
++            # Marca o `_STATUS_PMIB` seção a seção: COMPLETO só onde TUDO deu
++            # certo, INCOMPLETO no resto.
++            registrar("[Robô novo] Marcando o _STATUS_PMIB...")
++            marcadas, falhas = duplicadas_robo.marcar_status_na_planilha(
++                self.caminho_status, resultados, callback_log=registrar)
++
++            concluidas = [r for r in resultados if r.ok]
++            registrar(f"[Robô novo] {len(concluidas)} de {len(resultados)} sem pendência; "
++                      f"{marcadas} linha(s) marcada(s) na planilha"
++                      + (f", {len(falhas)} falha(s)." if falhas else "."))
++            registrar("[Robô novo] Confira no portal o que o log marcou como "
++                      "pendência antes de mudar o status das fichas.")
++        except Exception as erro:  # noqa: BLE001 -- vira log, como lá
++            registrar(f"[Robô novo] Falha: {type(erro).__name__}: {erro}")
++        finally:
++            # Fecha o log ANTES de mexer no navegador: se `engine.fechar()`
++            # travar, o arquivo já está íntegro no disco.
++            if log_auditoria is not None:
++                log_auditoria.fechar()
++                self.log(f"[Auditoria] Log salvo: {log_auditoria.caminho}")
++            if engine is not None:
++                try:
++                    engine.fechar()
++                except Exception:  # noqa: BLE001
++                    pass
++            interface.na_interface(self._religar_botoes)
++
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index cf07f76..5f22b12 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -73,11 +73,19 @@ class PausaLoginDialog(_DialogoDeAcaoManual):
+         super().__init__(parent, titulo="Ação Manual Necessária", mensagem=mensagem,
+                          largura=450, altura=250)
+         self._evento = evento_espera
++        # [E4.7] Medidas do CTk: texto com pady=30 (expand) e botão de 45 com
++        # pady=(0, 20) -- o texto fica centrado em 125 px a partir de y=30, e
++        # o botão em y=185. A altura vai na folha do PRÓPRIO botão: o
++        # `setMinimumHeight` perdia para o `min-height: 28px` da folha do app.
++        # Largura = texto + 6 de cada lado, como o CTkButton.
++        self.layout_principal.setContentsMargins(20, 30, 20, 20)
++        self.layout_principal.setSpacing(0)
+         self.botao = QPushButton(texto_botao)
+-        self.botao.setMinimumHeight(45)
+         self.botao.setProperty("variante", "primario")
+-        self.botao.setStyleSheet("font-size: 14px; font-weight: bold;")
++        self.botao.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; padding: 0 6px;"
++                                 " min-height: 45px; max-height: 45px; }")
+         self.botao.clicked.connect(self.liberar)
++        self.layout_principal.addSpacing(30)
+         self.layout_principal.addWidget(self.botao, 0, Qt.AlignmentFlag.AlignHCenter)
+ 
+     def liberar(self) -> None:
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index a750336..40afd69 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -61,6 +61,7 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.views.busca_pmib",
+     "sigft.app_qt.views.janelas",
+     "sigft.app_qt.views.pmib_manager",
++    "sigft.app_qt.views.copia_fichas",
+     "sigft.app_qt.widgets.controles",
+     "sigft.app.atualizacao_textos",
+     "sigft.app_qt.atualizacao",
+diff --git a/tests/test_qt_tela_copia_fichas.py b/tests/test_qt_tela_copia_fichas.py
+new file mode 100644
+index 0000000..a19b699
+--- /dev/null
++++ b/tests/test_qt_tela_copia_fichas.py
+@@ -0,0 +1,442 @@
++"""Tela "Cópia de Fichas" (duplicadas) na interface Qt: leitura da planilha,
++seleção, revisão e o robô com serviços falsos, e medidas contra o CustomTkinter."""
++import threading
++
++import pytest
++
++from sigft.app import theme
++from sigft.app.textos_dialogos import MSG_LOGIN_LOTE
++from sigft.app_qt.views import copia_fichas as tela_mod
++from sigft.services import duplicadas, duplicadas_robo
++
++
++def _ficha(pmib, original, material="M-1", linha=2, descricao="VALVULA"):
++    return duplicadas.FichaDuplicada(pmib=pmib, descricao=descricao, pdm_usado="PDM.9900.000.1",
++                                     codigo_material=material, codigo_fornecedor="F-1",
++                                     ficha_original=original, linha=linha)
++
++
++FICHAS = [
++    _ficha("4500063672.0001", "4500063671.0001", linha=2),
++    _ficha("4500063672.0002", "ver ficha do motor", linha=3, descricao=""),
++    _ficha("4500063672.0003", "", linha=4),                     # sem original: fora da fila
++]
++
++
++@pytest.fixture
++def tela(qt_interface, qtbot, monkeypatch):
++    t = tela_mod.ModuloCopiaFichas(None, None)
++    qtbot.addWidget(t)
++    t.selecoes = []
++    t.revisoes = []
++    monkeypatch.setattr(tela_mod, "JanelaSelecaoDuplicadas", lambda p, fila, cb: t.selecoes.append(
++        (fila, cb, threading.current_thread() is threading.main_thread())))
++    monkeypatch.setattr(tela_mod, "JanelaRevisaoEdicao", lambda p, fila: t.revisoes.append(fila))
++    return t
++
++
++def _leitura(monkeypatch, fichas=FICHAS, falha=None, liberar=None):
++    chamadas = []
++
++    def localizar(caminho, callback_log=None):
++        chamadas.append(caminho)
++        callback_log("Lendo a aba _STATUS_PMIB...")
++        if liberar is not None:
++            liberar.wait(3)
++        if falha:
++            raise falha
++        return list(fichas), f"{len(fichas)} duplicadas na planilha."
++
++    monkeypatch.setattr(tela_mod.duplicadas, "localizar_duplicadas", localizar)
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/_STATUS_PMIB.xlsx")
++    return chamadas
++
++
++def _texto(tela):
++    return tela.console.toPlainText()
++
++
++def _fila(n=2):
++    return [{"descricao": f"VALVULA {i}", "pmib_original": f"4500063671.000{i}",
++             "pmib_alvo": f"4500063672.000{i}", "codigo_material": "M", "codigo_fornecedor": "F",
++             "linha_excel": i + 1} for i in range(1, n + 1)]
++
++
++# --- montagem -----------------------------------------------------------------
++
++def test_monta_com_os_textos_e_estados(tela):
++    assert tela.label_titulo.text() == "Módulo: Cópia de Fichas PMIB"
++    assert tela.rotulo_etapa1.text() == "1. Selecionar Arquivo Base"
++    assert tela.rotulo_etapa2.text() == "2. Execução"
++    assert tela.btn_status.text() == "Selecionar _STATUS_PMIB"
++    assert tela.lbl_status.text() == "Aguardando seleção..."
++    assert tela.btn_resumo.text() == "1. Revisar / Editar Fichas"
++    assert tela.btn_robo_novo.text() == "2. Iniciar Robô Web"
++    assert tela.switch_auditoria.text() == "Gravar log de auditoria (com a estrutura das telas)"
++    assert tela.switch_auditoria.isChecked()
++    assert tela.btn_status.isEnabled()
++    assert not tela.btn_resumo.isEnabled() and not tela.btn_robo_novo.isEnabled()
++    assert tela.progress.fracao == 0.0                       # o "set(0)" do CTk
++
++
++def test_cores_dos_botoes_e_rotulos(tela):
++    assert tela.btn_status.property("variante") == "cinza"
++    assert tela.btn_resumo.property("variante") == "cinza"
++    assert tela.btn_robo_novo.property("variante") == "primario"
++    assert theme.COLORS["accent"] in tela.rotulo_etapa1.styleSheet()
++    assert "#808080" in tela.lbl_status.styleSheet()        # text_color="gray" do Tk
++    assert theme.COLORS["accent"] in tela.progress.styleSheet()
++
++
++# --- leitura da planilha --------------------------------------------------------
++
++def test_cancelar_o_dialogo_nao_faz_nada(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "")
++    tela.btn_status.click()
++    assert tela.caminho_status is None
++    assert tela.btn_status.isEnabled()
++    assert _texto(tela) == ""
++
++
++def test_dialogo_com_a_chave_e_o_filtro_de_la(tela, monkeypatch):
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file",
++                        lambda *a, **k: pedidos.append((a, k)) or "")
++    tela.selecionar_excel_pmib()
++    assert pedidos == [(("copia_fichas.status_pmib", "excel"),
++                        {"filetypes": [("Excel", "*.xlsx;*.xlsm")]})]
++
++
++def test_leitura_monta_a_fila_e_abre_a_selecao(tela, qtbot, monkeypatch):
++    liberar = threading.Event()
++    chamadas = _leitura(monkeypatch, liberar=liberar)
++    tela.btn_status.click()
++    # Desligado NO CLIQUE, enquanto o Excel é lido.
++    assert not tela.btn_status.isEnabled()
++    qtbot.waitUntil(lambda: "> Lendo arquivo Excel, aguarde..." in _texto(tela), timeout=2000)
++    liberar.set()
++    qtbot.waitUntil(lambda: bool(tela.selecoes), timeout=3000)
++    qtbot.waitUntil(tela.btn_status.isEnabled, timeout=2000)
++    qtbot.waitUntil(lambda: "> 2 fichas identificadas como cópia." in _texto(tela), timeout=2000)
++
++    assert chamadas == ["/d/_STATUS_PMIB.xlsx"]
++    assert tela.caminho_status == "/d/_STATUS_PMIB.xlsx"
++    texto = _texto(tela)
++    assert "> Lendo a aba _STATUS_PMIB..." in texto
++    assert "> 3 duplicadas na planilha." in texto
++    assert (">    [Fora da fila] linha 4 (4500063672.0003): falta ficha original "
++            "(coluna OBSERVAÇÕES).") in texto
++    assert (">    [Atenção] linha 3 (4500063672.0002): OBSERVAÇÕES não tem código PMIB -- o robô "
++            "vai tentar com 'ver ficha do motor'. Confira em 'Revisar / Editar'.") in texto
++    assert "> 2 fichas identificadas como cópia." in texto
++
++    assert tela.fila_completa == [
++        {"descricao": "VALVULA", "pmib_original": "4500063671.0001", "pmib_alvo": "4500063672.0001",
++         "codigo_material": "M-1", "codigo_fornecedor": "F-1", "linha_excel": 2},
++        {"descricao": "Sem Descrição", "pmib_original": "ver ficha do motor",
++         "pmib_alvo": "4500063672.0002", "codigo_material": "M-1", "codigo_fornecedor": "F-1",
++         "linha_excel": 3},
++    ]
++    assert len(tela.impedidas) == 1
++    fila, cb, na_interface = tela.selecoes[0]
++    assert fila is tela.fila_completa and cb == tela._pos_selecao and na_interface
++    assert tela.lbl_status.text() == ("Planilha carregada. Encontradas 2 duplicadas. "
++                                      "(1 sem dados para o robô. Ver log.)")
++    assert theme.COLORS["accent"] in tela.lbl_status.styleSheet()
++    # Depois da leitura o botão fica com o fundo primary (o hover continua o #454545).
++    assert f"background: {theme.COLORS['primary']}" in tela.btn_status.styleSheet()
++    assert "#454545" in tela.btn_status.styleSheet()
++
++
++def test_leitura_sem_duplicadas_nao_abre_a_selecao(tela, qtbot, monkeypatch):
++    _leitura(monkeypatch, fichas=[])
++    tela.btn_status.click()
++    qtbot.waitUntil(lambda: "> 0 fichas identificadas como cópia." in _texto(tela), timeout=3000)
++    qtbot.waitUntil(tela.btn_status.isEnabled, timeout=2000)
++    assert tela.selecoes == []
++    assert tela.lbl_status.text() == "Planilha carregada. Encontradas 0 duplicadas."
++
++
++def test_falha_na_leitura_vira_log_e_devolve_o_botao(tela, qtbot, monkeypatch):
++    _leitura(monkeypatch, falha=ValueError("coluna PDM ausente"))
++    tela.btn_status.click()
++    qtbot.waitUntil(lambda: "> Falha na leitura: coluna PDM ausente" in _texto(tela), timeout=3000)
++    qtbot.waitUntil(tela.btn_status.isEnabled, timeout=2000)
++    assert tela.selecoes == []
++    assert tela.lbl_status.text() == "Aguardando seleção..."
++    assert theme.COLORS["primary"] not in tela.btn_status.styleSheet()
++
++
++def test_leitura_em_thread_comum(tela, qtbot, monkeypatch):
++    # Thread comum (não daemon): é tarefa da pessoa, o "X" pergunta antes de fechar.
++    liberar = threading.Event()
++    _leitura(monkeypatch, liberar=liberar)
++    antes = set(threading.enumerate())
++    tela.btn_status.click()
++    novas = [t for t in threading.enumerate() if t not in antes]
++    try:
++        assert novas and not any(t.daemon for t in novas)
++    finally:
++        liberar.set()
++    qtbot.waitUntil(tela.btn_status.isEnabled, timeout=3000)
++
++
++# --- seleção e revisão ------------------------------------------------------------
++
++def test_pos_selecao_liga_os_botoes(tela, qtbot):
++    fila = _fila(3)
++    tela._pos_selecao(fila)
++    assert tela.fila_selecionada is fila
++    assert tela.lbl_status.text() == "3 fichas na fila para processar."
++    qtbot.waitUntil(lambda: "> Fila final configurada com 3 fichas." in _texto(tela), timeout=2000)
++    assert tela.btn_resumo.isEnabled() and tela.btn_robo_novo.isEnabled()
++    tela._pos_selecao([])
++    assert tela.lbl_status.text() == "0 fichas na fila para processar."
++    assert not tela.btn_resumo.isEnabled() and not tela.btn_robo_novo.isEnabled()
++
++
++def test_revisar_abre_a_janela_com_a_fila(tela):
++    tela.abrir_revisao()
++    assert tela.revisoes == []
++    fila = _fila(2)
++    tela._pos_selecao(fila)
++    tela.btn_resumo.click()
++    assert tela.revisoes == [fila]
++
++
++def test_selecao_de_verdade_confirma_para_a_tela(qt_interface, qtbot):
++    # Sem dublê: a janela Qt de seleção (tudo marcado) devolve os dicts à tela.
++    t = tela_mod.ModuloCopiaFichas(None, None)
++    qtbot.addWidget(t)
++    t.fila_completa = _fila(3)
++    t._pos_leitura_sucesso()
++    dialogo = t.janela_selecao
++    qtbot.addWidget(dialogo)
++    dialogo.confirmar()
++    assert t.fila_selecionada == t.fila_completa
++    assert t.btn_robo_novo.isEnabled()
++
++
++# --- robô --------------------------------------------------------------------------
++
++class EngineFalso:
++    def __init__(self):
++        self.urls = []
++        self.fechado = False
++
++    def goto(self, url):
++        self.urls.append(url)
++
++    def fechar(self):
++        self.fechado = True
++
++
++class LogFalso:
++    criados = []
++
++    def __init__(self, modulo, contexto=None):
++        self.modulo, self.contexto = modulo, contexto
++        self.caminho = "/logs/duplicadas_1.log"
++        self.linhas = []
++        self.fechado = False
++        LogFalso.criados.append(self)
++
++    def envolver(self, callback):
++        def registrar(msg):
++            self.linhas.append(msg)
++            callback(msg)
++        return registrar
++
++    def fechar(self):
++        self.fechado = True
++
++
++@pytest.fixture
++def robo(tela, monkeypatch):
++    from sigft.core import log_execucao
++
++    estado = {"engine": EngineFalso(), "fichas": None, "marcar": None, "pausas": [],
++              "falha": None, "liberar": threading.Event()}
++    estado["liberar"].set()
++    LogFalso.criados = []
++
++    def processar_lote(fichas, callback_log=None, callback_progresso=None, portal=None,
++                       log_auditoria=None):
++        estado["fichas"] = fichas
++        estado["log_auditoria"] = log_auditoria
++        estado["liberar"].wait(3)
++        callback_log("ficha 1 ok")
++        callback_progresso(0.5)
++        if estado["falha"]:
++            raise estado["falha"]
++        return [type("R", (), {"ok": True})(), type("R", (), {"ok": False})()]
++
++    def marcar(caminho, resultados, callback_log=None):
++        estado["marcar"] = (caminho, len(resultados))
++        return 2, ["linha 9"]
++
++    monkeypatch.setattr(duplicadas_robo, "iniciar", lambda: (estado["engine"], "portal"))
++    monkeypatch.setattr(duplicadas_robo, "processar_lote", processar_lote)
++    monkeypatch.setattr(duplicadas_robo, "marcar_status_na_planilha", marcar)
++    monkeypatch.setattr(log_execucao, "LogDeExecucao", LogFalso)
++    monkeypatch.setattr(tela, "pausar_e_esperar", lambda msg, **k: estado["pausas"].append(
++        (msg, threading.current_thread() is threading.main_thread())))
++    tela.caminho_status = "/d/_STATUS_PMIB.xlsx"
++    tela._pos_selecao(_fila(2))
++    return estado
++
++
++def test_robo_completo_com_auditoria(tela, robo, qtbot):
++    # A revisão manual edita os dicts: o robô tem de ler a edição.
++    tela.fila_selecionada[0]["pmib_original"] = "4500063671.9999"
++    robo["liberar"].clear()
++    tela.btn_robo_novo.click()
++    # Os três botões desligam NO CLIQUE.
++    assert not any(b.isEnabled() for b in (tela.btn_robo_novo, tela.btn_resumo, tela.btn_status))
++    robo["liberar"].set()
++    qtbot.waitUntil(lambda: "[Auditoria] Log salvo" in _texto(tela), timeout=3000)
++    qtbot.waitUntil(tela.btn_robo_novo.isEnabled, timeout=2000)
++    assert tela.btn_resumo.isEnabled() and tela.btn_status.isEnabled()
++
++    texto = _texto(tela)
++    assert "> [Auditoria] Gravando em: /logs/duplicadas_1.log" in texto
++    assert "> [Robô novo] 2 ficha(s) na fila. Abrindo o navegador..." in texto
++    assert "> [Robô novo] Marcando o _STATUS_PMIB..." in texto
++    assert "> [Robô novo] 1 de 2 sem pendência; 2 linha(s) marcada(s) na planilha, 1 falha(s)." in texto
++    assert ("> [Robô novo] Confira no portal o que o log marcou como pendência antes de mudar "
++            "o status das fichas.") in texto
++    assert "> [Auditoria] Log salvo: /logs/duplicadas_1.log" in texto
++
++    from sigft import config
++    assert robo["engine"].urls == [config.PORTAL_URL] and robo["engine"].fechado
++    assert robo["pausas"] == [(MSG_LOGIN_LOTE, False)]          # do worker
++    fichas = robo["fichas"]
++    assert [f.ficha_original for f in fichas] == ["4500063671.9999", "4500063671.0002"]
++    assert [f.pmib for f in fichas] == ["4500063672.0001", "4500063672.0002"]
++    assert fichas[0].codigo_material == "M" and fichas[0].linha == 2
++    assert robo["marcar"] == ("/d/_STATUS_PMIB.xlsx", 2)
++    log = LogFalso.criados[0]
++    assert log.modulo == "duplicadas" and log.contexto == {"fichas": 2} and log.fechado
++    assert robo["log_auditoria"] is log
++    assert "[Robô novo] Marcando o _STATUS_PMIB..." in log.linhas
++    qtbot.waitUntil(lambda: tela.progress.value() > 0, timeout=2000)
++
++
++def test_robo_sem_auditoria(tela, robo, qtbot):
++    tela.switch_auditoria.setChecked(False)
++    tela.run_robo_novo_thread()
++    qtbot.waitUntil(lambda: "Confira no portal" in _texto(tela), timeout=3000)
++    qtbot.waitUntil(tela.btn_robo_novo.isEnabled, timeout=2000)
++    assert LogFalso.criados == [] and robo["log_auditoria"] is None
++    assert "[Auditoria]" not in _texto(tela)
++
++
++def test_falha_do_robo_vira_log_fecha_o_navegador_e_devolve_os_botoes(tela, robo, qtbot):
++    robo["falha"] = RuntimeError("portal fora do ar")
++    tela.run_robo_novo_thread()
++    qtbot.waitUntil(lambda: "> [Robô novo] Falha: RuntimeError: portal fora do ar" in _texto(tela),
++                    timeout=3000)
++    qtbot.waitUntil(tela.btn_status.isEnabled, timeout=2000)
++    assert tela.btn_robo_novo.isEnabled() and tela.btn_resumo.isEnabled()
++    assert robo["engine"].fechado and LogFalso.criados[0].fechado
++    assert robo["marcar"] is None
++
++
++def test_robo_sem_fila_nao_faz_nada(tela, robo):
++    tela.fila_selecionada = []
++    tela.run_robo_novo_thread()
++    assert tela.btn_status.isEnabled() and _texto(tela).count("Robô novo") == 0
++
++
++# --- medidas ----------------------------------------------------------------------
++
++def test_medidas_iguais_as_do_customtkinter(qt_interface, qtbot):
++    # Medidas da tela CTk (1280x850, winfo_*), x relativo à área da tela (a barra
++    # lateral tem 277 px): título (40, 30) h29; quadro rolável (40, 69) 923x458,
++    # conteúdo recuado 6 (largura 900) e barra de 16 em x=946; cartão 1 (46, 85)
++    # 900x96: título +15/+10, botão 250x28 em (61, 143), rótulo em x=326;
++    # cartão 2 (46, 201) 900x178: botões 430x40 em y=259 (x 61 e 501), interruptor
++    # em (61, 317) h24, barra 870x8 em (61, 356); console (40, 537) 923x283.
++    from sigft.app_qt import estilo
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        t = tela_mod.ModuloCopiaFichas(None, None)
++        qtbot.addWidget(t)
++        t.resize(1003, 850)
++        t.show()
++        qtbot.waitExposed(t)
++        qtbot.waitUntil(lambda: t.area.height() == 458, timeout=1000)
++
++        def r(w):
++            p = w.mapTo(t, w.rect().topLeft())
++            return (p.x(), p.y(), w.width(), w.height())
++
++        assert r(t.label_titulo)[:2] == (40, 30) and r(t.label_titulo)[3] == 29
++        assert r(t.area) == (40, 69, 923, 458)
++        assert r(t.area.verticalScrollBar())[0] == 946
++        assert r(t.cartao_config) == (46, 85, 900, 96)
++        assert r(t.rotulo_etapa1)[:2] == (61, 95) and r(t.rotulo_etapa1)[3] == 28
++        assert r(t.btn_status) == (61, 143, 250, 28)
++        assert r(t.lbl_status)[:2] == (326, 143) and r(t.lbl_status)[3] == 28
++        assert r(t.cartao_acoes) == (46, 201, 900, 178)
++        assert r(t.rotulo_etapa2)[:2] == (61, 211)
++        assert r(t.btn_resumo) == (61, 259, 430, 40)
++        assert r(t.btn_robo_novo) == (501, 259, 430, 40)
++        assert r(t.switch_auditoria)[:2] == (61, 317) and r(t.switch_auditoria)[3] == 24
++        assert r(t.progress) == (61, 356, 870, 8)
++        # set(0): só o ponto de 8 px da ponta redonda (8/870 da faixa 0-1000).
++        assert t.progress.value() == 9
++        assert r(t.console) == (40, 537, 923, 283)
++    finally:
++        qt_interface.setStyleSheet(anterior)
++
++
++@pytest.mark.parametrize("altura_janela, rolavel, console", [
++    (850, 458, 283), (700, 346, 245), (600, 271, 220), (1000, 571, 320), (640, 301, 230),
++])
++def test_quadro_e_console_dividem_a_altura_como_o_grid_do_tk(qt_interface, qtbot, altura_janela,
++                                                            rolavel, console):
++    # grid do Tk: linha 1 (weight=3, pede 212) e linha 2 (weight=1, pede 200)
++    # repartem a SOBRA 3:1. Medido no CTk em cinco alturas de janela.
++    from sigft.app_qt import estilo
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        t = tela_mod.ModuloCopiaFichas(None, None)
++        qtbot.addWidget(t)
++        t.resize(1003, altura_janela)
++        t.show()
++        qtbot.waitExposed(t)
++        qtbot.waitUntil(lambda: (t.area.height(), t.console.height()) == (rolavel, console),
++                        timeout=1000)
++    finally:
++        qt_interface.setStyleSheet(anterior)
++
++
++def test_medidas_da_pausa_de_login(qt_interface, qtbot):
++    # A pausa que esta tela abre (PausaLoginDialog + MSG_LOGIN_LOTE), medida no
++    # CTk 450x250: texto (wraplength 400, pady=30, expand) centrado em y=92;
++    # CONTINUAR AUTOMAÇÃO 45 de altura em y=185, 20 do fundo, centrado.
++    from sigft.app_qt import estilo
++    from sigft.app_qt.widgets import dialogs
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        d = dialogs.PausaLoginDialog(None, mensagem=MSG_LOGIN_LOTE, evento_espera=threading.Event())
++        qtbot.addWidget(d)
++        d.show()
++        qtbot.waitExposed(d)
++        b = d.botao.geometry()
++        assert (b.y(), b.height()) == (185, 45)
++        assert abs(b.center().x() - 225) <= 1
++        # 195 no CTk: texto + 6 de cada lado (a largura do texto muda com a fonte).
++        texto = d.botao.fontMetrics().horizontalAdvance(d.botao.text())
++        assert texto + 12 <= b.width() <= texto + 14
++        r = d.rotulo.geometry()
++        assert (r.y(), r.height()) == (30, 125)        # o texto centrado em 92,5, como lá
++    finally:
++        qt_interface.setStyleSheet(anterior)
+-- 
+2.43.0
+

@@ -1,0 +1,453 @@
+From 735688474e0bcf550b44d3f06af5518dda39ecdf Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 20:38:35 +0000
+Subject: [PATCH 24/26] Qt6: textos dos dialogos em
+ sigft/app/textos_dialogos.py, sem tkinter
+
+A interface Qt deixa de importar sigft.app.widgets.dialogs (tkinter/customtkinter
+no topo). dialogs.py reexporta os nomes movidos; teste importa em subprocesso
+com o Tk bloqueado.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app/textos_dialogos.py    | 158 ++++++++++++++++++++++++++++++++
+ sigft/app/widgets/dialogs.py    | 150 ++----------------------------
+ sigft/app_qt/widgets/dialogs.py |   2 +-
+ sigft/app_qt/widgets/espera.py  |   2 +-
+ tests/test_qt_sem_tkinter.py    |  63 +++++++++++++
+ 5 files changed, 231 insertions(+), 144 deletions(-)
+ create mode 100644 sigft/app/textos_dialogos.py
+ create mode 100644 tests/test_qt_sem_tkinter.py
+
+diff --git a/sigft/app/textos_dialogos.py b/sigft/app/textos_dialogos.py
+new file mode 100644
+index 0000000..882d10e
+--- /dev/null
++++ b/sigft/app/textos_dialogos.py
+@@ -0,0 +1,158 @@
++"""Os TEXTOS dos diálogos de ação manual -- sem tkinter, sem customtkinter.
++
++Saíram de `sigft/app/widgets/dialogs.py` para que a interface Qt
++(`sigft/app_qt/`) use as mesmas palavras sem puxar o Tk para dentro do processo
++(e sem falhar num Python sem Tk, como o do Homebrew no macOS). Texto de
++interface é aparência: continua palavra por palavra como estava.
++
++`sigft.app.widgets.dialogs` reexporta tudo daqui, então os nomes antigos
++(`dialogs.MSG_EXCEL_BLOQUEADO` etc.) seguem valendo para a interface
++CustomTkinter e para os testes dela.
++
++Só biblioteca padrão.
++"""
++from __future__ import annotations
++
++# Sentinela que as três telas já usavam para escolher a mensagem de login em
++# vez da mensagem de "confira e salve". Era uma string solta repetida em três
++# arquivos-classe; aqui é uma constante, e quem compara importa daqui.
++LOGIN_NECESSARIO = "LOGIN_NECESSARIO"
++
++# Rótulo padrão do botão que solta o robô. É constante porque a tela de
++# exclusão de LMR troca o dela: numa ação destrutiva, o botão dizer o que vai
++# acontecer ("COMEÇAR A EXCLUSÃO") é mais honesto que um rótulo genérico.
++TEXTO_CONTINUAR = "CONTINUAR AUTOMAÇÃO"
++
++# As mensagens, palavra por palavra como estavam. A Fase 7 é zero redesign, e
++# texto de interface é aparência: mudar "solte o robô" para "iniciar" seria
++# uma alteração de produto sem pedido.
++MSG_LOGIN_SOLTAR_ROBO = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no site.\n"
++    "2. Navegue até a tela inicial do PMIB.\n"
++    "3. Clique abaixo para soltar o robô."
++)
++MSG_LOGIN_LOTE = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no site.\n"
++    "2. Navegue até a tela inicial do PMIB.\n"
++    "3. Clique abaixo para iniciar a automação em lote."
++)
++MSG_EXCEL_BLOQUEADO = (
++    "O arquivo _STATUS_PMIB está aberto no Excel.\n\n"
++    "Por favor, FECHE O ARQUIVO e clique em 'Tentar Novamente' para salvar o "
++    "status da ficha concluída."
++)
++
++
++def msg_excel_bloqueado(caminho: object) -> str:
++    """A mesma mensagem, NOMEANDO o arquivo travado.
++
++    [CP D] Quando a janela passou a servir os 7 pontos de gravação que antes
++    falhavam calados, "o arquivo _STATUS_PMIB" deixou de bastar: o `pdm` grava
++    ficha e template, o `analyzer` grava relatório, o `autospec` grava a ficha
++    preenchida. Dizer QUAL arquivo fechar é a diferença entre o usuário
++    resolver em 5 segundos e ficar procurando.
++    """
++    # `ntpath`, e nao `os.path`: ele corta as DUAS barras (`\\` e `/`) em
++    # qualquer sistema. Com `os.path`, um caminho do Windows rodando fora do
++    # Windows volta inteiro -- e a janela de 450px, que esta mensagem existe
++    # para caber, mostra `C:\Users\...\ficha.xlsx` de ponta a ponta. Em
++    # producao o app so roda no Windows e o defeito nao aparece; quem paga e o
++    # portao de testes, que roda em Linux (CI) e reprovava a mensagem certa.
++    import ntpath
++
++    nome = ntpath.basename(str(caminho)) or str(caminho)
++    return (
++        f"O arquivo '{nome}' está aberto em outro programa (provavelmente o "
++        "Excel), e por isso não pôde ser salvo.\n\n"
++        "FECHE O ARQUIVO e clique em 'Tentar Novamente'."
++    )
++
++
++# =============================================================================
++# [CP B] As 4 pausas de login que eram `messagebox.showinfo`
++# =============================================================================
++# Textos PRESERVADOS: cada um diz o que já dizia. Só a forma mudou, para a dos
++# passos numerados do modelo. Duas delas carregam instrução específica de qual
++# página abrir — isso é informação, não ruído, e some se uniformizarmos.
++MSG_LOGIN_APAGAR_LMR = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no site.\n"
++    "2. Clique abaixo para começar a EXCLUSÃO."
++)
++MSG_LOGIN_LMR = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no site.\n"
++    "2. Clique abaixo para começar."
++)
++MSG_LOGIN_NOVA_FICHA = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no portal.\n"
++    "2. Navegue até a página com o botão 'Nova Ficha'.\n"
++    "3. Clique abaixo quando estiver pronto."
++)
++MSG_LOGIN_PAGINA_PRINCIPAL = (
++    "O navegador foi aberto.\n\n"
++    "1. Faça o LOGIN no portal.\n"
++    "2. Navegue até a página PRINCIPAL (onde fica a barra de pesquisa).\n"
++    "3. Clique abaixo quando estiver pronto."
++)
++
++# Rótulo do botão na tela de exclusão de LMR — ação destrutiva.
++TEXTO_COMECAR_EXCLUSAO = "COMEÇAR A EXCLUSÃO"
++
++
++def msg_falha_ao_salvar(nome_secao: str) -> str:
++    """Mensagem do `ModuloUploadConditions` quando uma aba não salva."""
++    return (
++        f"Falha ao salvar a aba '{nome_secao}'. Ocorreu um erro no site.\n\n"
++        "1. Resolva o problema no navegador.\n"
++        "2. Clique em SALVAR no site.\n"
++        "3. Clique no botão abaixo para continuar."
++    )
++
++
++def msg_ficha_preenchida(pmib: str) -> str:
++    """Mensagem do `ModuloCopiaFichas` ao terminar uma ficha."""
++    return (
++        f"Ficha {pmib} preenchida!\n\n"
++        "Verifique na tela e copie as pendências (se houverem) do painel ao "
++        "lado.\nApós clicar em SALVAR no site, clique no botão abaixo."
++    )
++
++
++# =============================================================================
++# [2026-10-06] A lista de arquivos travados
++# =============================================================================
++# Ver `docs/superpowers/specs/2026-10-06-gravacao-com-retry-design.md`. Pedido
++# do Luan: *"identificar qual está travado, deu erro e o motivo. E pedir pra
++# fechar e dar retry nessa parte."* O Gestão PMIB pergunta em três momentos
++# (`core/excel/travas.py`), e cada um diz nos botões o que vai acontecer.
++TEXTOS_TRAVADOS = {
++    "antes": {
++        "titulo": "Arquivos travados",
++        "explicacao": "Antes de gravar, o SIG-FT conferiu os arquivos. Estes não podem ser gravados agora:",
++        "rodape": ("Feche-os (salvando o que for seu) e clique em Repetir. Se seguir sem eles, o processo "
++                   "roda e lê esses arquivos, mas não grava neles nesta rodada."),
++        "repetir": "Repetir",
++        "seguir": "Seguir sem eles",
++    },
++    "depois": {
++        "titulo": "Arquivos não gravados",
++        "explicacao": "Estes arquivos não foram gravados:",
++        "rodape": ("Resolva o motivo e clique em Repetir só estes: o SIG-FT relê cada um e grava de novo. "
++                   "Se seguir, eles ficam para a próxima rodada."),
++        "repetir": "Repetir só estes",
++        "seguir": "Seguir",
++    },
++    "na_hora": {
++        "titulo": "Arquivo travado",
++        "explicacao": "Este arquivo não pôde ser gravado:",
++        "rodape": ("Feche-o e clique em Repetir: o SIG-FT relê o arquivo antes de gravar, então o que você "
++                   "salvou nele continua lá. Se seguir sem ele, o processo continua e o que faltava gravar "
++                   "nele fica para a próxima rodada."),
++        "repetir": "Repetir",
++        "seguir": "Seguir sem ele",
++    },
++}
+diff --git a/sigft/app/widgets/dialogs.py b/sigft/app/widgets/dialogs.py
+index f94628c..a08b0af 100644
+--- a/sigft/app/widgets/dialogs.py
++++ b/sigft/app/widgets/dialogs.py
+@@ -43,113 +43,15 @@ import customtkinter as ctk
+ 
+ from sigft.app import theme
+ 
+-# Sentinela que as três telas já usavam para escolher a mensagem de login em
+-# vez da mensagem de "confira e salve". Era uma string solta repetida em três
+-# arquivos-classe; aqui é uma constante, e quem compara importa daqui.
+-LOGIN_NECESSARIO = "LOGIN_NECESSARIO"
+-
+-# Rótulo padrão do botão que solta o robô. É constante porque a tela de
+-# exclusão de LMR troca o dela: numa ação destrutiva, o botão dizer o que vai
+-# acontecer ("COMEÇAR A EXCLUSÃO") é mais honesto que um rótulo genérico.
+-TEXTO_CONTINUAR = "CONTINUAR AUTOMAÇÃO"
+-
+-# As mensagens, palavra por palavra como estavam. A Fase 7 é zero redesign, e
+-# texto de interface é aparência: mudar "solte o robô" para "iniciar" seria
+-# uma alteração de produto sem pedido.
+-MSG_LOGIN_SOLTAR_ROBO = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no site.\n"
+-    "2. Navegue até a tela inicial do PMIB.\n"
+-    "3. Clique abaixo para soltar o robô."
++# Os textos moram em `textos_dialogos` (sem tkinter, para a interface Qt
++# usar também); os nomes continuam importáveis daqui.
++from sigft.app.textos_dialogos import (  # noqa: F401 -- reexportados
++    LOGIN_NECESSARIO, MSG_EXCEL_BLOQUEADO, MSG_LOGIN_APAGAR_LMR, MSG_LOGIN_LMR,
++    MSG_LOGIN_LOTE, MSG_LOGIN_NOVA_FICHA, MSG_LOGIN_PAGINA_PRINCIPAL,
++    MSG_LOGIN_SOLTAR_ROBO, TEXTO_COMECAR_EXCLUSAO, TEXTO_CONTINUAR,
++    TEXTOS_TRAVADOS, msg_excel_bloqueado, msg_falha_ao_salvar,
++    msg_ficha_preenchida,
+ )
+-MSG_LOGIN_LOTE = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no site.\n"
+-    "2. Navegue até a tela inicial do PMIB.\n"
+-    "3. Clique abaixo para iniciar a automação em lote."
+-)
+-MSG_EXCEL_BLOQUEADO = (
+-    "O arquivo _STATUS_PMIB está aberto no Excel.\n\n"
+-    "Por favor, FECHE O ARQUIVO e clique em 'Tentar Novamente' para salvar o "
+-    "status da ficha concluída."
+-)
+-
+-
+-def msg_excel_bloqueado(caminho: object) -> str:
+-    """A mesma mensagem, NOMEANDO o arquivo travado.
+-
+-    [CP D] Quando a janela passou a servir os 7 pontos de gravação que antes
+-    falhavam calados, "o arquivo _STATUS_PMIB" deixou de bastar: o `pdm` grava
+-    ficha e template, o `analyzer` grava relatório, o `autospec` grava a ficha
+-    preenchida. Dizer QUAL arquivo fechar é a diferença entre o usuário
+-    resolver em 5 segundos e ficar procurando.
+-    """
+-    # `ntpath`, e nao `os.path`: ele corta as DUAS barras (`\\` e `/`) em
+-    # qualquer sistema. Com `os.path`, um caminho do Windows rodando fora do
+-    # Windows volta inteiro -- e a janela de 450px, que esta mensagem existe
+-    # para caber, mostra `C:\Users\...\ficha.xlsx` de ponta a ponta. Em
+-    # producao o app so roda no Windows e o defeito nao aparece; quem paga e o
+-    # portao de testes, que roda em Linux (CI) e reprovava a mensagem certa.
+-    import ntpath
+-
+-    nome = ntpath.basename(str(caminho)) or str(caminho)
+-    return (
+-        f"O arquivo '{nome}' está aberto em outro programa (provavelmente o "
+-        "Excel), e por isso não pôde ser salvo.\n\n"
+-        "FECHE O ARQUIVO e clique em 'Tentar Novamente'."
+-    )
+-
+-
+-# =============================================================================
+-# [CP B] As 4 pausas de login que eram `messagebox.showinfo`
+-# =============================================================================
+-# Textos PRESERVADOS: cada um diz o que já dizia. Só a forma mudou, para a dos
+-# passos numerados do modelo. Duas delas carregam instrução específica de qual
+-# página abrir — isso é informação, não ruído, e some se uniformizarmos.
+-MSG_LOGIN_APAGAR_LMR = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no site.\n"
+-    "2. Clique abaixo para começar a EXCLUSÃO."
+-)
+-MSG_LOGIN_LMR = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no site.\n"
+-    "2. Clique abaixo para começar."
+-)
+-MSG_LOGIN_NOVA_FICHA = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no portal.\n"
+-    "2. Navegue até a página com o botão 'Nova Ficha'.\n"
+-    "3. Clique abaixo quando estiver pronto."
+-)
+-MSG_LOGIN_PAGINA_PRINCIPAL = (
+-    "O navegador foi aberto.\n\n"
+-    "1. Faça o LOGIN no portal.\n"
+-    "2. Navegue até a página PRINCIPAL (onde fica a barra de pesquisa).\n"
+-    "3. Clique abaixo quando estiver pronto."
+-)
+-
+-# Rótulo do botão na tela de exclusão de LMR — ação destrutiva.
+-TEXTO_COMECAR_EXCLUSAO = "COMEÇAR A EXCLUSÃO"
+-
+-
+-def msg_falha_ao_salvar(nome_secao: str) -> str:
+-    """Mensagem do `ModuloUploadConditions` quando uma aba não salva."""
+-    return (
+-        f"Falha ao salvar a aba '{nome_secao}'. Ocorreu um erro no site.\n\n"
+-        "1. Resolva o problema no navegador.\n"
+-        "2. Clique em SALVAR no site.\n"
+-        "3. Clique no botão abaixo para continuar."
+-    )
+-
+-
+-def msg_ficha_preenchida(pmib: str) -> str:
+-    """Mensagem do `ModuloCopiaFichas` ao terminar uma ficha."""
+-    return (
+-        f"Ficha {pmib} preenchida!\n\n"
+-        "Verifique na tela e copie as pendências (se houverem) do painel ao "
+-        "lado.\nApós clicar em SALVAR no site, clique no botão abaixo."
+-    )
+ 
+ 
+ class _DialogoDeAcaoManual(ctk.CTkToplevel):
+@@ -544,42 +446,6 @@ class SelecaoMultiplaDialog(ctk.CTkToplevel):
+         self.destroy()
+ 
+ 
+-# =============================================================================
+-# [2026-10-06] A lista de arquivos travados
+-# =============================================================================
+-# Ver `docs/superpowers/specs/2026-10-06-gravacao-com-retry-design.md`. Pedido
+-# do Luan: *"identificar qual está travado, deu erro e o motivo. E pedir pra
+-# fechar e dar retry nessa parte."* O Gestão PMIB pergunta em três momentos
+-# (`core/excel/travas.py`), e cada um diz nos botões o que vai acontecer.
+-TEXTOS_TRAVADOS = {
+-    "antes": {
+-        "titulo": "Arquivos travados",
+-        "explicacao": "Antes de gravar, o SIG-FT conferiu os arquivos. Estes não podem ser gravados agora:",
+-        "rodape": ("Feche-os (salvando o que for seu) e clique em Repetir. Se seguir sem eles, o processo "
+-                   "roda e lê esses arquivos, mas não grava neles nesta rodada."),
+-        "repetir": "Repetir",
+-        "seguir": "Seguir sem eles",
+-    },
+-    "depois": {
+-        "titulo": "Arquivos não gravados",
+-        "explicacao": "Estes arquivos não foram gravados:",
+-        "rodape": ("Resolva o motivo e clique em Repetir só estes: o SIG-FT relê cada um e grava de novo. "
+-                   "Se seguir, eles ficam para a próxima rodada."),
+-        "repetir": "Repetir só estes",
+-        "seguir": "Seguir",
+-    },
+-    "na_hora": {
+-        "titulo": "Arquivo travado",
+-        "explicacao": "Este arquivo não pôde ser gravado:",
+-        "rodape": ("Feche-o e clique em Repetir: o SIG-FT relê o arquivo antes de gravar, então o que você "
+-                   "salvou nele continua lá. Se seguir sem ele, o processo continua e o que faltava gravar "
+-                   "nele fica para a próxima rodada."),
+-        "repetir": "Repetir",
+-        "seguir": "Seguir sem ele",
+-    },
+-}
+-
+-
+ class ArquivosTravadosDialog(ctk.CTkToplevel):
+     """Uma lista de arquivos, cada um com o motivo e o que fazer, e dois
+     botões: Repetir × Seguir. A decisão volta em `resultado["repetir"]`.
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 1e3f2f0..888c867 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -9,7 +9,7 @@ from __future__ import annotations
+ from PySide6.QtCore import Qt
+ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+ 
+-from sigft.app.widgets.dialogs import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
++from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
+ 
+ 
+ class _DialogoDeAcaoManual(QDialog):
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+index 418b58e..dd0af56 100644
+--- a/sigft/app_qt/widgets/espera.py
++++ b/sigft/app_qt/widgets/espera.py
+@@ -11,7 +11,7 @@ from __future__ import annotations
+ import threading
+ import traceback
+ 
+-from sigft.app.widgets.dialogs import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
++from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
+ from sigft.app_qt import interface
+ from sigft.app_qt.widgets import dialogs
+ 
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+new file mode 100644
+index 0000000..c054d79
+--- /dev/null
++++ b/tests/test_qt_sem_tkinter.py
+@@ -0,0 +1,63 @@
++"""A interface Qt nao pode depender do Tk.
++
++`sigft.app_qt.widgets.dialogs`/`espera` importavam os textos de
++`sigft.app.widgets.dialogs`, que importa tkinter/ttk/customtkinter no topo:
++toda tela Qt falhava num Python sem Tk (ex.: Homebrew no macOS) e o Tk entrava
++no processo Qt sem necessidade. Os textos agora moram em
++`sigft.app.textos_dialogos` (so biblioteca padrao).
++
++O subprocesso bloqueia `tkinter`/`customtkinter` com um finder, entao o teste
++vale mesmo numa maquina que TEM Tk (o conftest dubla o Tk neste processo, por
++isso e preciso um interpretador limpo).
++"""
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++RAIZ = Path(__file__).resolve().parent.parent
++
++_BLOQUEIO = """
++import importlib.abc, sys
++sys.path.insert(0, {raiz!r})
++
++class _SemTk(importlib.abc.MetaPathFinder):
++    def find_spec(self, nome, caminho=None, alvo=None):
++        if nome.split('.')[0] in ('tkinter', '_tkinter', 'customtkinter'):
++            raise ImportError('Tk bloqueado pelo teste: ' + nome)
++
++sys.meta_path.insert(0, _SemTk())
++import {modulo}
++assert not [m for m in sys.modules if m.split('.')[0] in ('tkinter', 'customtkinter')]
++"""
++
++
++def _importa_sem_tk(modulo):
++    ambiente = {**os.environ, "QT_QPA_PLATFORM": "offscreen"}
++    return subprocess.run(
++        [sys.executable, "-c", _BLOQUEIO.format(raiz=str(RAIZ), modulo=modulo)],
++        capture_output=True, text=True, timeout=60, env=ambiente, cwd=str(RAIZ))
++
++
++@pytest.mark.parametrize("modulo", [
++    "sigft.app.textos_dialogos",
++    "sigft.app_qt.widgets.dialogs",
++    "sigft.app_qt.widgets.espera",
++    "sigft.app_qt.widgets.module_frame",
++    "sigft.app_qt.main",
++])
++def test_importa_sem_tkinter(modulo):
++    resultado = _importa_sem_tk(modulo)
++    assert resultado.returncode == 0, resultado.stderr[-800:]
++
++
++def test_reexportacao_do_customtkinter_continua_igual():
++    # `sigft.app.widgets.dialogs` (CustomTkinter) reexporta os mesmos objetos.
++    from sigft.app import textos_dialogos
++    from sigft.app.widgets import dialogs
++    for nome in ("LOGIN_NECESSARIO", "MSG_EXCEL_BLOQUEADO", "TEXTO_CONTINUAR",
++                 "TEXTO_COMECAR_EXCLUSAO", "TEXTOS_TRAVADOS", "msg_excel_bloqueado",
++                 "msg_falha_ao_salvar", "msg_ficha_preenchida", "MSG_LOGIN_LOTE"):
++        assert getattr(dialogs, nome) is getattr(textos_dialogos, nome)
+-- 
+2.43.0
+

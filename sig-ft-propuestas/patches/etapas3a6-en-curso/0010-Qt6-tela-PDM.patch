@@ -1,0 +1,1582 @@
+From 1f0815f374815d4a731bcfc7b50ec8914c7caf7a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:09:45 +0000
+Subject: [PATCH 10/14] Qt6: tela PDM
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/pdm.py    | 693 ++++++++++++++++++++++++++++
+ tests/test_qt_sem_tkinter.py |   1 +
+ tests/test_qt_tela_pdm.py    | 847 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 1541 insertions(+)
+ create mode 100644 sigft/app_qt/views/pdm.py
+ create mode 100644 tests/test_qt_tela_pdm.py
+
+diff --git a/sigft/app_qt/views/pdm.py b/sigft/app_qt/views/pdm.py
+new file mode 100644
+index 0000000..4885043
+--- /dev/null
++++ b/sigft/app_qt/views/pdm.py
+@@ -0,0 +1,693 @@
++"""Tela "Gerenciador de PDMs" (PDM) na interface Qt.
++
++Mesma tela de `sigft/app/views/pdm.py`: fatia o arquivo geral de PDMs vindo de
++Itaipu, formata e traduz os PDMs Modificados, regenera as pastas a partir da
++planilha, cria as fichas PMIB a partir do template e limpa duplicatas de pasta.
++
++O que muda é só COMO os workers falam com a tela: lá eram `self.after(0, ...)`
++e threads `daemon` sem dono; aqui o log vai pelo console (seguro de qualquer
++thread), as mensagens do fim por `avisar` e cada tarefa por `iniciar_tarefa`
++(o botão fica desligado enquanto ela roda). Tudo o que o worker lê dos campos
++é lido NO CLIQUE, na thread da interface.
++"""
++from __future__ import annotations
++
++import os
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import (
++    QButtonGroup, QFrame, QHBoxLayout, QLineEdit, QRadioButton, QSizePolicy, QVBoxLayout,
++)
++
++from sigft.app import theme
++from sigft.app_qt import estilo, file_dialogs
++from sigft.app_qt.widgets import blocos, controles, dialogos_selecao
++from sigft.app_qt.widgets.abas import Abas
++from sigft.app_qt.widgets.module_frame import MARGEM_DA_TELA, ModuleFrame
++from sigft.core import pdm_catalogo, prefs
++from sigft.core.callbacks import from_legacy
++
++TEXTO_NENHUM_ARQUIVO = "Nenhum arquivo selecionado"
++EXCEL = [("Excel", "*.xlsx *.xls")]
++# Fundo dos quadros de dentro das abas e o cinza escuro dos botões de arquivo
++# (fg/hover escritos à mão na tela antiga).
++FUNDO_QUADRO = "#333333"
++HOVER_CINZA = "#454545"
++COR_TEXTO = controles.COR_TEXTO_CTK          # CTkLabel sem text_color: gray84
++COR_APOIO = estilo.cinza_tk(theme.COR_TEXTO_APOIO)
++LARGURA_RADIO_CTK = 100
++
++
++# --- peças -------------------------------------------------------------------
++def _rotulo(texto: str, *, largura: int | None = None, tamanho: int = 13, negrito: bool = False,
++            cor: str = COR_TEXTO):
++    """CTkLabel de uma linha, `anchor="w"` (sem quebra: lá o texto não quebra)."""
++    r = blocos.rotulo(texto, tamanho=tamanho, negrito=negrito, cor=cor, alinhar="esquerda")
++    r.setWordWrap(False)
++    if largura:
++        r.setFixedWidth(largura)
++    return r
++
++
++def _botao(texto: str, *, largura: int = estilo.LARGURA_BOTAO_CTK, variante: str | None = None,
++           altura: int = 28, tamanho_fonte: int | None = None):
++    """CTkButton: `largura` é o `width` (mínima); o texto que não cabe alarga o
++    botão com 7 px de folga de cada lado (`blocos.botao(largura_minima=)`)."""
++    return blocos.botao(texto, variante=variante, altura=altura, tamanho_fonte=tamanho_fonte,
++                        largura_minima=largura)
++
++
++def _quadro(layout_pai, margens):
++    """CTkFrame #333333 de cantos 8 (os quadros de dentro das abas)."""
++    quadro = QFrame(objectName="quadro_pdm")
++    quadro.setStyleSheet(f"#quadro_pdm {{ background: {FUNDO_QUADRO}; border-radius: 8px; }}")
++    layout = QVBoxLayout(quadro)
++    layout.setContentsMargins(*margens)
++    layout.setSpacing(0)
++    layout_pai.addWidget(quadro)
++    return quadro, layout
++
++
++def _linha(*itens, margens=(0, 0, 0, 0)) -> QHBoxLayout:
++    """`pack(side="left")` em fila: widgets e, entre eles, os padx somados (int)."""
++    linha = QHBoxLayout()
++    linha.setContentsMargins(*margens)
++    linha.setSpacing(0)
++    for item in itens:
++        if isinstance(item, int):
++            linha.addSpacing(item)
++        else:
++            linha.addWidget(item)
++    linha.addStretch()
++    return linha
++
++
++class _Opcoes(QButtonGroup):
++    """Os CTkRadioButton de uma mesma `StringVar`: `get()`/`set()` como lá."""
++
++    def __init__(self, padrao: str, parent) -> None:
++        super().__init__(parent)
++        self.setExclusive(True)
++        self._padrao = padrao
++        self.botoes: dict[str, QRadioButton] = {}
++
++    def adicionar(self, texto: str, valor: str) -> QRadioButton:
++        rb = QRadioButton(texto)
++        # O `width` padrão do CTkRadioButton (100) é largura MÍNIMA: "Português"
++        # e "English" ocupam 100 e empurram o vizinho para o mesmo x de lá.
++        rb.setMinimumWidth(LARGURA_RADIO_CTK)
++        self.addButton(rb)
++        self.botoes[valor] = rb
++        if valor == self._padrao:
++            rb.setChecked(True)
++        return rb
++
++    def get(self) -> str:
++        return next((v for v, rb in self.botoes.items() if rb.isChecked()), "")
++
++    def set(self, valor: str) -> None:
++        self.botoes[valor].setChecked(True)
++
++
++class _SelecaoDeCodigos(dialogos_selecao.SelecaoMultiplaDialog):
++    """A seleção dos códigos PMIB, sem Esc: a lista pode ter dezenas de
++    códigos marcados um a um, e o Tk não tinha tecla nenhuma -- uma tecla
++    escapada não pode jogar a escolha fora. "X" continua cancelando."""
++
++    def keyPressEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        if evento.key() == Qt.Key.Key_Escape:
++            evento.accept()
++            return
++        super().keyPressEvent(evento)
++
++
++# =============================================================================
++class ModuloPDM(ModuleFrame):
++    def __init__(self, parent=None, controller=None) -> None:
++        # Os caminhos de ARQUIVO (os StringVar sem campo visível de lá).
++        self.path_sam_gm = self.path_status_pmib = self.path_template = ""
++        super().__init__(parent, controller, titulo="Gerenciador de PDMs")
++        # Lá a tela não é o ModuleFrame: header, conteúdo e console com
++        # padx=20/pady=10 cada, dentro do padx/pady=20 do `show_frame`. Os pady
++        # vizinhos SOMAM: 20 entre eles. O conteúdo fica com a sobra e rola; o
++        # console tem a altura padrão (tests/test_pdm_tela_layout.py).
++        raiz = self.layout()
++        raiz.setContentsMargins(MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10,
++                                MARGEM_DA_TELA + 20, MARGEM_DA_TELA + 10)
++        raiz.setSpacing(20)
++
++        # Pré-preenchimento com a pasta padrão dos "PDMs modificados" (decisão
++        # de produto nº 7 / CP 1.5), quando ela existe no disco desta máquina.
++        # Os campos de ARQUIVO não: os diálogos deles já abrem na pasta padrão
++        # (ver o comentário da tela antiga e docs/refatoracao/PENDENCIAS.md).
++        pasta_padrao_destino = prefs.get_default_dir("pdms_modificados")
++        if pasta_padrao_destino is not None:
++            self.entry_dest.setText(pasta_padrao_destino)
++
++    # --- montagem -------------------------------------------------------------
++    def _build_ui(self) -> None:
++        self._rotulos = {}
++        self.content_layout.setContentsMargins(0, 0, 0, 0)
++        # CTkScrollableFrame transparente. A barra fica sempre à vista, como lá
++        # (alça cheia quando não há o que rolar): com ela só às vezes, a largura
++        # do formulário mudaria de uma aba para outra.
++        self.area, corpo = blocos.area_rolavel(self.content_layout)
++        self.area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        # Lá o formulário (900) encosta na barra: sem a margem de 6 à direita.
++        corpo.setContentsMargins(6, 6, 1, 6)
++        corpo.addSpacing(10)                            # frm_config: pady=10
++        self._painel_global(corpo)
++        corpo.addSpacing(20)                            # frm_config (…, 10) + abas (10, …)
++
++        # --- ABAS DE OPERAÇÃO ---
++        self.tabview = Abas(cor_fundo=theme.COR_CARTAO, cor_barra="#161616",
++                            cor_selecionada=theme.COLORS["primary"],
++                            cor_selecionada_hover=theme.COLORS["primary_hover"])
++        self._build_tab1(self.tabview.add("Processar PDMs"))
++        self._build_tab2(self.tabview.add("Criar planilhas PMIB"))
++        self._build_tab3(self.tabview.add("Excluir Duplicados"))
++        # O CTkTabview (dentro do formulário que rola) tem a altura da aba
++        # ESCOLHIDA; o QStackedWidget teria a da maior.
++        self.tabview.pilha.currentChanged.connect(self._altura_da_aba_escolhida)
++        self._altura_da_aba_escolhida()
++        corpo.addWidget(self.tabview)
++        corpo.addSpacing(10)                            # abas: pady=10
++        # A sobra (aba curta) fica embaixo; sem isto as abas esticariam.
++        corpo.addStretch(1)
++
++    def _altura_da_aba_escolhida(self, *_):
++        atual = self.tabview.pilha.currentWidget()
++        for aba in self.tabview.abas.values():
++            vertical = QSizePolicy.Policy.Preferred if aba is atual else QSizePolicy.Policy.Ignored
++            aba.setSizePolicy(QSizePolicy.Policy.Preferred, vertical)
++
++    def _painel_global(self, corpo) -> None:
++        r = self._rotulos
++        layout = blocos.cartao(corpo)
++        self.cartao_config = layout.parentWidget()
++        layout.setContentsMargins(15, 10, 15, 15)       # padx=15; título pady=(10, …); f_plan (…, 15)
++        layout.setSpacing(0)
++        r["config"] = _rotulo("Configuração Global", tamanho=14, negrito=True, cor=theme.COLORS["accent"])
++        layout.addWidget(r["config"])
++        layout.addSpacing(5)                            # título (…, 5)
++
++        r["destino"] = _rotulo("Pasta dos PDMs Modificados:", largura=190)
++        self.entry_dest = QLineEdit()
++        self.entry_dest.setFixedWidth(350)
++        self.btn_sel_destino = _botao("Selecionar", largura=100, variante="cinza")
++        self.btn_sel_destino.clicked.connect(self._sel_destino)
++        layout.addLayout(_linha(r["destino"], 5, self.entry_dest, 5, self.btn_sel_destino))
++        layout.addSpacing(5)                            # f_path (…, 5) + f_plan (0, …)
++
++        # A planilha de PDMs subiu da aba 1 para cá em 2026-09-24: as duas
++        # abas passaram a usá-la (regenerar/fatiar e criar as fichas).
++        r["sam_gm"] = _rotulo("Planilha de PDMs (SAM-GM):", largura=190)
++        self.btn_sam_gm = _botao("Selecionar", largura=100, variante="cinza")
++        self.btn_sam_gm.clicked.connect(self._sel_sam_gm)
++        self.lbl_sam_gm_status = _rotulo(TEXTO_NENHUM_ARQUIVO, cor=COR_APOIO)
++        layout.addLayout(_linha(r["sam_gm"], 5, self.btn_sam_gm, 20, self.lbl_sam_gm_status))
++
++    def _campo_de_pasta(self, layout, chave_rotulo, texto, *, largura_rotulo=240):
++        """Rótulo + campo (280, padx=5) + "Buscar" (80): a linha de pasta das abas."""
++        self._rotulos[chave_rotulo] = _rotulo(texto, largura=largura_rotulo)
++        campo = QLineEdit()
++        campo.setFixedWidth(280)
++        botao = _botao("Buscar", largura=80)
++        layout.addLayout(_linha(self._rotulos[chave_rotulo], 5, campo, 5, botao))
++        return campo, botao
++
++    def _cabecalho_com_botao(self, layout, chave, titulo, botao) -> None:
++        """Título à esquerda e o botão à direita, na mesma linha."""
++        self._rotulos[chave] = _rotulo(titulo, tamanho=14, negrito=True)
++        linha = QHBoxLayout()
++        linha.setSpacing(0)
++        linha.addWidget(self._rotulos[chave])
++        linha.addStretch()
++        linha.addWidget(botao)
++        layout.addLayout(linha)
++
++    def _build_tab1(self, aba) -> None:
++        r = self._rotulos
++        lay = aba.layout()
++        lay.setContentsMargins(20, 0, 20, 0)            # tudo com padx=20
++        # A pasta From Itaipu fica no topo da aba: a regeneração e o passo 1
++        # antigo usam a mesma.
++        lay.addSpacing(10)                              # f_dir: pady=(10, 0)
++        self.entry_pdms_itaipu, self.btn_buscar_itaipu = self._campo_de_pasta(
++            lay, "itaipu", "Pasta (PDMs From Itaipu):")
++        self.btn_buscar_itaipu.clicked.connect(self._buscar_itaipu)
++        lay.addSpacing(6)                               # quadro: pady=6
++
++        # --- Regenerar as pastas a partir da planilha (2026-09-24) ---
++        # Título e botão na MESMA linha, aqui e no passo 1 (o console sumia
++        # numa janela de 960 px de altura).
++        self.quadro_regen, q = _quadro(lay, (10, 6, 10, 8))
++        self.btn_regenerar = _botao("Executar: Regenerar as pastas", variante="primario")
++        self.btn_regenerar.clicked.connect(self._op1_regenerar)
++        self._cabecalho_com_botao(q, "regen", "Regenerar as pastas a partir da planilha", self.btn_regenerar)
++        r["regen_desc"] = _rotulo(
++            "Com a revisão no nome (PDM_1650_001 - ACUMULADOR - R2_formatado.xlsx); "
++            "a versão antiga vai para _versoes_antigas, nada é apagado.", tamanho=11, cor=COR_APOIO)
++        q.addWidget(r["regen_desc"])
++        lay.addSpacing(12)                              # pady=6 de cada quadro
++
++        # --- SEÇÃO 1: Fatiar lista geral (From Itaipu), método antigo ---
++        self.quadro_from, q = _quadro(lay, (10, 6, 10, 8))
++        self.btn_from_itaipu = _botao("Executar: Criar PDMs From Itaipu", variante="primario")
++        self.btn_from_itaipu.clicked.connect(self._op1_from_itaipu)
++        self._cabecalho_com_botao(q, "from", "1. Fatiar Arquivo Geral (From Itaipu)", self.btn_from_itaipu)
++        r["from_desc"] = _rotulo("Usa a planilha do painel de cima; só cria os PDMs que faltam na pasta.",
++                                 tamanho=11, cor=COR_APOIO)
++        q.addWidget(r["from_desc"])
++        lay.addSpacing(12)
++
++        # --- SEÇÃO 2: Formatar PDMs (Modificados) ---
++        self.quadro_mod, q = _quadro(lay, (10, 5, 10, 10))
++        r["mod"] = _rotulo("2. Formatar PDMs (Modificados)", tamanho=14, negrito=True)
++        q.addWidget(r["mod"])
++        q.addSpacing(5)                                 # título: pady=5
++        r["mod_desc"] = _rotulo("Utiliza a 'Pasta (PDMs From Itaipu)' como base para leitura.",
++                                tamanho=11, cor=COR_APOIO)
++        q.addWidget(r["mod_desc"])
++        q.addSpacing(5)                                 # rádios: pady=5
++        self.modo_proc = _Opcoes("todos", self)
++        self.rb_lote = self.modo_proc.adicionar("Lote (Todos os Novos)", "todos")
++        self.rb_especifico = self.modo_proc.adicionar("Específico (Escolher 1 arquivo)", "especifico")
++        q.addLayout(_linha(10, self.rb_lote, 20, self.rb_especifico))
++        q.addSpacing(15)                                # rádios (…, 5) + botão (10, …)
++        self.btn_modificados = _botao("Executar: Criar PDMs Modificados", variante="primario")
++        self.btn_modificados.clicked.connect(self._op1_modificados)
++        q.addWidget(self.btn_modificados, alignment=Qt.AlignmentFlag.AlignHCenter)
++
++        # --- Tradução para inglês (2026-08-28) ---
++        # Fica nesta aba porque produz uma pasta de PDMs, como os dois botões
++        # acima -- e não na aba 2, que só CONSOME o que existe.
++        q.addSpacing(25)                                # botão (…, 10) + título (15, …)
++        r["traduzir"] = _rotulo("3. Traduzir para inglês (ficha em inglês)", tamanho=14, negrito=True)
++        q.addWidget(r["traduzir"])
++        q.addSpacing(5)
++        r["traduzir_desc"] = _rotulo(
++            "Lê a 'Pasta dos PDMs Modificados' e grava a versão em inglês noutra pasta.\n"
++            "Rode uma vez; o resultado fica em cache e o glossário editável "
++            "(_GLOSSARIO_PT_EN.txt) corrige termo técnico de vez.", tamanho=11, cor=COR_APOIO)
++        q.addWidget(r["traduzir_desc"])
++        q.addSpacing(5)                                 # f_en: pady=5
++        self.entry_destino_en, self.btn_buscar_en = self._campo_de_pasta(
++            q, "en", "Pasta dos PDMs Modificados (EN):")
++        self.btn_buscar_en.clicked.connect(self._buscar_en)
++        q.addSpacing(15)                                # f_en (…, 5) + botão (10, …)
++        self.btn_traduzir = _botao("Executar: Traduzir PDMs Modificados para inglês", variante="primario")
++        self.btn_traduzir.clicked.connect(self._op1_traduzir)
++        q.addWidget(self.btn_traduzir, alignment=Qt.AlignmentFlag.AlignHCenter)
++        lay.addSpacing(6)                               # quadro: pady=6
++
++    def _build_tab2(self, aba) -> None:
++        r = self._rotulos
++        lay = aba.layout()
++        lay.setContentsMargins(20, 0, 20, 0)
++        lay.addSpacing(10)                              # frm_files: pady=10
++
++        # --- SEÇÃO 1: Configuração de Arquivos e Pastas ---
++        self.quadro_fichas, q = _quadro(lay, (10, 5, 10, 8))
++        r["fichas"] = _rotulo("Configuração das Fichas PMIB", tamanho=14, negrito=True)
++        q.addWidget(r["fichas"])
++        q.addSpacing(13)                                # título (…, 5) + linha (8, …)
++
++        # FONTE DAS PERGUNTAS (2026-09-24). A planilha de PDMs é a padrão; a
++        # pasta continua como método antigo, e é por ela que sai a ficha em
++        # inglês, que usa os PDMs traduzidos.
++        r["fonte"] = _rotulo("Fonte das características:", largura=240)
++        self.fonte_perguntas = _Opcoes("planilha", self)
++        self.rb_fonte_planilha = self.fonte_perguntas.adicionar("Planilha de PDMs", "planilha")
++        self.rb_fonte_pasta = self.fonte_perguntas.adicionar("Pasta de PDMs Modificados (método antigo)", "pasta")
++        q.addLayout(_linha(r["fonte"], 10, self.rb_fonte_planilha, 20, self.rb_fonte_pasta))
++        q.addSpacing(16)                                # pady=8 de cada linha
++
++        # STATUS_PMIB (botão + rótulo)
++        self.btn_pmib = _botao("Selecionar STATUS_PMIB (.xlsx)", largura=240, variante="cinza", tamanho_fonte=12)
++        self.btn_pmib.clicked.connect(self._sel_status_pmib)
++        self.lbl_pmib_status = _rotulo(TEXTO_NENHUM_ARQUIVO, cor=COR_APOIO)
++        q.addLayout(_linha(self.btn_pmib, 15, self.lbl_pmib_status))
++        q.addSpacing(16)
++
++        # Destino das fichas (campo + Buscar)
++        self.entry_destino_fichas, self.btn_buscar_fichas = self._campo_de_pasta(
++            q, "destino_fichas", "Pasta Destino das Fichas:")
++        self.btn_buscar_fichas.clicked.connect(self._buscar_destino_fichas)
++        q.addSpacing(16)
++
++        # Template (botão + rótulo)
++        self.btn_template = _botao("Selecionar Template (.xlsx)", largura=240, variante="cinza", tamanho_fonte=12)
++        self.btn_template.clicked.connect(self._sel_template)
++        self.lbl_template_status = _rotulo(TEXTO_NENHUM_ARQUIVO, cor=COR_APOIO)
++        q.addLayout(_linha(self.btn_template, 15, self.lbl_template_status))
++        q.addSpacing(16)
++
++        # IDIOMA DA FICHA (2026-08-28). Explícito, e não deduzido do nome do
++        # template: deduzir quebraria em silêncio no dia em que alguém
++        # renomeasse o arquivo.
++        r["idioma"] = _rotulo("Idioma da ficha:", largura=240)
++        self.idioma_ficha = _Opcoes("pt", self)
++        self.rb_pt = self.idioma_ficha.adicionar("Português", "pt")
++        self.rb_en = self.idioma_ficha.adicionar("English", "en")
++        r["idioma_dica"] = _rotulo("(English usa a pasta de PDMs traduzidos)", tamanho=11, cor=COR_APOIO)
++        q.addLayout(_linha(r["idioma"], 10, self.rb_pt, 20, self.rb_en, 20, r["idioma_dica"]))
++        lay.addSpacing(20)                              # frm_files (…, 10) + frm_exec (10, …)
++
++        # --- SEÇÃO 2: Modo de Execução ---
++        self.quadro_exec, q = _quadro(lay, (10, 10, 10, 10))
++        r["selecao"] = _rotulo("Seleção de Itens:", largura=120, tamanho=12, negrito=True)
++        self.modo_pmib = _Opcoes("todos", self)
++        self.rb_todos = self.modo_pmib.adicionar("Todos da Lista", "todos")
++        self.rb_selecionar = self.modo_pmib.adicionar("Selecionar Manualmente", "selecionar")
++        q.addLayout(_linha(r["selecao"], 10, self.rb_todos, 20, self.rb_selecionar))
++        q.addSpacing(10)                                # f_rad (…, 5) + f_out (5, …)
++        r["saida"] = _rotulo("Formato de Saída:", largura=120, tamanho=12, negrito=True)
++        self.modo_saida_fichas = _Opcoes("apenas_planilhas", self)
++        self.rb_apenas = self.modo_saida_fichas.adicionar("Apenas Planilhas (Padrão)", "apenas_planilhas")
++        self.rb_com_pastas = self.modo_saida_fichas.adicionar("Criar Subpastas + Planilhas", "com_pastas")
++        q.addLayout(_linha(r["saida"], 10, self.rb_apenas, 20, self.rb_com_pastas))
++        q.addSpacing(20)                                # f_out (…, 10) + botão (10, …)
++        self.btn_criar_fichas = _botao("Executar: Criar Fichas PMIB", variante="primario")
++        self.btn_criar_fichas.clicked.connect(self._op2_executar)
++        q.addWidget(self.btn_criar_fichas, alignment=Qt.AlignmentFlag.AlignHCenter)
++        lay.addSpacing(10)                              # frm_exec: pady=10
++
++    def _build_tab3(self, aba) -> None:
++        r = self._rotulos
++        lay = aba.layout()
++        lay.addSpacing(20)                              # rótulo: pady=20
++        r["limpeza"] = _rotulo("Remove versões antigas de arquivos na pasta (limpeza de versões).", tamanho=14)
++        lay.addWidget(r["limpeza"], alignment=Qt.AlignmentFlag.AlignHCenter)
++        lay.addSpacing(28)                              # rótulo (…, 20) + linha (8, …)
++        linha = QVBoxLayout()
++        linha.setContentsMargins(10, 0, 10, 0)          # f_clean: padx=10
++        self.entry_clean, self.btn_buscar_clean = self._campo_de_pasta(linha, "clean", "Pasta para Limpeza:")
++        self.btn_buscar_clean.clicked.connect(self._buscar_clean)
++        lay.addLayout(linha)
++        lay.addSpacing(38)                              # linha (…, 8) + botão (30, …)
++        self.btn_exec_clean = _botao("Executar Limpeza", largura=300, altura=40, variante="perigo")
++        self.btn_exec_clean.clicked.connect(self._op3_executar)
++        lay.addWidget(self.btn_exec_clean, alignment=Qt.AlignmentFlag.AlignHCenter)
++        lay.addSpacing(30)
++
++    # --- seletores ------------------------------------------------------------
++    @staticmethod
++    def _marcar_escolhido(botao, rotulo, caminho) -> None:
++        """Arquivo escolhido: o nome em verde e o botão na cor primária (o
++        hover continua o cinza, como o `configure(fg_color=...)` de lá)."""
++        rotulo.setText(os.path.basename(caminho))
++        rotulo.setStyleSheet(rotulo.styleSheet() + f" color: {theme.COLORS['accent']};")
++        botao.setStyleSheet(botao.styleSheet() + f" QPushButton {{ background: {theme.COLORS['primary']}; }}"
++                            f" QPushButton:hover {{ background: {HOVER_CINZA}; }}")
++
++    @staticmethod
++    def _escolher_pasta(campo, chave, titulo=None) -> None:
++        """Lá o campo recebia o "" do cancelar e apagava o caminho já escolhido."""
++        pasta = file_dialogs.ask_directory(chave, "pasta", **({"titulo": titulo} if titulo else {}))
++        if pasta:
++            campo.setText(pasta)
++
++    def _sel_destino(self) -> None:
++        self._escolher_pasta(self.entry_dest, "pdm.caminho_destino")
++
++    def _buscar_itaipu(self) -> None:
++        self._escolher_pasta(self.entry_pdms_itaipu, "pdm.pdms_itaipu", "Pasta de Origem dos PDMs")
++
++    def _buscar_en(self) -> None:
++        self._escolher_pasta(self.entry_destino_en, "pdm.pdms_modificados_en",
++                             "Pasta dos PDMs Modificados em INGLÊS")
++
++    def _buscar_destino_fichas(self) -> None:
++        self._escolher_pasta(self.entry_destino_fichas, "pdm.destino_fichas", "Pasta onde as fichas serão criadas")
++
++    def _buscar_clean(self) -> None:
++        self._escolher_pasta(self.entry_clean, "pdm.clean_dir", "Selecione a pasta para limpar duplicatas")
++
++    def _sel_sam_gm(self) -> None:
++        f = file_dialogs.ask_open_file("pdm.sam_gm", "excel", titulo="Selecione o PDM's SAM-GM", filetypes=EXCEL)
++        if f:
++            self.path_sam_gm = f
++            self._marcar_escolhido(self.btn_sam_gm, self.lbl_sam_gm_status, f)
++
++    def _sel_status_pmib(self) -> None:
++        f = file_dialogs.ask_open_file("pdm.status_pmib", "excel", titulo="Selecione o STATUS_PMIB", filetypes=EXCEL)
++        if f:
++            self.path_status_pmib = f
++            self._marcar_escolhido(self.btn_pmib, self.lbl_pmib_status, f)
++
++    def _sel_template(self) -> None:
++        f = file_dialogs.ask_open_file("pdm.template", "excel", titulo="Selecione o Template", filetypes=EXCEL)
++        if f:
++            self.path_template = f
++            self._marcar_escolhido(self.btn_template, self.lbl_template_status, f)
++
++    # --- Aba 1 ------------------------------------------------------------------
++    def _op1_from_itaipu(self) -> None:
++        lista = self.path_sam_gm
++        pasta_alvo = self.entry_pdms_itaipu.text()
++        if not lista:
++            return self.avisar("Aviso", "Por favor, selecione a Planilha de PDMs no painel de cima.", tipo="aviso")
++        if not pasta_alvo:
++            return self.avisar("Aviso", "Por favor, selecione a Pasta (PDMs From Itaipu) na tela.", tipo="aviso")
++        modulo = self.backend("pdm_backend")
++        if modulo is None:
++            return None
++        self.iniciar_tarefa(self._tarefa_from_itaipu, modulo, lista, pasta_alvo, botao=self.btn_from_itaipu)
++        return None
++
++    def _tarefa_from_itaipu(self, modulo, lista, pasta_alvo) -> None:
++        self.log(f"Fatiando a lista geral: {os.path.basename(lista)}...")
++        res = modulo.pdms_fromItaipu_lista_geral(lista, pasta_alvo, log_callback=self.log,
++                                                 retry_lock=self.perguntar_retry_excel)
++        self.log(res)
++        self.avisar("Relatório", res)
++
++    def _op1_modificados(self) -> None:
++        destino = self.entry_dest.text()
++        if not destino:
++            return self.avisar("Aviso", "Selecione a Pasta dos PDMs Modificados primeiro.", tipo="aviso")
++        origem = self.entry_pdms_itaipu.text()
++        if not origem:
++            return self.avisar("Aviso", "Por favor, selecione a 'Pasta (PDMs From Itaipu)' na tela.", tipo="aviso")
++        modulo = self.backend("pdm_backend")
++        if modulo is None:
++            return None
++
++        if self.modo_proc.get() == "todos":
++            self.iniciar_tarefa(self._tarefa_modificados, modulo, origem, destino, botao=self.btn_modificados)
++            return None
++        # `initialdir=origem`: override CONTEXTUAL -- a pasta que a pessoa ACABOU
++        # de escolher em "Pasta (PDMs From Itaipu)" nesta mesma tela (não é
++        # memória entre sessões; ver `sigft.app.file_dialogs._resolver_initialdir`).
++        arq = file_dialogs.ask_open_file("pdm.arquivo_especifico", "excel",
++                                         titulo="Selecione o arquivo PDM específico", filetypes=EXCEL,
++                                         initialdir=origem)
++        if not arq:
++            self.log("Seleção de arquivo específico cancelada.")
++            return None
++        self.iniciar_tarefa(self._tarefa_especifico, modulo, arq, destino, botao=self.btn_modificados)
++        return None
++
++    def _tarefa_modificados(self, modulo, origem, destino) -> None:
++        self.log(f"Processando todos em: {origem}")
++        count = 0
++        for arq in modulo.listar_arquivos_excel(origem):
++            tbl = modulo.processar_arquivo_pdm(arq)
++            if tbl is not None:
++                ok, msg = modulo.salvar_tabela_formatada(tbl, arq, destino, retry_lock=self.perguntar_retry_excel)
++                self.log(msg)
++                if ok:
++                    count += 1
++        self.log(f"Fim: {count} arquivos processados com sucesso.")
++        self.avisar("Fim", f"{count} arquivos processados com sucesso.")
++
++    def _tarefa_especifico(self, modulo, arq, destino) -> None:
++        tbl = modulo.processar_arquivo_pdm(arq)
++        if tbl is not None:
++            ok, msg = modulo.salvar_tabela_formatada(tbl, arq, destino, force=True,
++                                                     retry_lock=self.perguntar_retry_excel)
++            self.log(msg)
++            self.avisar("Status", msg)
++
++    def _op1_traduzir(self) -> None:
++        """Traduz a pasta de PDMs Modificados para inglês (generator de linhas
++        de log, o contrato do resto do projeto)."""
++        origem = self.entry_dest.text()
++        destino = self.entry_destino_en.text()
++        if not origem:
++            return self.avisar("Aviso", "Selecione a 'Pasta dos PDMs Modificados' primeiro.", tipo="aviso")
++        if not destino:
++            return self.avisar("Aviso", "Selecione a pasta de destino dos PDMs Modificados em INGLÊS.", tipo="aviso")
++        if os.path.abspath(origem) == os.path.abspath(destino):
++            return self.avisar("Erro", "A pasta de destino não pode ser a mesma da origem.\n"
++                                       "Os arquivos em português seriam sobrescritos.", tipo="erro")
++        self.iniciar_tarefa(self._tarefa_traduzir, origem, destino, botao=self.btn_traduzir)
++        return None
++
++    def _tarefa_traduzir(self, origem, destino) -> None:
++        try:
++            from sigft.services import traducao_pdm
++            self.log("Traduzindo PDMs Modificados para inglês...")
++            # SEM `api_key=`: `get_llm` resolve a chave do provedor escolhido
++            # para `traduzir_pdm` em "Modelos de IA" (ver a tela antiga).
++            for linha in traducao_pdm.traduzir_pasta(
++                    origem, destino,
++                    traduzir=traducao_pdm.motor_padrao(callbacks=from_legacy(callback_log=self.log)),
++                    retry_lock=self.perguntar_retry_excel):
++                self.log(linha)
++            self.avisar("Tradução", f"Tradução concluída.\n\nPasta: {destino}")
++        except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++            self.log(f"ERRO na tradução: {e}")
++            self.avisar("Erro", f"Falha na tradução:\n{e}", tipo="erro")
++
++    def _op1_regenerar(self) -> None:
++        """A validação de verdade (as duas pastas iguais, a planilha no formato
++        certo) é do serviço: a tela só confere que os campos foram preenchidos."""
++        planilha = self.path_sam_gm
++        pasta_modificados = self.entry_dest.text()
++        pasta_itaipu = self.entry_pdms_itaipu.text()
++        if not planilha:
++            return self.avisar("Aviso", "Selecione a planilha de PDMs no painel de cima.", tipo="aviso")
++        if not pasta_modificados:
++            return self.avisar("Aviso", "Selecione a 'Pasta dos PDMs Modificados' no painel de cima.", tipo="aviso")
++        self.iniciar_tarefa(self._tarefa_regenerar, planilha, pasta_modificados, pasta_itaipu or None,
++                            botao=self.btn_regenerar)
++        return None
++
++    def _tarefa_regenerar(self, planilha, pasta_modificados, pasta_itaipu) -> None:
++        try:
++            from sigft.services import pdm_regeneracao
++            self.log("Regenerando as pastas a partir da planilha de PDMs...")
++            resumo = pdm_regeneracao.regenerar_pastas(planilha, pasta_modificados, pasta_itaipu,
++                                                      log_callback=self.log, retry_lock=self.perguntar_retry_excel)
++            self.log(resumo)
++            self.avisar("Regeneração", resumo)
++        except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++            self.log(f"ERRO na regeneração: {e}")
++            self.avisar("Erro", f"A regeneração não foi feita:\n{e}", tipo="erro")
++
++    # --- Aba 2 ------------------------------------------------------------------
++    def _op2_executar(self) -> None:
++        # A FONTE das perguntas (2026-09-24): a planilha de PDMs, ou a pasta de
++        # PDMs Modificados (método antigo). Em inglês, só a pasta: as perguntas
++        # coladas têm de ser as traduzidas. Ver `_op1_traduzir`.
++        da_planilha = self.fonte_perguntas.get() == "planilha"
++        idioma = self.idioma_ficha.get()
++        em_ingles = idioma == "en"
++        planilha = self.path_sam_gm
++        pasta_modificados = None
++        if da_planilha:
++            if em_ingles:
++                return self.avisar("Aviso", "A ficha em inglês usa a pasta traduzida. Escolha a fonte "
++                                            "'Pasta de PDMs Modificados' ou o idioma Português.", tipo="aviso")
++            if not planilha:
++                return self.avisar("Aviso", "Selecione a planilha de PDMs no painel de cima.", tipo="aviso")
++        else:
++            pasta_modificados = self.entry_destino_en.text() if em_ingles else self.entry_dest.text()
++            if not pasta_modificados:
++                if em_ingles:
++                    return self.avisar(
++                        "Aviso", "Idioma da ficha = English, mas a 'Pasta dos PDMs Modificados "
++                                 "(EN)' não foi selecionada.\n\nEla fica na aba 1, no passo 3 "
++                                 "(Traduzir para inglês).", tipo="aviso")
++                return self.avisar("Aviso", "Selecione a 'Pasta dos PDMs Modificados' primeiro.", tipo="aviso")
++
++        status_pmib = self.path_status_pmib
++        destino_fichas = self.entry_destino_fichas.text()
++        template = self.path_template
++        if not status_pmib:
++            return self.avisar("Aviso", "Por favor, busque o arquivo STATUS_PMIB na tela.", tipo="aviso")
++        if not destino_fichas:
++            return self.avisar("Aviso", "Por favor, busque a Pasta Destino das Fichas na tela.", tipo="aviso")
++        if not template:
++            return self.avisar("Aviso", "Por favor, busque o Template Ficha Técnica na tela.", tipo="aviso")
++        modulo = self.backend("pdm_backend")
++        if modulo is None:
++            return None
++
++        lista_sel = None
++        if self.modo_pmib.get() == "selecionar":
++            try:
++                # [2026-10-05, T0] A leitura (cabeçalho ACHADO, não fixo na
++                # linha 4) e a normalização moram no serviço.
++                try:
++                    codigos = modulo.codigos_pmib_da_lista(status_pmib)
++                except ValueError as erro:
++                    return self.avisar("Erro", str(erro), tipo="erro")
++                # Modal (o `grab_set` de lá): a tela não tem o que fazer sem a
++                # resposta; `esperar()` é o `wait_window`.
++                lista_sel = self._escolher_codigos(codigos)
++                if not lista_sel:
++                    self.log("Seleção manual de códigos cancelada.")
++                    return None
++            except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++                return self.avisar("Erro", f"Ocorreu um erro ao ler o STATUS_PMIB:\n{e}", tipo="erro")
++
++        criar_pastas = self.modo_saida_fichas.get() == "com_pastas"
++        self.iniciar_tarefa(self._tarefa_fichas, modulo, da_planilha, planilha, pasta_modificados, idioma,
++                            status_pmib, destino_fichas, template, lista_sel, criar_pastas,
++                            botao=self.btn_criar_fichas)
++        return None
++
++    def _escolher_codigos(self, codigos):
++        escolhidos = []
++        dialogo = _SelecaoDeCodigos(
++            self, itens=codigos, titulo="Selecione os Códigos PMIB", instrucao="Selecione um ou mais códigos:",
++            geometria="400x500", fonte_instrucao=("Roboto", 14), fonte_lista=("Consolas", 11), modal=True,
++            ao_confirmar=escolhidos.extend)
++        dialogo.esperar()
++        return escolhidos
++
++    def _tarefa_fichas(self, modulo, da_planilha, planilha, pasta_modificados, idioma, status_pmib,
++                       destino_fichas, template, lista_sel, criar_pastas) -> None:
++        catalogo = None
++        if da_planilha:
++            # Antes de criar qualquer subpasta: planilha ilegível para o lote
++            # sem deixar pasta vazia para trás.
++            self.log("Lendo a planilha de PDMs...")
++            try:
++                catalogo = pdm_catalogo.carregar(planilha)
++            except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++                self.log(f"ERRO ao ler a planilha de PDMs: {e}")
++                self.avisar("Erro", f"Não consegui ler a planilha de PDMs:\n{e}", tipo="erro")
++                return
++
++        self.log(f"Preparando diretórios (Modo: {'Com Pastas' if criar_pastas else 'Apenas Planilhas'})...")
++        dados_pastas, msg = modulo.processar_pastas_fichas(status_pmib, destino_fichas, lista_sel,
++                                                           criar_subpastas=criar_pastas)
++        self.log(msg)
++        if not dados_pastas:
++            self.avisar("Aviso", "Nenhum código foi processado.")
++            return
++
++        if da_planilha:
++            msg_res, _logs = modulo.aplicar_templates_fichas_da_planilha(
++                dados_pastas, catalogo, template, log_callback=self.log, retry_lock=self.perguntar_retry_excel)
++        else:
++            self.log("Injetando os dados dos PDMs no Template (a partir da linha 79)...")
++            # O idioma vai para o serviço, e não o nome da aba: quem sabe como a
++            # aba se chama em inglês é o serviço (`NOME_DA_ABA_EM_INGLES`).
++            msg_res, _logs = modulo.aplicar_templates_fichas(
++                dados_pastas, pasta_modificados, template, log_callback=self.log,
++                retry_lock=self.perguntar_retry_excel, idioma=idioma)
++        self.log(msg_res)
++        self.log(">>> Processo de criação de fichas finalizado!")
++        self.avisar("Fim", f"Processo de criação de fichas finalizado.\n\n{msg_res}")
++
++    # --- Aba 3 ------------------------------------------------------------------
++    def _op3_executar(self) -> None:
++        pasta_limpeza = self.entry_clean.text()
++        if not pasta_limpeza:
++            return self.avisar("Aviso", "Por favor, selecione a pasta para limpeza primeiro.", tipo="aviso")
++        modulo = self.backend("pdm_backend")
++        if modulo is None:
++            return None
++        self.iniciar_tarefa(self._tarefa_limpeza, modulo, pasta_limpeza, botao=self.btn_exec_clean)
++        return None
++
++    def _tarefa_limpeza(self, modulo, pasta_limpeza) -> None:
++        self.log(f"Iniciando varredura por duplicados em: {pasta_limpeza}...")
++        res = modulo.logica_excluir_duplicados(pasta_limpeza, log_callback=self.log)
++        self.log(res)
++        self.avisar("Resultado", "Limpeza concluída.")
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index 40afd69..06b1bd4 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -62,6 +62,7 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.views.janelas",
+     "sigft.app_qt.views.pmib_manager",
+     "sigft.app_qt.views.copia_fichas",
++    "sigft.app_qt.views.pdm",
+     "sigft.app_qt.widgets.controles",
+     "sigft.app.atualizacao_textos",
+     "sigft.app_qt.atualizacao",
+diff --git a/tests/test_qt_tela_pdm.py b/tests/test_qt_tela_pdm.py
+new file mode 100644
+index 0000000..4f5a57f
+--- /dev/null
++++ b/tests/test_qt_tela_pdm.py
+@@ -0,0 +1,847 @@
++"""Tela "Gerenciador de PDMs" (PDM) na interface Qt.
++
++Backends, serviços e IA são dublês: o que se prova é a TELA -- textos, as três
++abas, as validações na ordem da tela antiga, os argumentos que chegam aos
++serviços, as mensagens do fim (pela thread da interface), a janela de seleção
++dos códigos e a geometria contra o CustomTkinter.
++"""
++import sys
++import threading
++from types import SimpleNamespace
++
++import pytest
++from PySide6.QtCore import Qt, QTimer
++
++from sigft.app import backends, theme
++from sigft.app_qt.views import pdm as tela_mod
++
++ABAS = ["Processar PDMs", "Criar planilhas PMIB", "Excluir Duplicados"]
++
++
++# ---------------------------------------------------------------------------
++# Dublês e ajudas
++# ---------------------------------------------------------------------------
++class PdmFalso:
++    """O `pdm_backend` de mentira: registra cada chamada."""
++
++    def __init__(self, *, codigos=None, erro_codigos=None, dados_pastas=("d1",), arquivos=("/i/a.xlsx",)):
++        self.chamadas = []
++        self.codigos, self.erro_codigos = codigos or ["PMIB-1", "PMIB-2", "PMIB-3"], erro_codigos
++        self.dados_pastas, self.arquivos = list(dados_pastas), list(arquivos)
++        self.threads = []
++
++    def _reg(self, nome, *a, **k):
++        self.chamadas.append((nome, a, k))
++        self.threads.append(threading.current_thread() is threading.main_thread())
++
++    def pdms_fromItaipu_lista_geral(self, lista, pasta, log_callback=None, retry_lock=None):
++        self._reg("from_itaipu", lista, pasta, retry_lock=retry_lock)
++        log_callback("fatiando...")
++        return "12 PDMs criados"
++
++    def listar_arquivos_excel(self, origem):
++        self._reg("listar", origem)
++        return list(self.arquivos)
++
++    def processar_arquivo_pdm(self, arq):
++        self._reg("processar", arq)
++        return None if arq.endswith("ruim.xlsx") else f"tbl:{arq}"
++
++    def salvar_tabela_formatada(self, tbl, arq, destino, force=False, retry_lock=None):
++        self._reg("salvar", tbl, arq, destino, force=force, retry_lock=retry_lock)
++        return True, f"salvo {arq}"
++
++    def codigos_pmib_da_lista(self, status):
++        self._reg("codigos", status)
++        if self.erro_codigos:
++            raise self.erro_codigos
++        return list(self.codigos)
++
++    def processar_pastas_fichas(self, status, destino, lista_sel, criar_subpastas=True):
++        self._reg("pastas", status, destino, lista_sel, criar_subpastas=criar_subpastas)
++        return list(self.dados_pastas), "3 pastas preparadas"
++
++    def aplicar_templates_fichas(self, dados, pasta, template, log_callback=None, retry_lock=None, idioma="pt"):
++        self._reg("templates_pasta", dados, pasta, template, retry_lock=retry_lock, idioma=idioma)
++        return "3 fichas montadas", []
++
++    def aplicar_templates_fichas_da_planilha(self, dados, catalogo, template, log_callback=None, retry_lock=None):
++        self._reg("templates_planilha", dados, catalogo, template, retry_lock=retry_lock)
++        return "3 fichas da planilha", []
++
++    def logica_excluir_duplicados(self, pasta, log_callback=None):
++        self._reg("limpeza", pasta)
++        log_callback("removido x_v1.xlsx")
++        return "1 duplicado removido"
++
++
++@pytest.fixture
++def pdm(monkeypatch):
++    falso = PdmFalso()
++    monkeypatch.setattr(backends, "pdm_backend", falso)
++    return falso
++
++
++@pytest.fixture
++def tela(qt_interface, qtbot, monkeypatch):
++    monkeypatch.setattr(tela_mod.prefs, "get_default_dir", lambda chave: None)
++    t = tela_mod.ModuloPDM()
++    qtbot.addWidget(t)
++    t.avisos = []
++    monkeypatch.setattr(t, "avisar", lambda ti, m, tipo="info": t.avisos.append(
++        (tipo, ti, m, threading.current_thread() is threading.main_thread())))
++    return t
++
++
++def _texto(tela):
++    return tela.console.toPlainText()
++
++
++def _esperar_aviso(tela, qtbot, n=1):
++    qtbot.waitUntil(lambda: len(tela.avisos) >= n, timeout=3000)
++    return tela.avisos[n - 1]
++
++
++def _modulo_falso(monkeypatch, nome, **funcoes):
++    modulo = SimpleNamespace(**funcoes)
++    monkeypatch.setitem(sys.modules, f"sigft.services.{nome}", modulo)
++    import sigft.services as servicos
++    monkeypatch.setattr(servicos, nome, modulo, raising=False)
++    return modulo
++
++
++# ---------------------------------------------------------------------------
++# Montagem
++# ---------------------------------------------------------------------------
++def test_monta_com_os_textos_e_os_padroes(tela):
++    assert tela.label_titulo.text() == "Gerenciador de PDMs"
++    r = tela._rotulos
++    assert r["config"].text() == "Configuração Global"
++    assert r["destino"].text() == "Pasta dos PDMs Modificados:"
++    assert r["sam_gm"].text() == "Planilha de PDMs (SAM-GM):"
++    assert tela.btn_sel_destino.text() == "Selecionar" and tela.btn_sam_gm.text() == "Selecionar"
++    assert tela.lbl_sam_gm_status.text() == "Nenhum arquivo selecionado"
++    assert list(tela.tabview.abas) == ABAS and tela.tabview.get() == "Processar PDMs"
++    # Aba 1
++    assert r["itaipu"].text() == "Pasta (PDMs From Itaipu):"
++    assert r["regen"].text() == "Regenerar as pastas a partir da planilha"
++    assert tela.btn_regenerar.text() == "Executar: Regenerar as pastas"
++    assert r["regen_desc"].text() == ("Com a revisão no nome (PDM_1650_001 - ACUMULADOR - R2_formatado.xlsx); "
++                                      "a versão antiga vai para _versoes_antigas, nada é apagado.")
++    assert r["from"].text() == "1. Fatiar Arquivo Geral (From Itaipu)"
++    assert tela.btn_from_itaipu.text() == "Executar: Criar PDMs From Itaipu"
++    assert r["from_desc"].text() == "Usa a planilha do painel de cima; só cria os PDMs que faltam na pasta."
++    assert r["mod"].text() == "2. Formatar PDMs (Modificados)"
++    assert r["mod_desc"].text() == "Utiliza a 'Pasta (PDMs From Itaipu)' como base para leitura."
++    assert tela.rb_lote.text() == "Lote (Todos os Novos)" and tela.rb_lote.isChecked()
++    assert tela.rb_especifico.text() == "Específico (Escolher 1 arquivo)"
++    assert tela.btn_modificados.text() == "Executar: Criar PDMs Modificados"
++    assert r["traduzir"].text() == "3. Traduzir para inglês (ficha em inglês)"
++    assert r["traduzir_desc"].text() == (
++        "Lê a 'Pasta dos PDMs Modificados' e grava a versão em inglês noutra pasta.\n"
++        "Rode uma vez; o resultado fica em cache e o glossário editável "
++        "(_GLOSSARIO_PT_EN.txt) corrige termo técnico de vez.")
++    assert r["en"].text() == "Pasta dos PDMs Modificados (EN):"
++    assert tela.btn_traduzir.text() == "Executar: Traduzir PDMs Modificados para inglês"
++    # Aba 2
++    assert r["fichas"].text() == "Configuração das Fichas PMIB"
++    assert r["fonte"].text() == "Fonte das características:"
++    assert tela.rb_fonte_planilha.text() == "Planilha de PDMs" and tela.rb_fonte_planilha.isChecked()
++    assert tela.rb_fonte_pasta.text() == "Pasta de PDMs Modificados (método antigo)"
++    assert tela.btn_pmib.text() == "Selecionar STATUS_PMIB (.xlsx)"
++    assert tela.lbl_pmib_status.text() == "Nenhum arquivo selecionado"
++    assert r["destino_fichas"].text() == "Pasta Destino das Fichas:"
++    assert tela.btn_template.text() == "Selecionar Template (.xlsx)"
++    assert tela.lbl_template_status.text() == "Nenhum arquivo selecionado"
++    assert r["idioma"].text() == "Idioma da ficha:"
++    assert tela.rb_pt.text() == "Português" and tela.rb_pt.isChecked() and tela.rb_en.text() == "English"
++    assert r["idioma_dica"].text() == "(English usa a pasta de PDMs traduzidos)"
++    assert r["selecao"].text() == "Seleção de Itens:" and r["saida"].text() == "Formato de Saída:"
++    assert tela.rb_todos.text() == "Todos da Lista" and tela.rb_todos.isChecked()
++    assert tela.rb_selecionar.text() == "Selecionar Manualmente"
++    assert tela.rb_apenas.text() == "Apenas Planilhas (Padrão)" and tela.rb_apenas.isChecked()
++    assert tela.rb_com_pastas.text() == "Criar Subpastas + Planilhas"
++    assert tela.btn_criar_fichas.text() == "Executar: Criar Fichas PMIB"
++    # Aba 3
++    assert r["limpeza"].text() == "Remove versões antigas de arquivos na pasta (limpeza de versões)."
++    assert r["clean"].text() == "Pasta para Limpeza:"
++    assert tela.btn_exec_clean.text() == "Executar Limpeza"
++    # Os valores dos grupos de rádio (os StringVar de lá)
++    assert (tela.modo_proc.get(), tela.fonte_perguntas.get(), tela.idioma_ficha.get(),
++            tela.modo_pmib.get(), tela.modo_saida_fichas.get()) == (
++        "todos", "planilha", "pt", "todos", "apenas_planilhas")
++    for campo in (tela.entry_dest, tela.entry_pdms_itaipu, tela.entry_destino_en,
++                  tela.entry_destino_fichas, tela.entry_clean):
++        assert campo.text() == ""
++
++
++def test_radios_trocam_o_valor(tela):
++    tela.rb_especifico.click()
++    tela.rb_fonte_pasta.click()
++    tela.rb_en.click()
++    tela.rb_selecionar.click()
++    tela.rb_com_pastas.click()
++    assert (tela.modo_proc.get(), tela.fonte_perguntas.get(), tela.idioma_ficha.get(),
++            tela.modo_pmib.get(), tela.modo_saida_fichas.get()) == (
++        "especifico", "pasta", "en", "selecionar", "com_pastas")
++    assert not tela.rb_lote.isChecked() and not tela.rb_pt.isChecked()
++    tela.idioma_ficha.set("pt")
++    assert tela.rb_pt.isChecked() and tela.idioma_ficha.get() == "pt"
++
++
++def test_pasta_dos_modificados_vem_preenchida_com_a_padrao(qt_interface, qtbot, monkeypatch):
++    pedidas = []
++    monkeypatch.setattr(tela_mod.prefs, "get_default_dir",
++                        lambda chave: pedidas.append(chave) or "/rede/PDMs Modificados")
++    t = tela_mod.ModuloPDM()
++    qtbot.addWidget(t)
++    assert pedidas == ["pdms_modificados"]
++    assert t.entry_dest.text() == "/rede/PDMs Modificados"
++
++
++def test_abas_trocam(tela):
++    tela.tabview.botoes["Excluir Duplicados"].click()
++    assert tela.tabview.get() == "Excluir Duplicados"
++    tela.tabview.set("Criar planilhas PMIB")
++    assert tela.tabview.get() == "Criar planilhas PMIB"
++
++
++# ---------------------------------------------------------------------------
++# Seletores
++# ---------------------------------------------------------------------------
++def test_seletores_de_arquivo(tela, monkeypatch):
++    chamadas = []
++    respostas = iter(["/d/PDMs SAM-GM.xlsx", "/d/_STATUS_PMIB.xlsx", "/d/Template FT.xlsx"])
++
++    def falso(chave, categoria, **k):
++        chamadas.append((chave, categoria, k))
++        return next(respostas)
++
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", falso)
++    tela.btn_sam_gm.click()
++    tela.btn_pmib.click()
++    tela.btn_template.click()
++    excel = [("Excel", "*.xlsx *.xls")]
++    assert chamadas == [
++        ("pdm.sam_gm", "excel", {"titulo": "Selecione o PDM's SAM-GM", "filetypes": excel}),
++        ("pdm.status_pmib", "excel", {"titulo": "Selecione o STATUS_PMIB", "filetypes": excel}),
++        ("pdm.template", "excel", {"titulo": "Selecione o Template", "filetypes": excel}),
++    ]
++    assert (tela.path_sam_gm, tela.path_status_pmib, tela.path_template) == (
++        "/d/PDMs SAM-GM.xlsx", "/d/_STATUS_PMIB.xlsx", "/d/Template FT.xlsx")
++    assert tela.lbl_sam_gm_status.text() == "PDMs SAM-GM.xlsx"
++    assert tela.lbl_pmib_status.text() == "_STATUS_PMIB.xlsx"
++    assert tela.lbl_template_status.text() == "Template FT.xlsx"
++    for rotulo in (tela.lbl_sam_gm_status, tela.lbl_pmib_status, tela.lbl_template_status):
++        assert theme.COLORS["accent"] in rotulo.styleSheet()
++    for botao in (tela.btn_sam_gm, tela.btn_pmib, tela.btn_template):
++        assert theme.COLORS["primary"] in botao.styleSheet()
++
++
++def test_cancelar_o_seletor_de_arquivo_nao_mexe_em_nada(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "")
++    for botao in (tela.btn_sam_gm, tela.btn_pmib, tela.btn_template):
++        botao.click()
++    assert tela.path_sam_gm == tela.path_status_pmib == tela.path_template == ""
++    assert tela.lbl_pmib_status.text() == "Nenhum arquivo selecionado"
++    assert theme.COLORS["primary"] not in tela.btn_pmib.styleSheet()
++
++
++def test_seletores_de_pasta(tela, monkeypatch):
++    chamadas = []
++
++    def falso(chave, categoria, **k):
++        chamadas.append((chave, categoria, k.get("titulo")))
++        return f"/escolhida/{chave}"
++
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_directory", falso)
++    pares = [(tela.btn_sel_destino, tela.entry_dest), (tela.btn_buscar_itaipu, tela.entry_pdms_itaipu),
++             (tela.btn_buscar_en, tela.entry_destino_en), (tela.btn_buscar_fichas, tela.entry_destino_fichas),
++             (tela.btn_buscar_clean, tela.entry_clean)]
++    for botao, _campo in pares:
++        botao.click()
++    assert chamadas == [
++        ("pdm.caminho_destino", "pasta", None),
++        ("pdm.pdms_itaipu", "pasta", "Pasta de Origem dos PDMs"),
++        ("pdm.pdms_modificados_en", "pasta", "Pasta dos PDMs Modificados em INGLÊS"),
++        ("pdm.destino_fichas", "pasta", "Pasta onde as fichas serão criadas"),
++        ("pdm.clean_dir", "pasta", "Selecione a pasta para limpar duplicatas"),
++    ]
++    assert [c.text() for _b, c in pares] == [f"/escolhida/{ch}" for ch, _c, _t in chamadas]
++
++
++def test_cancelar_a_pasta_mantem_o_caminho_escolhido(tela, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_directory", lambda *a, **k: "")
++    tela.entry_pdms_itaipu.setText("/ja/escolhida")
++    tela.entry_dest.setText("/modificados")
++    tela.btn_buscar_itaipu.click()
++    tela.btn_sel_destino.click()
++    assert tela.entry_pdms_itaipu.text() == "/ja/escolhida" and tela.entry_dest.text() == "/modificados"
++
++
++# ---------------------------------------------------------------------------
++# Aba 1: From Itaipu, Modificados, Tradução, Regeneração
++# ---------------------------------------------------------------------------
++@pytest.mark.parametrize("lista, pasta, mensagem", [
++    ("", "/i", "Por favor, selecione a Planilha de PDMs no painel de cima."),
++    ("/d/s.xlsx", "", "Por favor, selecione a Pasta (PDMs From Itaipu) na tela."),
++])
++def test_from_itaipu_valida(tela, pdm, lista, pasta, mensagem):
++    tela.path_sam_gm = lista
++    tela.entry_pdms_itaipu.setText(pasta)
++    tela.btn_from_itaipu.click()
++    assert tela.avisos == [("aviso", "Aviso", mensagem, True)] and pdm.chamadas == []
++
++
++def test_from_itaipu_roda_em_thread_e_mostra_o_relatorio(tela, qtbot, pdm):
++    tela.path_sam_gm = "/d/PDMs SAM-GM.xlsx"
++    tela.entry_pdms_itaipu.setText("/i")
++    tela.btn_from_itaipu.click()
++    assert _esperar_aviso(tela, qtbot) == ("info", "Relatório", "12 PDMs criados", False)
++    assert pdm.chamadas == [("from_itaipu", ("/d/PDMs SAM-GM.xlsx", "/i"),
++                             {"retry_lock": tela.perguntar_retry_excel})]
++    assert pdm.threads == [False]
++    qtbot.waitUntil(lambda: "> 12 PDMs criados" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    ordem = ["> Fatiando a lista geral: PDMs SAM-GM.xlsx...", "> fatiando...", "> 12 PDMs criados"]
++    assert [texto.index(x) for x in ordem] == sorted(texto.index(x) for x in ordem)
++    qtbot.waitUntil(tela.btn_from_itaipu.isEnabled, timeout=2000)
++
++
++def test_sem_backend_avisa_e_nao_roda(tela, monkeypatch):
++    monkeypatch.setattr(backends, "pdm_backend", None)
++    monkeypatch.setattr(backends, "motivo_da_falha", lambda nome: "faltou o pandas")
++    avisos = []
++    monkeypatch.setattr(tela_mod.ModuleFrame, "backend",
++                        lambda self, nome: avisos.append(nome))
++    tela.path_sam_gm = "/d/s.xlsx"
++    tela.entry_pdms_itaipu.setText("/i")
++    tela.btn_from_itaipu.click()
++    assert avisos == ["pdm_backend"] and tela.btn_from_itaipu.isEnabled()
++
++
++@pytest.mark.parametrize("destino, origem, mensagem", [
++    ("", "/i", "Selecione a Pasta dos PDMs Modificados primeiro."),
++    ("/m", "", "Por favor, selecione a 'Pasta (PDMs From Itaipu)' na tela."),
++])
++def test_modificados_valida(tela, pdm, destino, origem, mensagem):
++    tela.entry_dest.setText(destino)
++    tela.entry_pdms_itaipu.setText(origem)
++    tela.btn_modificados.click()
++    assert tela.avisos == [("aviso", "Aviso", mensagem, True)] and pdm.chamadas == []
++
++
++def test_modificados_em_lote(tela, qtbot, pdm):
++    pdm.arquivos = ["/i/a.xlsx", "/i/ruim.xlsx", "/i/b.xlsx"]
++    tela.entry_dest.setText("/m")
++    tela.entry_pdms_itaipu.setText("/i")
++    tela.btn_modificados.click()
++    # O destino é lido no clique: mudar o campo depois não muda o lote.
++    tela.entry_dest.setText("/outro")
++    assert _esperar_aviso(tela, qtbot) == ("info", "Fim", "2 arquivos processados com sucesso.", False)
++    salvos = [c for c in pdm.chamadas if c[0] == "salvar"]
++    assert salvos == [
++        ("salvar", ("tbl:/i/a.xlsx", "/i/a.xlsx", "/m"), {"force": False, "retry_lock": tela.perguntar_retry_excel}),
++        ("salvar", ("tbl:/i/b.xlsx", "/i/b.xlsx", "/m"), {"force": False, "retry_lock": tela.perguntar_retry_excel}),
++    ]
++    qtbot.waitUntil(lambda: "Fim: 2 arquivos" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    ordem = ["> Processando todos em: /i", "> salvo /i/a.xlsx", "> salvo /i/b.xlsx",
++             "> Fim: 2 arquivos processados com sucesso."]
++    assert [texto.index(x) for x in ordem] == sorted(texto.index(x) for x in ordem)
++
++
++def test_modificados_especifico(tela, qtbot, pdm, monkeypatch):
++    pedidos = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file",
++                        lambda chave, cat, **k: pedidos.append((chave, cat, k)) or "/i/PDM_1.xlsx")
++    tela.entry_dest.setText("/m")
++    tela.entry_pdms_itaipu.setText("/i")
++    tela.rb_especifico.click()
++    tela.btn_modificados.click()
++    assert pedidos == [("pdm.arquivo_especifico", "excel", {
++        "titulo": "Selecione o arquivo PDM específico", "filetypes": [("Excel", "*.xlsx *.xls")],
++        "initialdir": "/i"})]
++    assert _esperar_aviso(tela, qtbot) == ("info", "Status", "salvo /i/PDM_1.xlsx", False)
++    assert ("salvar", ("tbl:/i/PDM_1.xlsx", "/i/PDM_1.xlsx", "/m"),
++            {"force": True, "retry_lock": tela.perguntar_retry_excel}) in pdm.chamadas
++
++
++def test_modificados_especifico_cancelado(tela, qtbot, pdm, monkeypatch):
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "")
++    tela.entry_dest.setText("/m")
++    tela.entry_pdms_itaipu.setText("/i")
++    tela.rb_especifico.click()
++    tela.btn_modificados.click()
++    qtbot.waitUntil(lambda: "> Seleção de arquivo específico cancelada." in _texto(tela), timeout=2000)
++    assert pdm.chamadas == [] and tela.avisos == [] and tela.btn_modificados.isEnabled()
++
++
++@pytest.mark.parametrize("origem, destino, aviso", [
++    ("", "/en", ("aviso", "Aviso", "Selecione a 'Pasta dos PDMs Modificados' primeiro.", True)),
++    ("/m", "", ("aviso", "Aviso", "Selecione a pasta de destino dos PDMs Modificados em INGLÊS.", True)),
++    ("/m", "/m/", ("erro", "Erro", "A pasta de destino não pode ser a mesma da origem.\n"
++                                    "Os arquivos em português seriam sobrescritos.", True)),
++])
++def test_traduzir_valida(tela, monkeypatch, origem, destino, aviso):
++    chamadas = []
++    _modulo_falso(monkeypatch, "traducao_pdm", traduzir_pasta=lambda *a, **k: chamadas.append(a) or [],
++                  motor_padrao=lambda **k: None)
++    tela.entry_dest.setText(origem)
++    tela.entry_destino_en.setText(destino)
++    tela.btn_traduzir.click()
++    assert tela.avisos == [aviso] and chamadas == []
++
++
++def test_traduzir(tela, qtbot, monkeypatch):
++    chamadas = []
++
++    def motor_padrao(api_key=None, callbacks=None):
++        chamadas.append(("motor", api_key, callbacks))
++        callbacks.log("motor pronto")
++        return "MOTOR"
++
++    def traduzir_pasta(origem, destino, traduzir=None, retry_lock=None):
++        chamadas.append(("pasta", origem, destino, traduzir, retry_lock))
++        yield "traduzido PDM_1"
++
++    _modulo_falso(monkeypatch, "traducao_pdm", traduzir_pasta=traduzir_pasta, motor_padrao=motor_padrao)
++    tela.entry_dest.setText("/m")
++    tela.entry_destino_en.setText("/en")
++    tela.btn_traduzir.click()
++    assert _esperar_aviso(tela, qtbot) == ("info", "Tradução", "Tradução concluída.\n\nPasta: /en", False)
++    assert chamadas[0][0] == "motor" and chamadas[0][1] is None  # sem api_key: a do provedor escolhido
++    assert chamadas[1] == ("pasta", "/m", "/en", "MOTOR", tela.perguntar_retry_excel)
++    qtbot.waitUntil(lambda: "> traduzido PDM_1" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    assert texto.index("> Traduzindo PDMs Modificados para inglês...") < texto.index("> traduzido PDM_1")
++    assert "motor pronto" in texto
++
++
++def test_traduzir_com_erro(tela, qtbot, monkeypatch):
++    def traduzir_pasta(*a, **k):
++        raise RuntimeError("sem chave da IA")
++
++    _modulo_falso(monkeypatch, "traducao_pdm", traduzir_pasta=traduzir_pasta, motor_padrao=lambda **k: None)
++    tela.entry_dest.setText("/m")
++    tela.entry_destino_en.setText("/en")
++    tela.btn_traduzir.click()
++    assert _esperar_aviso(tela, qtbot) == ("erro", "Erro", "Falha na tradução:\nsem chave da IA", False)
++    qtbot.waitUntil(lambda: "> ERRO na tradução: sem chave da IA" in _texto(tela), timeout=2000)
++
++
++@pytest.mark.parametrize("planilha, modificados, mensagem", [
++    ("", "/m", "Selecione a planilha de PDMs no painel de cima."),
++    ("/d/s.xlsx", "", "Selecione a 'Pasta dos PDMs Modificados' no painel de cima."),
++])
++def test_regenerar_valida(tela, monkeypatch, planilha, modificados, mensagem):
++    chamadas = []
++    _modulo_falso(monkeypatch, "pdm_regeneracao", regenerar_pastas=lambda *a, **k: chamadas.append(a))
++    tela.path_sam_gm = planilha
++    tela.entry_dest.setText(modificados)
++    tela.btn_regenerar.click()
++    assert tela.avisos == [("aviso", "Aviso", mensagem, True)] and chamadas == []
++
++
++@pytest.mark.parametrize("itaipu, esperado", [("", None), ("/i", "/i")])
++def test_regenerar(tela, qtbot, monkeypatch, itaipu, esperado):
++    chamadas = []
++
++    def regenerar(planilha, modificados, pasta_itaipu, log_callback=None, retry_lock=None):
++        chamadas.append((planilha, modificados, pasta_itaipu, retry_lock))
++        log_callback("PDM_1650_001 regenerado")
++        return "40 PDMs regenerados"
++
++    _modulo_falso(monkeypatch, "pdm_regeneracao", regenerar_pastas=regenerar)
++    tela.path_sam_gm = "/d/s.xlsx"
++    tela.entry_dest.setText("/m")
++    tela.entry_pdms_itaipu.setText(itaipu)
++    tela.btn_regenerar.click()
++    assert _esperar_aviso(tela, qtbot) == ("info", "Regeneração", "40 PDMs regenerados", False)
++    assert chamadas == [("/d/s.xlsx", "/m", esperado, tela.perguntar_retry_excel)]
++    qtbot.waitUntil(lambda: "> 40 PDMs regenerados" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    assert (texto.index("> Regenerando as pastas a partir da planilha de PDMs...")
++            < texto.index("> PDM_1650_001 regenerado") < texto.index("> 40 PDMs regenerados"))
++
++
++def test_regenerar_com_erro(tela, qtbot, monkeypatch):
++    def regenerar(*a, **k):
++        raise ValueError("as duas pastas são a mesma")
++
++    _modulo_falso(monkeypatch, "pdm_regeneracao", regenerar_pastas=regenerar)
++    tela.path_sam_gm = "/d/s.xlsx"
++    tela.entry_dest.setText("/m")
++    tela.btn_regenerar.click()
++    assert _esperar_aviso(tela, qtbot) == (
++        "erro", "Erro", "A regeneração não foi feita:\nas duas pastas são a mesma", False)
++    qtbot.waitUntil(lambda: "> ERRO na regeneração: as duas pastas são a mesma" in _texto(tela), timeout=2000)
++
++
++def test_botao_fica_desligado_enquanto_a_tarefa_roda(tela, qtbot, monkeypatch):
++    solta = threading.Event()
++
++    def regenerar(*a, **k):
++        solta.wait(3)
++        return "ok"
++
++    _modulo_falso(monkeypatch, "pdm_regeneracao", regenerar_pastas=regenerar)
++    tela.path_sam_gm = "/d/s.xlsx"
++    tela.entry_dest.setText("/m")
++    tela.btn_regenerar.click()
++    assert not tela.btn_regenerar.isEnabled()
++    solta.set()
++    qtbot.waitUntil(tela.btn_regenerar.isEnabled, timeout=3000)
++
++
++# ---------------------------------------------------------------------------
++# Aba 2: Criar fichas
++# ---------------------------------------------------------------------------
++def _preencher_aba2(tela, *, planilha="/d/s.xlsx", modificados="/m", en="/en", status="/d/_STATUS_PMIB.xlsx",
++                    destino="/fichas", template="/d/T.xlsx"):
++    tela.path_sam_gm = planilha
++    tela.entry_dest.setText(modificados)
++    tela.entry_destino_en.setText(en)
++    tela.path_status_pmib = status
++    tela.entry_destino_fichas.setText(destino)
++    tela.path_template = template
++
++
++@pytest.mark.parametrize("fonte, idioma, campos, mensagem", [
++    ("planilha", "en", {}, "A ficha em inglês usa a pasta traduzida. Escolha a fonte "
++                           "'Pasta de PDMs Modificados' ou o idioma Português."),
++    ("planilha", "pt", {"planilha": ""}, "Selecione a planilha de PDMs no painel de cima."),
++    ("pasta", "en", {"en": ""}, "Idioma da ficha = English, mas a 'Pasta dos PDMs Modificados "
++                                "(EN)' não foi selecionada.\n\nEla fica na aba 1, no passo 3 "
++                                "(Traduzir para inglês)."),
++    ("pasta", "pt", {"modificados": ""}, "Selecione a 'Pasta dos PDMs Modificados' primeiro."),
++    ("planilha", "pt", {"status": ""}, "Por favor, busque o arquivo STATUS_PMIB na tela."),
++    ("pasta", "pt", {"destino": ""}, "Por favor, busque a Pasta Destino das Fichas na tela."),
++    ("planilha", "pt", {"template": ""}, "Por favor, busque o Template Ficha Técnica na tela."),
++])
++def test_criar_fichas_valida(tela, pdm, fonte, idioma, campos, mensagem):
++    _preencher_aba2(tela, **campos)
++    tela.fonte_perguntas.set(fonte)
++    tela.idioma_ficha.set(idioma)
++    tela.btn_criar_fichas.click()
++    assert tela.avisos == [("aviso", "Aviso", mensagem, True)] and pdm.chamadas == []
++
++
++def test_criar_fichas_da_planilha(tela, qtbot, pdm, monkeypatch):
++    carregados = []
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: carregados.append(p) or "CATALOGO")
++    _preencher_aba2(tela)
++    tela.btn_criar_fichas.click()
++    assert _esperar_aviso(tela, qtbot) == (
++        "info", "Fim", "Processo de criação de fichas finalizado.\n\n3 fichas da planilha", False)
++    assert carregados == ["/d/s.xlsx"]
++    assert pdm.chamadas == [
++        ("pastas", ("/d/_STATUS_PMIB.xlsx", "/fichas", None), {"criar_subpastas": False}),
++        ("templates_planilha", (["d1"], "CATALOGO", "/d/T.xlsx"), {"retry_lock": tela.perguntar_retry_excel}),
++    ]
++    qtbot.waitUntil(lambda: ">>> Processo de criação de fichas finalizado!" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    ordem = ["> Lendo a planilha de PDMs...", "> Preparando diretórios (Modo: Apenas Planilhas)...",
++             "> 3 pastas preparadas", "> 3 fichas da planilha", "> >>> Processo de criação de fichas finalizado!"]
++    assert [texto.index(x) for x in ordem] == sorted(texto.index(x) for x in ordem)
++
++
++def test_criar_fichas_da_pasta_em_ingles_com_subpastas(tela, qtbot, pdm, monkeypatch):
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: pytest.fail("não lê a planilha"))
++    _preencher_aba2(tela)
++    tela.rb_fonte_pasta.click()
++    tela.rb_en.click()
++    tela.rb_com_pastas.click()
++    tela.btn_criar_fichas.click()
++    tela.rb_pt.click()  # mudar depois do clique não muda o lote
++    assert _esperar_aviso(tela, qtbot)[:3] == (
++        "info", "Fim", "Processo de criação de fichas finalizado.\n\n3 fichas montadas")
++    assert pdm.chamadas == [
++        ("pastas", ("/d/_STATUS_PMIB.xlsx", "/fichas", None), {"criar_subpastas": True}),
++        ("templates_pasta", (["d1"], "/en", "/d/T.xlsx"), {"retry_lock": tela.perguntar_retry_excel,
++                                                            "idioma": "en"}),
++    ]
++    qtbot.waitUntil(lambda: "a partir da linha 79" in _texto(tela), timeout=2000)
++    assert "> Preparando diretórios (Modo: Com Pastas)..." in _texto(tela)
++
++
++def test_criar_fichas_da_pasta_em_portugues(tela, qtbot, pdm):
++    _preencher_aba2(tela)
++    tela.rb_fonte_pasta.click()
++    tela.btn_criar_fichas.click()
++    _esperar_aviso(tela, qtbot)
++    assert pdm.chamadas[1] == ("templates_pasta", (["d1"], "/m", "/d/T.xlsx"),
++                               {"retry_lock": tela.perguntar_retry_excel, "idioma": "pt"})
++
++
++def test_criar_fichas_planilha_ilegivel_para_antes_das_pastas(tela, qtbot, pdm, monkeypatch):
++    def carregar(p):
++        raise ValueError("aba SAM-GM não encontrada")
++
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", carregar)
++    _preencher_aba2(tela)
++    tela.btn_criar_fichas.click()
++    assert _esperar_aviso(tela, qtbot) == (
++        "erro", "Erro", "Não consegui ler a planilha de PDMs:\naba SAM-GM não encontrada", False)
++    assert pdm.chamadas == []
++    qtbot.waitUntil(lambda: "> ERRO ao ler a planilha de PDMs: aba SAM-GM" in _texto(tela), timeout=2000)
++
++
++def test_criar_fichas_sem_codigo_processado(tela, qtbot, pdm, monkeypatch):
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: "CAT")
++    pdm.dados_pastas = []
++    _preencher_aba2(tela)
++    tela.btn_criar_fichas.click()
++    assert _esperar_aviso(tela, qtbot) == ("info", "Aviso", "Nenhum código foi processado.", False)
++    assert [c[0] for c in pdm.chamadas] == ["pastas"]
++
++
++class SelecaoFalsa:
++    """`SelecaoMultiplaDialog` de mentira: confirma `escolha` (ou fecha, com None)."""
++    criadas = []
++
++    def __init__(self, parent=None, *, escolha, **kw):
++        self.kw, self.escolha = kw, escolha
++        SelecaoFalsa.criadas.append(self)
++
++    def esperar(self):
++        if self.escolha is not None:
++            self.kw["ao_confirmar"](self.escolha)
++        return self.escolha
++
++
++def _selecao_falsa(monkeypatch, escolha):
++    SelecaoFalsa.criadas = []
++    monkeypatch.setattr(tela_mod, "_SelecaoDeCodigos",
++                        lambda parent=None, **kw: SelecaoFalsa(parent, escolha=escolha, **kw))
++
++
++def test_criar_fichas_selecionando_os_codigos(tela, qtbot, pdm, monkeypatch):
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: "CAT")
++    _selecao_falsa(monkeypatch, ["PMIB-2"])
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++    tela.btn_criar_fichas.click()
++    _esperar_aviso(tela, qtbot)
++    dlg, = SelecaoFalsa.criadas
++    assert dlg.kw == {
++        "itens": ["PMIB-1", "PMIB-2", "PMIB-3"], "titulo": "Selecione os Códigos PMIB",
++        "instrucao": "Selecione um ou mais códigos:", "geometria": "400x500",
++        "fonte_instrucao": ("Roboto", 14), "fonte_lista": ("Consolas", 11), "modal": True,
++        "ao_confirmar": dlg.kw["ao_confirmar"]}
++    assert pdm.chamadas[0] == ("codigos", ("/d/_STATUS_PMIB.xlsx",), {})
++    assert pdm.chamadas[1] == ("pastas", ("/d/_STATUS_PMIB.xlsx", "/fichas", ["PMIB-2"]),
++                               {"criar_subpastas": False})
++
++
++def test_criar_fichas_selecao_cancelada(tela, qtbot, pdm, monkeypatch):
++    _selecao_falsa(monkeypatch, None)
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++    tela.btn_criar_fichas.click()
++    qtbot.waitUntil(lambda: "> Seleção manual de códigos cancelada." in _texto(tela), timeout=2000)
++    assert [c[0] for c in pdm.chamadas] == ["codigos"] and tela.avisos == []
++    assert tela.btn_criar_fichas.isEnabled()
++
++
++def test_criar_fichas_status_pmib_sem_coluna(tela, pdm):
++    pdm.erro_codigos = ValueError("Coluna 'CÓDIGO PMIB' não encontrada")
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++    tela.btn_criar_fichas.click()
++    assert tela.avisos == [("erro", "Erro", "Coluna 'CÓDIGO PMIB' não encontrada", True)]
++    assert [c[0] for c in pdm.chamadas] == ["codigos"]
++
++
++def test_criar_fichas_status_pmib_ilegivel(tela, pdm):
++    pdm.erro_codigos = OSError("arquivo corrompido")
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++    tela.btn_criar_fichas.click()
++    assert tela.avisos == [("erro", "Erro", "Ocorreu um erro ao ler o STATUS_PMIB:\narquivo corrompido", True)]
++
++
++def test_janela_real_de_selecao_confirma_e_esc_nao_descarta(tela, qtbot, pdm, monkeypatch):
++    """A janela de verdade: Esc não fecha (não perde os códigos marcados, e o Tk
++    não tinha tecla), "Confirmar Seleção" devolve os marcados."""
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: "CAT")
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++    vistos = {}
++
++    def mexer():
++        dlg = next(w for w in tela.findChildren(tela_mod._SelecaoDeCodigos) if w.isVisible())
++        vistos["modal"] = dlg.isModal()
++        dlg.listbox.item(0).setSelected(True)
++        dlg.listbox.item(2).setSelected(True)
++        qtbot.keyClick(dlg, Qt.Key.Key_Escape)
++        vistos["depois_do_esc"] = dlg.isVisible()
++        dlg.botao_confirmar.click()
++
++    QTimer.singleShot(50, mexer)
++    tela.btn_criar_fichas.click()
++    _esperar_aviso(tela, qtbot)
++    assert vistos == {"modal": True, "depois_do_esc": True}
++    assert pdm.chamadas[1][1][2] == ["PMIB-1", "PMIB-3"]
++
++
++def test_janela_real_de_selecao_fechada_no_x_cancela(tela, qtbot, pdm):
++    _preencher_aba2(tela)
++    tela.rb_selecionar.click()
++
++    def fechar():
++        dlg = next(w for w in tela.findChildren(tela_mod._SelecaoDeCodigos) if w.isVisible())
++        dlg.listbox.item(0).setSelected(True)
++        dlg.close()
++
++    QTimer.singleShot(50, fechar)
++    tela.btn_criar_fichas.click()
++    qtbot.waitUntil(lambda: "> Seleção manual de códigos cancelada." in _texto(tela), timeout=2000)
++    assert [c[0] for c in pdm.chamadas] == ["codigos"]
++
++
++# ---------------------------------------------------------------------------
++# Aba 3: Limpeza
++# ---------------------------------------------------------------------------
++def test_limpeza_valida(tela, pdm):
++    tela.btn_exec_clean.click()
++    assert tela.avisos == [("aviso", "Aviso", "Por favor, selecione a pasta para limpeza primeiro.", True)]
++    assert pdm.chamadas == []
++
++
++def test_limpeza(tela, qtbot, pdm):
++    tela.entry_clean.setText("/fichas")
++    tela.btn_exec_clean.click()
++    assert _esperar_aviso(tela, qtbot) == ("info", "Resultado", "Limpeza concluída.", False)
++    assert pdm.chamadas == [("limpeza", ("/fichas",), {})]
++    qtbot.waitUntil(lambda: "> 1 duplicado removido" in _texto(tela), timeout=2000)
++    texto = _texto(tela)
++    assert (texto.index("> Iniciando varredura por duplicados em: /fichas...")
++            < texto.index("> removido x_v1.xlsx") < texto.index("> 1 duplicado removido"))
++
++
++# ---------------------------------------------------------------------------
++# Geometria contra o CustomTkinter
++# ---------------------------------------------------------------------------
++@pytest.fixture
++def tela_medida(qt_interface, qtbot, monkeypatch):
++    from sigft.app_qt import estilo
++
++    monkeypatch.setattr(tela_mod.prefs, "get_default_dir", lambda chave: None)
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    t = tela_mod.ModuloPDM()
++    qtbot.addWidget(t)
++    t.resize(1003, 850)
++    t.show()
++    qtbot.waitExposed(t)
++    yield t
++    qt_interface.setStyleSheet(anterior)
++
++
++def _geo(t, w):
++    p = w.mapTo(t, w.rect().topLeft())
++    return p.x(), p.y(), w.width(), w.height()
++
++
++def _perto(a, b, tol):
++    return all(abs(x - y) <= tol for x, y in zip(a, b))
++
++
++def test_medidas_iguais_as_do_customtkinter(tela_medida, qtbot):
++    # Medidas da tela antiga (CustomTkinter, janela 1280x850, winfo_* -- aqui
++    # relativas à área da tela, 277 px à direita da barra lateral). Ver
++    # capturas/e4.6. Larguras de texto: ±8 (Roboto do Qt × do Tk; o hinting
++    # muda com a ordem dos testes, que mexem na fonte do app).
++    t, r = tela_medida, tela_medida._rotulos
++    g = lambda w: _geo(t, w)  # noqa: E731
++    assert g(t.label_titulo)[:2] == (40, 30)
++    assert g(t.area) == (40, 79, 923, 571)
++    assert g(t.console) == (40, 670, 923, 150)
++    # Configuração global
++    assert g(t.cartao_config) == (46, 95, 900, 119)
++    assert g(r["config"])[:2] == (61, 105)
++    assert g(r["destino"]) == (61, 138, 190, 28)
++    assert g(t.entry_dest) == (256, 138, 350, 28)
++    assert g(t.btn_sel_destino) == (611, 138, 100, 28)
++    assert g(r["sam_gm"]) == (61, 171, 190, 28)
++    assert g(t.btn_sam_gm) == (256, 171, 100, 28)
++    assert g(t.lbl_sam_gm_status)[:2] == (376, 171)
++    # Abas: a barra 10 px abaixo do topo, o quadro da aba em (6, 43)
++    assert g(t.tabview) == (46, 234, 900, 571)
++    assert g(t.tabview.barra)[1] == 244
++    centro_barra = g(t.tabview.barra)[0] + g(t.tabview.barra)[2] / 2
++    assert abs(centro_barra - (46 + 450)) <= 1
++    # Aba 1
++    assert g(r["itaipu"]) == (72, 287, 240, 28)
++    assert g(t.entry_pdms_itaipu) == (317, 287, 280, 28)
++    assert g(t.btn_buscar_itaipu) == (602, 287, 80, 28)
++    assert g(t.quadro_regen) == (72, 321, 848, 70)
++    assert g(r["regen"])[:2] == (82, 327)
++    assert _perto(g(t.btn_regenerar), (720, 327, 190, 28), 8) and sum(g(t.btn_regenerar)[::2]) == 910
++    assert g(r["regen_desc"])[:2] == (82, 355)
++    assert g(t.quadro_from) == (72, 403, 848, 70)
++    assert _perto(g(t.btn_from_itaipu), (705, 409, 205, 28), 8) and sum(g(t.btn_from_itaipu)[::2]) == 910
++    assert g(r["from_desc"])[:2] == (82, 437)
++    assert g(t.quadro_mod) == (72, 485, 848, 308)
++    assert g(r["mod"])[:2] == (82, 490)
++    assert g(r["mod_desc"])[:2] == (82, 523)
++    assert _perto(g(t.rb_lote), (92, 556, 158, 22), 4)
++    assert _perto(g(t.rb_especifico), (270, 556, 206, 22), 4)
++    assert _perto(g(t.btn_modificados), (390, 593, 211, 28), 8)
++    assert g(r["traduzir"])[:2] == (82, 646)
++    assert g(r["traduzir_desc"])[:2] == (82, 679)
++    assert g(r["en"]) == (82, 712, 240, 28)
++    assert g(t.entry_destino_en) == (327, 712, 280, 28)
++    assert g(t.btn_buscar_en) == (612, 712, 80, 28)
++    assert _perto(g(t.btn_traduzir), (347, 755, 298, 28), 8)
++    for b in (t.btn_modificados, t.btn_traduzir):  # centrados no quadro
++        assert abs(g(b)[0] + g(b)[2] / 2 - (72 + 424)) <= 1
++
++
++def test_medidas_da_aba_2(tela_medida, qtbot):
++    t, r = tela_medida, tela_medida._rotulos
++    g = lambda w: _geo(t, w)  # noqa: E731
++    t.tabview.set("Criar planilhas PMIB")
++    qtbot.waitUntil(lambda: g(t.tabview)[3] == 481, timeout=2000)
++    assert g(t.quadro_fichas) == (72, 287, 848, 258)
++    assert g(r["fichas"])[:2] == (82, 292)
++    assert g(r["fonte"]) == (82, 333, 240, 28)
++    assert _perto(g(t.rb_fonte_planilha), (332, 336, 128, 22), 4)
++    assert _perto(g(t.rb_fonte_pasta), (480, 336, 284, 22), 4)
++    assert g(t.btn_pmib) == (82, 377, 240, 28)
++    assert g(t.lbl_pmib_status)[:2] == (337, 377)
++    assert g(r["destino_fichas"]) == (82, 421, 240, 28)
++    assert g(t.entry_destino_fichas) == (327, 421, 280, 28)
++    assert g(t.btn_buscar_fichas) == (612, 421, 80, 28)
++    assert g(t.btn_template) == (82, 465, 240, 28)
++    assert g(t.lbl_template_status)[:2] == (337, 465)
++    assert g(r["idioma"]) == (82, 509, 240, 28)
++    assert _perto(g(t.rb_pt), (332, 512, 100, 22), 4)
++    assert _perto(g(t.rb_en), (452, 512, 100, 22), 4)
++    assert _perto(g(r["idioma_dica"])[:2], (572, 509), 4)
++    assert g(t.quadro_exec) == (72, 565, 848, 134)
++    assert g(r["selecao"]) == (82, 575, 120, 28)
++    assert _perto(g(t.rb_todos), (212, 578, 112, 22), 4)
++    assert _perto(g(t.rb_selecionar), (344, 578, 170, 22), 4)
++    assert g(r["saida"]) == (82, 613, 120, 28)
++    assert _perto(g(t.rb_apenas), (212, 616, 181, 22), 4)
++    assert _perto(g(t.rb_com_pastas), (413, 616, 185, 22), 4)
++    assert _perto(g(t.btn_criar_fichas), (409, 661, 174, 28), 8)
++
++
++def test_medidas_da_aba_3(tela_medida, qtbot):
++    t, r = tela_medida, tela_medida._rotulos
++    g = lambda w: _geo(t, w)  # noqa: E731
++    t.tabview.botoes["Excluir Duplicados"].click()
++    qtbot.waitUntil(lambda: g(t.tabview)[3] == 261, timeout=2000)
++    # Rótulo centrado (lá 431 de largura; o texto do Qt sai uns px mais curto).
++    x, y, w, h = g(r["limpeza"])
++    assert (y, h) == (297, 28) and abs(w - 431) <= 16 and abs(x + w / 2 - (280 + 431 / 2)) <= 1
++    assert g(r["clean"]) == (62, 353, 240, 28)
++    assert g(t.entry_clean) == (307, 353, 280, 28)
++    assert g(t.btn_buscar_clean) == (592, 353, 80, 28)
++    assert g(t.btn_exec_clean) == (346, 419, 300, 40)
++    # E volta ao tamanho da aba 1
++    t.tabview.set("Processar PDMs")
++    qtbot.waitUntil(lambda: g(t.tabview)[3] == 571, timeout=2000)
+-- 
+2.43.0
+

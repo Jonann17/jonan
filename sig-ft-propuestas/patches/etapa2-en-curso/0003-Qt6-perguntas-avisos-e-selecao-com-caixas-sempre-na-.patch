@@ -1,0 +1,233 @@
+From 5f19ea57d7eaa94bf321b87e40e81ec763791db9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 12:04:51 +0000
+Subject: [PATCH 03/14] Qt6: perguntas, avisos e selecao com caixas sempre na
+ thread da interface
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/widgets/dialogs.py | 52 +++++++++++++++++++++-
+ sigft/app_qt/widgets/espera.py  | 50 +++++++++++++++++++++
+ tests/test_qt_perguntas.py      | 77 +++++++++++++++++++++++++++++++++
+ 3 files changed, 178 insertions(+), 1 deletion(-)
+ create mode 100644 tests/test_qt_perguntas.py
+
+diff --git a/sigft/app_qt/widgets/dialogs.py b/sigft/app_qt/widgets/dialogs.py
+index 1385880..9129a3b 100644
+--- a/sigft/app_qt/widgets/dialogs.py
++++ b/sigft/app_qt/widgets/dialogs.py
+@@ -7,7 +7,9 @@ thread do robô fica presa em `Event.wait()` para sempre.
+ from __future__ import annotations
+ 
+ from PySide6.QtCore import Qt
+-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
++from PySide6.QtWidgets import (
++    QDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout,
++)
+ 
+ from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR
+ 
+@@ -103,3 +105,51 @@ class RetryLockDialog(_DialogoDeAcaoManual):
+ 
+     def _ao_fechar_sem_decidir(self) -> None:
+         self._responder(False)
++
++
++class SelecaoComCaixasDialog(QDialog):
++    """Lista com caixas de marcar + "Todos" + "CONFIRMAR".
++
++    É a janela de seleção de fichas da Aplicação LMR (450x600). A lista é um
++    QListWidget: desenha só as linhas visíveis, ao contrário de um widget por
++    ficha -- com centenas de PMIBs a diferença aparece.
++    """
++
++    def __init__(self, parent, *, titulo: str, mensagem: str, itens: list[str]) -> None:
++        super().__init__(parent)
++        self.setWindowTitle(titulo)
++        self.resize(450, 600)
++        layout = QVBoxLayout(self)
++        rotulo = QLabel(mensagem)
++        rotulo.setStyleSheet("font-size: 14px; font-weight: bold;")
++        rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        layout.addWidget(rotulo)
++        self.lista = QListWidget()
++        for texto in itens:
++            item = QListWidgetItem(texto)
++            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
++            item.setCheckState(Qt.CheckState.Unchecked)
++            self.lista.addItem(item)
++        layout.addWidget(self.lista, 1)
++        linha = QHBoxLayout()
++        self.botao_todos = QPushButton("Todos")
++        self.botao_todos.setProperty("variante", "neutro")
++        self.botao_todos.setFixedWidth(80)
++        self.botao_todos.clicked.connect(self._marcar_todos)
++        self.botao_confirmar = QPushButton("CONFIRMAR")
++        self.botao_confirmar.setProperty("variante", "acento")
++        self.botao_confirmar.setStyleSheet("color: #161616;")
++        self.botao_confirmar.setFixedWidth(150)
++        self.botao_confirmar.clicked.connect(self.accept)
++        linha.addWidget(self.botao_todos)
++        linha.addStretch()
++        linha.addWidget(self.botao_confirmar)
++        layout.addLayout(linha)
++
++    def _marcar_todos(self) -> None:
++        for i in range(self.lista.count()):
++            self.lista.item(i).setCheckState(Qt.CheckState.Checked)
++
++    def selecionados(self) -> list[str]:
++        return [self.lista.item(i).text() for i in range(self.lista.count())
++                if self.lista.item(i).checkState() == Qt.CheckState.Checked]
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+index dd0af56..555224d 100644
+--- a/sigft/app_qt/widgets/espera.py
++++ b/sigft/app_qt/widgets/espera.py
+@@ -11,6 +11,8 @@ from __future__ import annotations
+ import threading
+ import traceback
+ 
++from PySide6.QtWidgets import QInputDialog, QMessageBox
++
+ from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
+ from sigft.app_qt import interface
+ from sigft.app_qt.widgets import dialogs
+@@ -50,3 +52,51 @@ class DialogosDeEspera:
+         resultado = self._abrir_e_esperar(lambda evento, res: dialogs.RetryLockDialog(
+             self, mensagem=mensagem, evento_espera=evento, resultado=res))
+         return bool(resultado.get("retry", False))
++
++    # -- perguntas e avisos simples ------------------------------------------
++    def _na_interface_e_esperar(self, func):
++        """Roda `func()` na thread da interface e devolve o resultado.
++
++        Da própria thread da interface, chama direto (os diálogos estáticos do
++        Qt já bloqueiam sem parar o laço de eventos).
++        """
++        if interface.na_thread_da_interface():
++            return func()
++        evento = threading.Event()
++        caixa: dict = {}
++
++        def rodar() -> None:
++            try:
++                caixa["valor"] = func()
++            except Exception:  # noqa: BLE001 -- o worker não pode ficar preso
++                traceback.print_exc()
++            finally:
++                evento.set()
++
++        interface.na_interface(rodar)
++        evento.wait()
++        return caixa.get("valor")
++
++    def perguntar_sim_nao(self, titulo: str, mensagem: str) -> bool:
++        def perguntar():
++            resposta = QMessageBox.question(
++                self, titulo, mensagem,
++                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
++                QMessageBox.StandardButton.No)
++            return resposta == QMessageBox.StandardButton.Yes
++        return bool(self._na_interface_e_esperar(perguntar))
++
++    def pedir_texto(self, titulo: str, mensagem: str) -> str | None:
++        def pedir():
++            texto, ok = QInputDialog.getText(self, titulo, mensagem)
++            return texto if ok else None
++        return self._na_interface_e_esperar(pedir)
++
++    def avisar(self, titulo: str, mensagem: str, tipo: str = "info") -> None:
++        """Mostra e segue: o worker não espera a pessoa fechar o aviso."""
++        funcao = {"info": QMessageBox.information, "aviso": QMessageBox.warning,
++                  "erro": QMessageBox.critical}[tipo]
++        if interface.na_thread_da_interface():
++            funcao(self, titulo, mensagem)
++        else:
++            interface.na_interface(funcao, self, titulo, mensagem)
+diff --git a/tests/test_qt_perguntas.py b/tests/test_qt_perguntas.py
+new file mode 100644
+index 0000000..2710d3d
+--- /dev/null
++++ b/tests/test_qt_perguntas.py
+@@ -0,0 +1,77 @@
++import threading
++
++from PySide6.QtWidgets import QInputDialog, QMessageBox, QWidget
++
++from sigft.app_qt.widgets import dialogs as qd
++from sigft.app_qt.widgets.espera import DialogosDeEspera
++
++
++class Tela(DialogosDeEspera, QWidget):
++    pass
++
++
++def _no_worker(qtbot, func):
++    resultado, threads = [], []
++
++    def rodar():
++        threads.append(threading.get_ident())
++        resultado.append(func())
++
++    t = threading.Thread(target=rodar, daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: len(resultado) == 1, timeout=3000)
++    return resultado[0]
++
++
++def test_sim_nao_do_worker_pergunta_na_thread_da_interface(qt_interface, qtbot, monkeypatch):
++    onde = []
++    monkeypatch.setattr(QMessageBox, "question", staticmethod(
++        lambda *a, **k: onde.append(threading.get_ident()) or QMessageBox.StandardButton.Yes))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    assert _no_worker(qtbot, lambda: tela.perguntar_sim_nao("T", "Continua?")) is True
++    assert onde == [threading.main_thread().ident]
++
++
++def test_sim_nao_responde_false_no_nao(qt_interface, qtbot, monkeypatch):
++    monkeypatch.setattr(QMessageBox, "question", staticmethod(
++        lambda *a, **k: QMessageBox.StandardButton.No))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    assert tela.perguntar_sim_nao("T", "Continua?") is False  # da própria thread da interface
++
++
++def test_pedir_texto_e_cancelar(qt_interface, qtbot, monkeypatch):
++    respostas = iter([("PDM-1", True), ("", False)])
++    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: next(respostas)))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    assert _no_worker(qtbot, lambda: tela.pedir_texto("T", "Novo PDM?")) == "PDM-1"
++    assert _no_worker(qtbot, lambda: tela.pedir_texto("T", "Novo PDM?")) is None
++
++
++def test_avisar_nao_bloqueia_e_mostra_na_thread_da_interface(qt_interface, qtbot, monkeypatch):
++    vistos = []
++    for nome in ("information", "warning", "critical"):
++        monkeypatch.setattr(QMessageBox, nome, staticmethod(
++            lambda *a, _n=nome, **k: vistos.append((_n, threading.get_ident()))))
++    tela = Tela()
++    qtbot.addWidget(tela)
++    _no_worker(qtbot, lambda: tela.avisar("T", "ok"))
++    _no_worker(qtbot, lambda: tela.avisar("T", "cuidado", tipo="aviso"))
++    _no_worker(qtbot, lambda: tela.avisar("T", "falhou", tipo="erro"))
++    qtbot.waitUntil(lambda: len(vistos) == 3, timeout=2000)
++    assert [v[0] for v in vistos] == ["information", "warning", "critical"]
++    assert {v[1] for v in vistos} == {threading.main_thread().ident}
++
++
++def test_selecao_com_caixas(qt_interface, qtbot):
++    d = qd.SelecaoComCaixasDialog(None, titulo="Selecione as Fichas",
++                                  mensagem="Selecione os PMIBs para processar:",
++                                  itens=["A", "B", "C"])
++    qtbot.addWidget(d)
++    assert d.selecionados() == []
++    d.lista.item(2).setCheckState(qd.Qt.CheckState.Checked)
++    assert d.selecionados() == ["C"]
++    d.botao_todos.click()
++    assert d.selecionados() == ["A", "B", "C"]
+-- 
+2.43.0
+

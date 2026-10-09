@@ -1,0 +1,41 @@
+From ddafd2ec72eefccca236b7c19cdc4eb68c983788 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 19:10:09 +0000
+Subject: [PATCH 03/26] Qt6: check.sh nao compila o .venv do repo (template
+ Jinja do PySide6)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ scripts/check.sh | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/scripts/check.sh b/scripts/check.sh
+index e9faaae..912962b 100755
+--- a/scripts/check.sh
++++ b/scripts/check.sh
+@@ -5,7 +5,7 @@
+ # importação").
+ #
+ # Roda, nesta ordem, a partir da raiz do repositório:
+-#   1) `"$PY" -m compileall -q .`
++#   1) `"$PY" -m compileall -q -x '[/\\]\.venv[/\\]' .`
+ #      Verificação de SINTAXE de TODA a árvore do repositório — inclui
+ #      frontend.py, que fica de fora do passo 2 (não é seguro IMPORTAR
+ #      frontend.py neste ambiente: ele importa customtkinter/tkinter e o
+@@ -82,7 +82,11 @@ echo
+ echo "=================================================================="
+ echo "SIG-FT check :: [1/2] compileall   (sintaxe)"
+ echo "=================================================================="
+-"$PY" -m compileall -q .
++# O venv fica FORA da checagem: nao e codigo do projeto, e o PySide6 traz sob
++# `deploy_lib/` um template Jinja com extensao `.py` (`{% for ... %}`) que nao e
++# Python valido -- o compileall morria nele. O regex aceita `/` e `\` porque o
++# script tambem roda no Git Bash do Windows.
++"$PY" -m compileall -q -x '[/\\]\.venv[/\\]' .
+ echo "OK: compileall não encontrou erro de sintaxe."
+ echo
+ 
+-- 
+2.43.0
+

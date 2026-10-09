@@ -1,0 +1,236 @@
+From 02dc2b4b11b687a9835e12234c474034eaa5c1a4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 12:15:46 +0000
+Subject: [PATCH 05/14] Qt6: tela do Tradutor Tecnico
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/translator.py | 111 +++++++++++++++++++++++++++++++
+ tests/test_qt_sem_tkinter.py     |   1 +
+ tests/test_qt_tela_translator.py |  83 +++++++++++++++++++++++
+ 3 files changed, 195 insertions(+)
+ create mode 100644 sigft/app_qt/views/translator.py
+ create mode 100644 tests/test_qt_tela_translator.py
+
+diff --git a/sigft/app_qt/views/translator.py b/sigft/app_qt/views/translator.py
+new file mode 100644
+index 0000000..1a758e3
+--- /dev/null
++++ b/sigft/app_qt/views/translator.py
+@@ -0,0 +1,111 @@
++"""Tela "Tradutor Técnico (PT -> ES)" na interface Qt.
++
++Mesma tela de `sigft/app/views/translator.py`. O que muda é só COMO ela fala
++com a pessoa a partir do worker: lá eram `messagebox` e `btn.configure`
++chamados de dentro da thread (proibido no Tk, fatal no macOS); aqui é
++`self.avisar(...)` e `iniciar_tarefa`, que sempre passam pela thread da
++interface.
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QMessageBox
++
++from sigft.app import backends, theme
++from sigft.app_qt import file_dialogs, interface
++from sigft.app_qt.widgets import blocos
++from sigft.app_qt.widgets.module_frame import ModuleFrame
++from sigft.core import plataforma
++
++
++class ModuloTranslator(ModuleFrame):
++    def __init__(self, parent=None, controller=None) -> None:
++        self.tradutor = None  # nasce no primeiro clique, não aqui
++        super().__init__(parent, controller, titulo="Tradutor Técnico (PT -> ES)")
++
++    def _build_ui(self) -> None:
++        corpo = blocos.cartao(self.content_layout)
++        corpo.addWidget(blocos.rotulo("Tradução Automática de Características", tamanho=16,
++                                      negrito=True, cor=theme.COLORS["accent"]))
++        descricao = blocos.rotulo(
++            "Selecione as planilhas para traduzir do Português para Espanhol.\n"
++            "O sistema cria uma nova aba traduzida.\n"
++            "A tradução roda neste computador: nenhuma resposta sai daqui.",
++            cor="#BEBEBE")
++        # As 3 linhas já vêm quebradas no texto. Com quebra automática, o
++        # rótulo centralizado no cartão recebe largura estreita e altura de
++        # uma linha, e o texto aparece cortado.
++        descricao.setWordWrap(False)
++        corpo.addWidget(descricao)
++        self.btn_run = blocos.botao("Selecionar Arquivos e Iniciar", variante="primario",
++                                    largura=300, altura=50, tamanho_fonte=14, negrito=True)
++        self.btn_run.clicked.connect(self.iniciar_traducao)
++        self.btn_stop = blocos.botao("PARAR AGORA", variante="perigo", largura=200, altura=40)
++        self.btn_stop.setEnabled(False)
++        self.btn_stop.clicked.connect(self.parar_traducao)
++        self.btn_glossario = blocos.botao("Abrir glossário (correções de termos)",
++                                          variante="contorno", largura=300, altura=32)
++        self.btn_glossario.clicked.connect(self.abrir_glossario)
++        for b in (self.btn_run, self.btn_stop, self.btn_glossario):
++            corpo.addWidget(b, alignment=Qt.AlignmentFlag.AlignHCenter)
++        self.content_layout.addStretch()
++
++    def _tradutor(self):
++        if self.tradutor is None:
++            modulo = self.backend("translator_backend")
++            if modulo is None:
++                return None
++            self.tradutor = modulo.TechnicalTranslator()
++        return self.tradutor
++
++    def iniciar_traducao(self) -> None:
++        if self._tradutor() is None:
++            return
++        files = file_dialogs.ask_open_files("translator.fichas", "excel",
++                                            titulo="Selecione as Fichas (.xlsx)",
++                                            filetypes=[("Excel", "*.xlsx")])
++        if not files:
++            return
++        self.log(f"Iniciando tradução de {len(files)} arquivos...")
++        self.btn_stop.setEnabled(True)
++        self.iniciar_tarefa(self._worker, files, botao=self.btn_run)
++
++    def parar_traducao(self) -> None:
++        if self.tradutor is not None:
++            self.tradutor.request_stop()
++        self.log("[COMANDO] Parada solicitada...")
++
++    def abrir_glossario(self) -> None:
++        tradutor = self._tradutor()
++        if tradutor is None:
++            return
++        try:
++            caminho = tradutor.caminho_do_glossario()
++            self.log(f"Abrindo o glossário: {caminho}")
++            plataforma.abrir_no_sistema(caminho)
++        except Exception as e:  # noqa: BLE001 -- vira aviso
++            QMessageBox.critical(self, "Glossário", f"Não consegui abrir o glossário: {e}")
++
++    def _worker(self, files) -> None:
++        status = backends.exigir("translator_backend").STATUS
++        ultimo_erro = ""
++        try:
++            for msg in self.tradutor.processar_arquivos(files, retry_lock=self.perguntar_retry_excel):
++                if msg == "PARADO":
++                    self.log("Processo interrompido pelo usuário.")
++                    return
++                if msg == "ABORTADO":
++                    self.log("Tradução não iniciada.")
++                    self.avisar("Tradutor", ultimo_erro or "A tradução não pôde começar.", tipo="erro")
++                    return
++                if msg in status:
++                    continue
++                if msg.startswith("[ERRO]"):
++                    ultimo_erro = msg
++                self.log(msg)
++            self.log("Tradução em lote finalizada.")
++            self.avisar("Sucesso", "Processo concluído.")
++        except Exception as e:  # noqa: BLE001 -- mesmo texto da tela antiga
++            self.log(f"Erro Fatal: {e}")
++        finally:
++            interface.na_interface(self.btn_stop.setEnabled, False)
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index 831e9af..c9918aa 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -50,6 +50,7 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.file_dialogs",
+     "sigft.app_qt.widgets.pickers",
+     "sigft.app_qt.widgets.blocos",
++    "sigft.app_qt.views.translator",
+ ])
+ def test_importa_sem_tkinter(modulo):
+     resultado = _importa_sem_tk(modulo)
+diff --git a/tests/test_qt_tela_translator.py b/tests/test_qt_tela_translator.py
+new file mode 100644
+index 0000000..f9b86b2
+--- /dev/null
++++ b/tests/test_qt_tela_translator.py
+@@ -0,0 +1,83 @@
++from types import SimpleNamespace
++
++import pytest
++
++from sigft.app import backends
++from sigft.app_qt.views import translator as tela_mod
++
++
++class TradutorFalso:
++    def __init__(self, mensagens):
++        self.mensagens = mensagens
++        self.parou = False
++
++    def processar_arquivos(self, files, retry_lock=None):
++        yield from self.mensagens
++
++    def request_stop(self):
++        self.parou = True
++
++    def caminho_do_glossario(self):
++        return "/tmp/glossario.csv"
++
++
++@pytest.fixture
++def tela(qt_interface, qtbot, monkeypatch):
++    avisos = []
++    monkeypatch.setattr(tela_mod.ModuloTranslator, "avisar",
++                        lambda self, t, m, tipo="info": avisos.append((tipo, m)))
++    t = tela_mod.ModuloTranslator()
++    qtbot.addWidget(t)
++    t.avisos = avisos
++    return t
++
++
++def _com_backend(monkeypatch, mensagens):
++    falso = TradutorFalso(mensagens)
++    modulo = SimpleNamespace(TechnicalTranslator=lambda: falso,
++                             STATUS=frozenset({"SUCESSO", "ERRO", "PARADO", "ABORTADO", "ERRO_MOVER"}))
++    monkeypatch.setattr(backends, "translator_backend", modulo)
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_files", lambda *a, **k: ("/a.xlsx",))
++    return falso
++
++
++def test_monta_com_os_textos(tela):
++    assert tela.label_titulo.text() == "Tradutor Técnico (PT -> ES)"
++    assert tela.btn_run.text() == "Selecionar Arquivos e Iniciar"
++    assert not tela.btn_stop.isEnabled()
++
++
++def test_lote_completo(tela, qtbot, monkeypatch):
++    _com_backend(monkeypatch, ["Traduzindo a.xlsx", "SUCESSO"])
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: "Tradução em lote finalizada." in tela.console.toPlainText(), timeout=3000)
++    texto = tela.console.toPlainText()
++    assert "Iniciando tradução de 1 arquivos..." in texto and "SUCESSO" not in texto
++    qtbot.waitUntil(tela.btn_run.isEnabled, timeout=2000)
++    assert not tela.btn_stop.isEnabled()
++    assert tela.avisos == [("info", "Processo concluído.")]
++
++
++def test_abortado_avisa_o_ultimo_erro(tela, qtbot, monkeypatch):
++    _com_backend(monkeypatch, ["[ERRO] Excel não abriu", "ABORTADO"])
++    tela.btn_run.click()
++    qtbot.waitUntil(lambda: "Tradução não iniciada." in tela.console.toPlainText(), timeout=3000)
++    assert tela.avisos == [("erro", "[ERRO] Excel não abriu")]
++
++
++def test_parar(tela, monkeypatch):
++    falso = _com_backend(monkeypatch, [])
++    assert tela._tradutor() is falso
++    tela.btn_stop.setEnabled(True)
++    tela.btn_stop.click()
++    assert falso.parou
++
++
++def test_backend_que_nao_carregou_nao_abre_dialogo(tela, monkeypatch):
++    monkeypatch.setattr(backends, "translator_backend", None)
++    monkeypatch.setattr(backends, "falhas", {"translator_backend": ImportError("sem xlwings")})
++    monkeypatch.setattr(tela_mod.QMessageBox, "warning", staticmethod(lambda *a: None))
++    chamou = []
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_files", lambda *a, **k: chamou.append(1))
++    tela.btn_run.click()
++    assert chamou == []
+-- 
+2.43.0
+

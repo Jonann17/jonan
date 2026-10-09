@@ -1,0 +1,1867 @@
+From 684f976a91cad673e8f58216398728403bbb5c7a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 17:13:13 +0000
+Subject: [PATCH 12/14] Qt6: dialogos de selecao e tabela, fila de arquivos,
+ painel e estilos de radio/slider/abas
+
+E3.1 da migracao: SelecaoMultiplaDialog, TabelaSelecaoDialog (com
+de_dataframe) e ArquivosTravadosDialog em widgets/dialogos_selecao.py;
+perguntar_arquivos_travados no DialogosDeEspera; FileQueueList nos pickers;
+JanelaPainel; Abas (CTkTabview); area rolavel, barra de progresso e slider
+em blocos; folha de radio, slider, tabela ttk e listbox crua num bloco a
+parte no fim do estilo.py. Interruptor, menu de opcoes e caixa de marcar
+ficam com a frente da Aplicacao LMR (widgets/controles.py).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py                   | 105 ++++++
+ sigft/app_qt/widgets/abas.py             | 164 +++++++++
+ sigft/app_qt/widgets/blocos.py           | 147 +++++++-
+ sigft/app_qt/widgets/dialogos_selecao.py | 407 +++++++++++++++++++++++
+ sigft/app_qt/widgets/espera.py           |  14 +-
+ sigft/app_qt/widgets/painel_janela.py    |  69 ++++
+ sigft/app_qt/widgets/pickers.py          | 140 +++++++-
+ tests/test_qt_controles_e31.py           | 170 ++++++++++
+ tests/test_qt_dialogos_selecao.py        | 310 +++++++++++++++++
+ tests/test_qt_fila_arquivos.py           | 100 ++++++
+ tests/test_qt_painel_janela.py           |  66 ++++
+ tests/test_qt_sem_tkinter.py             |   3 +
+ 12 files changed, 1691 insertions(+), 4 deletions(-)
+ create mode 100644 sigft/app_qt/widgets/abas.py
+ create mode 100644 sigft/app_qt/widgets/dialogos_selecao.py
+ create mode 100644 sigft/app_qt/widgets/painel_janela.py
+ create mode 100644 tests/test_qt_controles_e31.py
+ create mode 100644 tests/test_qt_dialogos_selecao.py
+ create mode 100644 tests/test_qt_fila_arquivos.py
+ create mode 100644 tests/test_qt_painel_janela.py
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 2c9e4cb..5c1c20b 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -7,6 +7,7 @@ from __future__ import annotations
+ 
+ import os
+ import re
++import sys
+ 
+ from sigft.app import theme
+ 
+@@ -271,4 +272,108 @@ QScrollArea {{ border: none; background: transparent; }}
+ QScrollBar:vertical {{ background: transparent; width: 10px; }}
+ QScrollBar::handle:vertical {{ background: #4A4D50; border-radius: 5px; min-height: 30px; }}
+ QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
++""" + _folha_e31()
++
++
++# --- E3.1: rádio, slider, barra de progresso, abas, área rolável, tabela ---------
++# (Interruptor/CTkSwitch, CTkOptionMenu e a caixa de marcar são de
++# `widgets/controles.py`.) Medidos nas capturas da E3.1 (`capturas/e3.1/`).
++# TRILHO_CTK é o `fg_color` escuro de CTkProgressBar e CTkSlider (a parte vazia);
++# o slider pinta a parte percorrida de #AAB0B5 e o botão de AZUL_CTK.
++TRILHO_CTK = "#4A4D50"
++PERCORRIDO_SLIDER_CTK = "#AAB0B5"
++# CTkRadioButton 22x22: borda 3 desmarcado, 6 marcado. No Qt `width`/`height` do
++# ::indicator NÃO contam a borda.
++TAMANHO_RADIO_CTK = 22
++# CTkSlider: 16 de altura, trilho de 4 (16 - 2 * border_width 6), botão redondo de
++# 16; o centro do botão anda de 8 a largura - 8, o trilho vai de 6 a largura - 6.
++ALTURA_SLIDER_CTK = 16
++# CTkScrollbar: faixa de 16 px, alça de 8 (border_spacing 4 de cada lado), gray41;
++# gray53 sob o mouse. A alça começa 10 px abaixo do topo do quadro (canto 6 + 4).
++LARGURA_ROLAGEM_CTK = 16
++# CTkFrame: fundo gray13; dentro de outro CTkFrame de fundo padrão, gray16.
++FUNDO_QUADRO_CTK = "gray13"
++FUNDO_QUADRO_INTERNO_CTK = "gray16"
++
++# ttk.Treeview e tk.Listbox crus: as telas NÃO os estilizam (não há ttk.Style no
++# app), então cada sistema os desenha com o tema nativo do Tk -- tabela branca de
++# texto preto. No Windows (onde o app roda) é o tema "vista": cabeçalho branco com
++# divisórias claras e seleção na cor de destaque do sistema; nos outros, o tema
++# "default" do Tk (medido na captura do Linux).
++TABELA_TK = {
++    "win32": {"cabecalho": "#FFFFFF", "divisoria": "#E5E5E5", "selecao": "#0078D7",
++              "texto_selecao": "#FFFFFF", "selecao_lista": "#0078D7",
++              "texto_selecao_lista": "#FFFFFF", "borda_lista": "#828790"},
++    "outro": {"cabecalho": "#D9D9D9", "divisoria": "#A3A3A3", "selecao": "#4A6984",
++              "texto_selecao": "#FFFFFF", "selecao_lista": "#C3C3C3",
++              "texto_selecao_lista": "#000000", "borda_lista": "#A3A3A3"},
++}
++# Linha da tabela e altura do cabeçalho: 20 px (medido). TkDefaultFont: Segoe UI
++# 9 pt (12 px) no Windows.
++ALTURA_LINHA_TABELA_TK = 20
++# tk.Listbox: cada linha tem a altura da fonte + 2 * selectborderwidth, que é 1 no
++# X11 e 0 no Windows. Folga de cima e de baixo de cada item.
++FOLGA_LINHA_LISTA_TK = 0 if sys.platform == "win32" else 1
++
++
++def _folha_e31() -> str:
++    """Rádio, slider, tabela (ttk.Treeview) e lista crua (tk.Listbox) -- E3.1.
++
++    Num bloco à parte da folha principal só para as duas frentes da migração não
++    mexerem nas mesmas linhas. Medidas: ver as constantes no topo do módulo.
++    """
++    t = TABELA_TK["win32" if sys.platform == "win32" else "outro"]
++    raio_radio = TAMANHO_RADIO_CTK // 2
++    trilho = (ALTURA_SLIDER_CTK - 4) // 2  # 6: o border_width do CTkSlider
++    # Notas fora da folha (um comentário dentro dela vazaria "gray" no QSS):
++    # * rádio: desmarcado borda 3 #949A9F, marcado borda 6 azul (o miolo é o
++    #   fundo), borda azul-escura sob o mouse nos dois; texto gray84, 6 px depois;
++    # * slider: o sulco é transparente e as duas metades (sub-page/add-page) é que
++    #   desenham o trilho de 4 px, recuado 6 px das pontas -- assim o botão anda
++    #   a largura inteira (centro de 8 a largura - 8), como no CTk;
++    # * tabela/lista claras: as cores do Tk nativo (TABELA_TK). Barras de rolagem
++    #   claras na tabela e em toda lista com `barra_nativa` (as do tk.Listbox):
++    #   a ttk/tk.Scrollbar é a do sistema, que no Windows ignora cores.
++    return f"""
++QRadioButton {{ font-size: 13px; color: {cinza_tk('gray84')}; spacing: 6px; background: transparent; }}
++QRadioButton:disabled {{ color: {cinza_tk('gray45')}; }}
++QRadioButton::indicator {{ width: {TAMANHO_RADIO_CTK - 6}px; height: {TAMANHO_RADIO_CTK - 6}px;
++    border: 3px solid {BORDA_CTK}; border-radius: {raio_radio}px; background: transparent; }}
++QRadioButton::indicator:checked {{ width: {TAMANHO_RADIO_CTK - 12}px; height: {TAMANHO_RADIO_CTK - 12}px;
++    border: 6px solid {AZUL_CTK}; }}
++QRadioButton::indicator:hover {{ border-color: {AZUL_CTK_HOVER}; }}
++QSlider:horizontal {{ min-height: {ALTURA_SLIDER_CTK}px; max-height: {ALTURA_SLIDER_CTK}px;
++    background: transparent; }}
++QSlider::groove:horizontal {{ height: {ALTURA_SLIDER_CTK}px; background: transparent; border: none; }}
++QSlider::sub-page:horizontal {{ background: {PERCORRIDO_SLIDER_CTK}; border-radius: 2px;
++    margin: {trilho}px 0 {trilho}px {trilho}px; }}
++QSlider::add-page:horizontal {{ background: {TRILHO_CTK}; border-radius: 2px;
++    margin: {trilho}px {trilho}px {trilho}px 0; }}
++QSlider::handle:horizontal {{ width: {ALTURA_SLIDER_CTK}px; height: {ALTURA_SLIDER_CTK}px;
++    border-radius: {ALTURA_SLIDER_CTK // 2}px; background: {AZUL_CTK}; }}
++QSlider::handle:horizontal:hover {{ background: {AZUL_CTK_HOVER}; }}
++QTreeView {{ background: #FFFFFF; color: #000000; border: none; outline: none;
++    font-family: "Segoe UI", "Roboto", "Noto Emoji"; font-size: 12px;
++    selection-background-color: {t['selecao']}; selection-color: {t['texto_selecao']}; }}
++QTreeView::item {{ height: {ALTURA_LINHA_TABELA_TK}px; padding-left: 1px; border: none; }}
++QTreeView::item:selected {{ background: {t['selecao']}; color: {t['texto_selecao']}; }}
++QHeaderView {{ background: #FFFFFF; }}
++QHeaderView::section {{ background: {t['cabecalho']}; color: #000000; padding: 0 4px;
++    border: none; border-right: 1px solid {t['divisoria']}; border-bottom: 1px solid {t['divisoria']};
++    height: {ALTURA_LINHA_TABELA_TK}px; font-family: "Segoe UI", "Roboto"; font-size: 12px; }}
++QListWidget[claro="true"] {{ background: #FFFFFF; color: #000000; border: 1px solid {t['borda_lista']}; }}
++QListWidget[claro="true"]::item:selected {{ background: {t['selecao_lista']}; color: {t['texto_selecao_lista']}; }}
++QTreeView QScrollBar, QAbstractScrollArea[barra_nativa="true"] QScrollBar {{ background: #F0F0F0; border: none; }}
++QTreeView QScrollBar:vertical, QAbstractScrollArea[barra_nativa="true"] QScrollBar:vertical {{ width: 17px; }}
++QTreeView QScrollBar:horizontal, QAbstractScrollArea[barra_nativa="true"] QScrollBar:horizontal {{ height: 17px; }}
++QTreeView QScrollBar::handle:vertical, QAbstractScrollArea[barra_nativa="true"] QScrollBar::handle:vertical,
++QTreeView QScrollBar::handle:horizontal, QAbstractScrollArea[barra_nativa="true"] QScrollBar::handle:horizontal {{
++    background: #C2C2C2; border-radius: 0; min-height: 20px; min-width: 20px; margin: 2px; }}
++QTreeView QScrollBar::handle:vertical:hover, QAbstractScrollArea[barra_nativa="true"] QScrollBar::handle:vertical:hover,
++QTreeView QScrollBar::handle:horizontal:hover, QAbstractScrollArea[barra_nativa="true"] QScrollBar::handle:horizontal:hover {{
++    background: #A8A8A8; }}
++QTreeView QScrollBar::add-line, QTreeView QScrollBar::sub-line,
++QAbstractScrollArea[barra_nativa="true"] QScrollBar::add-line,
++QAbstractScrollArea[barra_nativa="true"] QScrollBar::sub-line {{
++    width: 0; height: 0; }}
+ """
+diff --git a/sigft/app_qt/widgets/abas.py b/sigft/app_qt/widgets/abas.py
+new file mode 100644
+index 0000000..789710a
+--- /dev/null
++++ b/sigft/app_qt/widgets/abas.py
+@@ -0,0 +1,164 @@
++"""CTkTabview em Qt: botões segmentados centrados em cima de um quadro arredondado.
++
++O QTabWidget põe as abas coladas à esquerda e o painel começa embaixo delas. O
++CTkTabview não: a barra de botões (um CTkSegmentedButton) fica CENTRADA e
++entra 18 px no quadro. Medidas do CustomTkinter (ctk_tabview.py) conferidas na
++captura da E3.1:
++
++* 10 px livres acima da barra (`_outer_spacing`); barra de 26 (`_button_height`;
++  27 na tela);
++* o quadro começa 18 px abaixo do topo (os 10 livres + os 8 da barra que
++  ficam acima dele, `_outer_button_overhang`), cantos de 6;
++* o conteúdo da aba começa em x=6, y=42 (36 da barra + 6 do canto) e termina
++  6 px antes da borda de baixo e da direita;
++* cada botão: texto + 14 px (6 do canto + 1 do rótulo do Tk, dos dois lados),
++  borda de 3 na cor da barra -- o selecionado é o miolo azul dentro dela.
++
++API como a do CTkTabview: `add(nome)` devolve o QWidget da aba (com um
++QVBoxLayout), `tab(nome)`, `set(nome)`, `get()`.
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import (
++    QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout,
++    QWidget,
++)
++
++from sigft.app_qt import estilo
++
++ESPACO_ACIMA = 10
++ALTURA_BARRA = 26
++SOBRA_DA_BARRA = 8          # quanto da barra fica ACIMA do quadro
++# Na captura a barra tem 27 px, não 26 (o CTkSegmentedButton arredonda para
++# cima). A grade continua com 26 -- o quadro e o conteúdo não andam --, e a barra
++# desce 1 px a mais sobre o quadro.
++ALTURA_BARRA_VISIVEL = 27
++CANTO = 6
++BORDA_BOTAO = 3
++FOLGA_TEXTO = 7             # de cada lado do texto (estilo.FOLGA_TEXTO_BOTAO_CTK)
++
++
++class Abas(QWidget):
++    def __init__(self, parent=None, *, cor_fundo: str | None = None, cor_barra: str | None = None,
++                 cor_selecionada: str = estilo.AZUL_CTK, cor_selecionada_hover: str = estilo.AZUL_CTK_HOVER,
++                 cor_nao_selecionada: str | None = None, cor_nao_selecionada_hover: str | None = None,
++                 tamanho_fonte: int = 13, ao_mudar=None) -> None:
++        """Cores com os nomes do CTkTabview: `fg_color` (cor_fundo, padrão gray13 --
++        use `estilo.FUNDO_QUADRO_INTERNO_CTK` quando o CTk a punha dentro de um
++        CTkFrame de fundo padrão), `segmented_button_fg_color` (cor_barra, gray29),
++        `segmented_button_selected_color`/`_hover_color`, e
++        `segmented_button_unselected_color` (gray29) / `_hover_color` (gray41).
++        `ao_mudar(nome)` é o `command` do CTkTabview: só no clique da pessoa."""
++        super().__init__(parent)
++        c = estilo.cinza_tk
++        self.cor_fundo = c(cor_fundo or estilo.FUNDO_QUADRO_CTK)
++        self.cor_barra = c(cor_barra or "gray29")
++        self._cor_sel, self._cor_sel_hover = c(cor_selecionada), c(cor_selecionada_hover)
++        self._cor_nao_sel = c(cor_nao_selecionada or "gray29")
++        self._cor_nao_sel_hover = c(cor_nao_selecionada_hover or "gray41")
++        self._tamanho_fonte = tamanho_fonte
++        self._ao_mudar = ao_mudar
++        self.abas: dict[str, QWidget] = {}
++        self.botoes: dict[str, QPushButton] = {}
++
++        # Grade de 4 linhas, como a do CTk: a barra ocupa as linhas 1-2 e o quadro
++        # as 2-3 -- as duas se sobrepõem na linha 2 (18 px).
++        grade = QGridLayout(self)
++        grade.setContentsMargins(0, 0, 0, 0)
++        grade.setSpacing(0)
++        grade.setRowMinimumHeight(0, ESPACO_ACIMA)
++        grade.setRowMinimumHeight(1, SOBRA_DA_BARRA)
++        grade.setRowMinimumHeight(2, ALTURA_BARRA - SOBRA_DA_BARRA)
++        grade.setRowStretch(3, 1)
++
++        self.quadro = QFrame(objectName="quadro_abas")
++        self.quadro.setStyleSheet(
++            f"#quadro_abas {{ background: {self.cor_fundo}; border-radius: {CANTO}px; }}")
++        dentro = QVBoxLayout(self.quadro)
++        # 24 = o que sobra da barra dentro do quadro (18) + o canto (6).
++        dentro.setContentsMargins(CANTO, ALTURA_BARRA - SOBRA_DA_BARRA + CANTO, CANTO, CANTO)
++        self.pilha = QStackedWidget()
++        self.pilha.setStyleSheet("QStackedWidget { background: transparent; }")
++        dentro.addWidget(self.pilha)
++        grade.addWidget(self.quadro, 2, 0, 2, 1)
++
++        self.barra = QFrame(objectName="barra_abas")
++        self._linha = QHBoxLayout(self.barra)
++        self._linha.setContentsMargins(0, 0, 0, 0)
++        self._linha.setSpacing(0)
++        self.barra.setFixedHeight(ALTURA_BARRA_VISIVEL)
++        self._grupo = QButtonGroup(self)
++        self._grupo.setExclusive(True)
++        grade.addWidget(self.barra, 1, 0, 2, 1, Qt.AlignmentFlag.AlignHCenter)
++        self.barra.raise_()
++        self._pintar_barra()
++
++    # -- API do CTkTabview ---------------------------------------------------
++    def add(self, nome: str) -> QWidget:
++        if nome in self.abas:
++            raise ValueError(f"Já existe uma aba chamada {nome!r}")
++        aba = QWidget()
++        aba.setStyleSheet("background: transparent;")
++        layout = QVBoxLayout(aba)
++        layout.setContentsMargins(0, 0, 0, 0)
++        layout.setSpacing(0)
++        self.abas[nome] = aba
++        self.pilha.addWidget(aba)
++
++        botao = QPushButton(nome)
++        botao.setCheckable(True)
++        botao.setCursor(Qt.CursorShape.PointingHandCursor)
++        botao.clicked.connect(lambda _=False, n=nome: self._clicou(n))
++        self._grupo.addButton(botao)
++        self.botoes[nome] = botao
++        self._linha.addWidget(botao)
++        if len(self.abas) == 1:
++            botao.setChecked(True)
++            self.pilha.setCurrentWidget(aba)
++        self._pintar_barra()
++        return aba
++
++    def tab(self, nome: str) -> QWidget:
++        return self.abas[nome]
++
++    def set(self, nome: str) -> None:
++        self.botoes[nome].setChecked(True)
++        self.pilha.setCurrentWidget(self.abas[nome])
++
++    def get(self) -> str:
++        atual = self.pilha.currentWidget()
++        return next((n for n, a in self.abas.items() if a is atual), "")
++
++    # -- interno -------------------------------------------------------------
++    def _clicou(self, nome: str) -> None:
++        self.set(nome)
++        if self._ao_mudar is not None:
++            self._ao_mudar(nome)
++
++    def _pintar_barra(self) -> None:
++        """Folha da barra e largura de cada botão (texto + 14, como o CTkButton)."""
++        r = CANTO
++        self.barra.setStyleSheet(
++            f"#barra_abas {{ background: {self.cor_barra}; border-radius: {r}px; }}"
++            f" #barra_abas QPushButton {{ background: {self._cor_nao_sel}; color: {estilo.TEXTO_BOTAO_CTK};"
++            f" border: {BORDA_BOTAO}px solid {self.cor_barra}; border-radius: 0;"
++            f" padding: 0 {FOLGA_TEXTO - BORDA_BOTAO}px; font-size: {self._tamanho_fonte}px;"
++            f" min-height: {ALTURA_BARRA_VISIVEL - 2 * BORDA_BOTAO}px;"
++            f" max-height: {ALTURA_BARRA_VISIVEL - 2 * BORDA_BOTAO}px; }}"
++            f" #barra_abas QPushButton:hover {{ background: {self._cor_nao_sel_hover}; }}"
++            f" #barra_abas QPushButton:checked {{ background: {self._cor_sel}; border-radius: {r}px; }}"
++            f" #barra_abas QPushButton:checked:hover {{ background: {self._cor_sel_hover}; }}"
++            f" #barra_abas QPushButton:disabled {{ color: {estilo.cinza_tk('gray60')}; }}")
++        botoes = list(self.botoes.values())
++        for i, botao in enumerate(botoes):
++            # Cantos de fora arredondados nos botões das pontas; o selecionado
++            # (regra :checked acima) arredonda os quatro, como lá.
++            cantos = []
++            if i == 0:
++                cantos += [f"border-top-left-radius: {r}px;", f"border-bottom-left-radius: {r}px;"]
++            if i == len(botoes) - 1:
++                cantos += [f"border-top-right-radius: {r}px;", f"border-bottom-right-radius: {r}px;"]
++            botao.setStyleSheet(f"QPushButton:!checked {{ {' '.join(cantos)} }}" if cantos else "")
++            botao.ensurePolished()
++            botao.setFixedWidth(botao.fontMetrics().horizontalAdvance(botao.text()) + 2 * FOLGA_TEXTO)
+diff --git a/sigft/app_qt/widgets/blocos.py b/sigft/app_qt/widgets/blocos.py
+index eacf64b..81bd2c8 100644
+--- a/sigft/app_qt/widgets/blocos.py
++++ b/sigft/app_qt/widgets/blocos.py
+@@ -7,7 +7,10 @@ variante); fonte e tamanho continuam por chamada, porque variam de tela a tela.
+ from __future__ import annotations
+ 
+ from PySide6.QtCore import Qt
+-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout
++from PySide6.QtGui import QFont
++from PySide6.QtWidgets import (
++    QFrame, QLabel, QProgressBar, QPushButton, QScrollArea, QSlider, QVBoxLayout, QWidget,
++)
+ 
+ from sigft.app_qt import estilo
+ 
+@@ -81,3 +84,145 @@ def botao(texto: str, *, variante: str | None = None, largura: int | None = None
+     if folha:
+         b.setStyleSheet(f"QPushButton {{{folha} }}{extra}")
+     return b
++
++
++# --- E3.1: fonte de tupla do Tk, área rolável, barra de progresso, slider -----
++
++# Famílias que o Tk acha e o Qt talvez não: a de reserva tem a mesma cara.
++_RESERVA_DA_FAMILIA = {
++    "Consolas": ["Consolas", "Menlo", "DejaVu Sans Mono", "monospace"],
++    "Segoe UI": ["Segoe UI", "Roboto"],
++}
++
++
++def fonte_tk(tupla, *, em_pontos: bool = False) -> QFont:
++    """`("Roboto", 14, "bold")` do Tk em QFont.
++
++    O mesmo número quer dizer coisas diferentes lá: num widget do
++    CustomTkinter é PIXEL (o CTk passa o tamanho negativo ao Tk); num widget
++    cru do Tk (`tk.Listbox`, `ttk.Treeview`) é PONTO. `em_pontos=True` para os
++    crus.
++    """
++    familia, tamanho, *estilos = tuple(tupla)
++    fonte = QFont()
++    fonte.setFamilies(_RESERVA_DA_FAMILIA.get(familia, [familia]) + ["Roboto", "Noto Emoji"])
++    if familia == "Consolas":
++        fonte.setStyleHint(QFont.StyleHint.Monospace)
++    if em_pontos:
++        fonte.setPointSize(int(tamanho))
++    else:
++        fonte.setPixelSize(int(tamanho))
++    marcas = " ".join(str(e) for e in estilos)
++    fonte.setBold("bold" in marcas)
++    fonte.setItalic("italic" in marcas)
++    return fonte
++
++
++def folha_fonte_tk(tupla, *, em_pontos: bool = False) -> str:
++    """A mesma fonte de `fonte_tk`, em folha de estilo.
++
++    Para widget que a folha do app alcança: o `font-family` dela (Roboto) GANHA
++    do `setFont`, então numa lista em Consolas a família tem de ir na folha.
++    """
++    f = fonte_tk(tupla, em_pontos=em_pontos)
++    familias = ", ".join(f'"{n}"' for n in f.families())
++    tamanho = f"{f.pointSize()}pt" if em_pontos else f"{f.pixelSize()}px"
++    peso = "bold" if f.bold() else "normal"
++    return f"font-family: {familias}; font-size: {tamanho}; font-weight: {peso};"
++
++
++def area_rolavel(layout_pai=None, *, cor: str | None = None, margem: int = 6):
++    """CTkScrollableFrame: devolve `(area, layout)` -- os filhos vão no `layout`.
++
++    `cor=None` é o `fg_color="transparent"` (o uso mais comum nas telas); com
++    cor, o quadro tem os cantos de 6 do CTkFrame. `margem` é o recuo do
++    conteúdo (6 = o canto, medido). A barra de rolagem é a do CTk (16 px, alça
++    gray41 de 8) e aparece só quando há o que rolar -- a mesma decisão da barra
++    lateral (main.py): lá ela é um traço sempre visível que não rola nada.
++    """
++    area = QScrollArea()
++    area.setWidgetResizable(True)
++    area.setFrameShape(QFrame.Shape.NoFrame)
++    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
++    fundo = estilo.cinza_tk(cor) if cor else "transparent"
++    area.setStyleSheet(f"QScrollArea {{ background: {fundo}; border: none; border-radius: 6px; }}")
++    area.viewport().setStyleSheet("background: transparent;")
++    interno = QWidget()
++    interno.setStyleSheet("background: transparent;")
++    layout = QVBoxLayout(interno)
++    layout.setContentsMargins(margem, margem, margem, margem)
++    layout.setSpacing(0)
++    layout.setAlignment(Qt.AlignmentFlag.AlignTop)
++    area.setWidget(interno)
++    folga = (estilo.LARGURA_ROLAGEM_CTK - 8) // 2
++    area.verticalScrollBar().setStyleSheet(
++        f"QScrollBar:vertical {{ width: {estilo.LARGURA_ROLAGEM_CTK}px; background: transparent;"
++        f" margin: {margem + folga}px 0 {margem + folga}px 0; }}"
++        f" QScrollBar::handle:vertical {{ background: {estilo.cinza_tk('gray41')}; border-radius: 4px;"
++        f" margin: 0 {folga}px; min-height: 20px; }}"
++        f" QScrollBar::handle:vertical:hover {{ background: {estilo.cinza_tk('gray53')}; }}"
++        " QScrollBar::add-line, QScrollBar::sub-line { height: 0; }"
++        " QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }")
++    if layout_pai is not None:
++        layout_pai.addWidget(area)
++    return area, layout
++
++
++def barra_progresso(*, largura: int | None = None, altura: int = 8, cor: str | None = None,
++                    fundo: str = estilo.TRILHO_CTK, barra: QProgressBar | None = None) -> QProgressBar:
++    """CTkProgressBar: `width`/`height`/`progress_color`/`fg_color` do CTk.
++
++    Padrão do tema: 200 x 8 (aqui a largura só é fixada se pedida), trilho
++    #4A4D50, progresso azul, pontas redondas (corner_radius=1000 -> metade da
++    altura). Faixa 0-1000, sem texto. `barra=` estiliza uma que já existe (ex.:
++    `ModuleFrame.progress_bar`).
++    """
++    barra = barra or QProgressBar()
++    barra.setRange(0, 1000)
++    barra.setTextVisible(False)
++    barra.setFixedHeight(altura)
++    if largura:
++        barra.setFixedWidth(largura)
++    raio = altura // 2
++    barra.setStyleSheet(
++        f"QProgressBar {{ background: {fundo}; border: none; border-radius: {raio}px;"
++        f" min-height: {altura}px; max-height: {altura}px; }}"
++        f" QProgressBar::chunk {{ background: {cor or estilo.AZUL_CTK}; border-radius: {raio}px; }}")
++    return barra
++
++
++def definir_progresso(barra: QProgressBar, fracao: float) -> None:
++    """O `progress_bar.set(fracao)` do CTk (0.0 a 1.0) numa barra de `barra_progresso`.
++
++    O CTk desenha o trecho cheio com as pontas redondas DENTRO da barra: com
++    raio r e largura L, ele vai até r + fracao * (L - 2r) + r -- em 0 já há um
++    ponto de 2r, e em 40% de 200 x 8 o fim está em 84,8 (o `setValue` cru daria 80).
++    """
++    fracao = min(max(float(fracao), 0.0), 1.0)
++    largura = barra.width() or 1
++    raio = barra.height() / 2
++    cheio = 2 * raio + fracao * (largura - 2 * raio)
++    barra.setValue(round(barra.maximum() * min(cheio / largura, 1.0)))
++
++
++def slider(*, minimo: int = 0, maximo: int = 100, largura: int = 200, cor_botao: str | None = None,
++           cor_percorrido: str | None = None, cor_botao_hover: str | None = None) -> QSlider:
++    """CTkSlider horizontal (`from_`/`to` inteiros; `number_of_steps` = a faixa).
++
++    A cara vem da folha global; `cor_botao`/`cor_percorrido` são o
++    `button_color`/`progress_color` do CTk (o Analisador pinta os dois de
++    primary). O hover do botão, que o CTk deriva do tema, vira `cor_botao_hover`.
++    """
++    s = QSlider(Qt.Orientation.Horizontal)
++    s.setRange(minimo, maximo)
++    s.setFixedSize(largura, estilo.ALTURA_SLIDER_CTK)
++    folha = ""
++    if cor_botao:
++        folha += f" QSlider::handle:horizontal {{ background: {cor_botao}; }}"
++    if cor_botao_hover:
++        folha += f" QSlider::handle:horizontal:hover {{ background: {cor_botao_hover}; }}"
++    if cor_percorrido:
++        folha += f" QSlider::sub-page:horizontal {{ background: {cor_percorrido}; }}"
++    if folha:
++        s.setStyleSheet(folha.strip())
++    return s
+diff --git a/sigft/app_qt/widgets/dialogos_selecao.py b/sigft/app_qt/widgets/dialogos_selecao.py
+new file mode 100644
+index 0000000..454dacd
+--- /dev/null
++++ b/sigft/app_qt/widgets/dialogos_selecao.py
+@@ -0,0 +1,407 @@
++"""Seleção de itens e arquivos travados -- os diálogos de `sigft/app/widgets/dialogs.py`
++que faltavam na interface Qt (E3.1).
++
++Num módulo à parte de `dialogs.py` porque a frente da Aplicação LMR mexe lá ao
++mesmo tempo, e para o `dialogs.py` não dobrar de tamanho.
++
++Mesma API e mesmo contrato dos CustomTkinter:
++
++* `SelecaoMultiplaDialog` / `TabelaSelecaoDialog` abrem ao serem construídos
++  (como o CTkToplevel) e devolvem a escolha por `ao_confirmar`; fechar no "X"
++  (ou Esc, ou Cancelar) não chama ninguém. O `wait_window(dialogo)` das telas
++  CTk vira `dialogo.esperar()`, que também devolve a escolha (None se fechou).
++  Só da thread da interface -- quem os abre é um clique.
++* `ArquivosTravadosDialog` é janela de ESPERA (o worker está parado num
++  `threading.Event`): "X" e Esc equivalem a Seguir e soltam o worker. Quem a
++  abre é `DialogosDeEspera.perguntar_arquivos_travados`, de qualquer thread.
++
++Modal só onde o CTk chamava `grab_set()` (`modal=True`): a tabela por padrão, a
++lista quando a tela pede. Ver a nota longa no `SelecaoMultiplaDialog` do CTk.
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt
++from PySide6.QtWidgets import (
++    QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget, QMessageBox,
++    QTreeWidget, QTreeWidgetItem, QVBoxLayout,
++)
++
++from sigft.app import theme
++from sigft.app.textos_dialogos import TEXTOS_TRAVADOS
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import blocos
++
++# Diálogo aberto sem pai (ou cujo pai some) precisa de uma referência viva
++# enquanto está na tela; sai daqui quando fecha.
++_ABERTOS: set = set()
++
++
++
++def _folha_de_fundo(cor: str) -> str:
++    """Botão com `fg_color` e sem `hover_color` no CTk: o fundo pedido e o hover do tema."""
++    return (f"QPushButton {{ background: {cor}; }}"
++            f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
++
++
++def _geometria(texto: str) -> tuple[int, int]:
++    """"900x600" do Tk em (900, 600)."""
++    largura, altura = texto.lower().split("+")[0].split("x")
++    return int(largura), int(altura)
++
++
++def _botao(texto: str, *, largura: int | None = None, variante: str | None = None,
++           cor: str | None = None):
++    b = blocos.botao(texto, variante=variante, largura=largura, altura=28)
++    if cor:
++        b.setStyleSheet(b.styleSheet() + " " + _folha_de_fundo(cor))
++    # Enter não confirma sozinho: o Tk não ligava tecla nenhuma nestas janelas.
++    b.setAutoDefault(False)
++    b.setDefault(False)
++    return b
++
++
++def _linha_de_botoes(*botoes, padx: int = 10) -> QHBoxLayout:
++    """`pack(side="left", padx=10)` de cada botão, a fileira centrada."""
++    linha = QHBoxLayout()
++    linha.setContentsMargins(0, 0, 0, 0)
++    linha.setSpacing(2 * padx)
++    linha.addStretch()
++    for b in botoes:
++        linha.addWidget(b)
++    linha.addStretch()
++    return linha
++
++
++class _JanelaQueAbre(QDialog):
++    """Base: título, tamanho, sempre por cima, modal se pedido, e abre já."""
++
++    def __init__(self, parent, *, titulo: str, geometria: str, modal: bool) -> None:
++        super().__init__(parent)
++        self.setWindowTitle(titulo)
++        self.resize(*_geometria(geometria))
++        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
++        if modal:
++            self.setWindowModality(Qt.WindowModality.ApplicationModal)
++        self._escolha = None
++        _ABERTOS.add(self)
++        self.finished.connect(lambda _r: _ABERTOS.discard(self))
++
++    def _abrir(self) -> None:
++        self.show()
++        self.raise_()
++        self.activateWindow()
++
++    def esperar(self):
++        """O `wait_window` do CTk: volta quando a janela fecha, sem parar o laço
++        de eventos. Devolve o que foi confirmado, ou None."""
++        if self.isVisible():
++            laco = QEventLoop()
++            self.finished.connect(laco.quit)
++            laco.exec()
++        return self._escolha
++
++    def _confirmar_com(self, escolha, ao_confirmar) -> None:
++        self._escolha = escolha
++        if ao_confirmar is not None:
++            ao_confirmar(escolha)
++        self.accept()
++
++
++class SelecaoMultiplaDialog(_JanelaQueAbre):
++    """Lista simples para escolher vários textos (o `tk.Listbox` do CTk).
++
++    Devolve os TEXTOS marcados, ou as POSIÇÕES com `devolver_indices=True`.
++    `estilo_lista` são as opções do `tk.Listbox` que as telas passavam (bg, fg,
++    selectbackground, selectforeground, borderwidth); sem ele, a lista crua do
++    Tk: branca de texto preto (folha global, `claro`). `fonte_lista` é de
++    widget cru do Tk (PONTOS); `fonte_instrucao`, de CTkLabel (pixels).
++    """
++
++    def __init__(self, parent=None, *, itens, titulo: str = "Seleção",
++                 instrucao: str = "Selecione um ou mais itens:", geometria: str = "500x500",
++                 texto_confirmar: str = "Confirmar Seleção", modal: bool = False,
++                 com_selecionar_todos: bool = False, devolver_indices: bool = False,
++                 estilo_lista: dict | None = None, fonte_lista: tuple | None = None,
++                 fonte_instrucao: tuple | None = None, ao_confirmar=None) -> None:
++        super().__init__(parent, titulo=titulo, geometria=geometria, modal=modal)
++        self._ao_confirmar = ao_confirmar
++        self._devolver_indices = devolver_indices
++
++        layout = QVBoxLayout(self)
++        # Tk: rótulo pady=10, quadro pady=10 (5 com estilo), botões pady=15 -- e
++        # o pady de dois vizinhos SOMA.
++        pady_quadro = 5 if estilo_lista else 10
++        layout.setContentsMargins(0, 10, 0, 15)
++        layout.setSpacing(0)
++
++        self.rotulo = QLabel(instrucao)
++        self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.rotulo.setMinimumHeight(blocos.ALTURA_MINIMA_ROTULO)
++        self.rotulo.setFont(blocos.fonte_tk(fonte_instrucao or theme.FONTE_SUBTITULO))
++        self.rotulo.setStyleSheet("background: transparent;")
++        layout.addWidget(self.rotulo)
++        layout.addSpacing(10 + pady_quadro)
++
++        self.listbox = QListWidget()
++        # selectmode="multiple": cada clique marca/desmarca, sem Ctrl.
++        self.listbox.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
++        self.listbox.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        fonte = fonte_lista or theme.FONTE_CONSOLE
++        self.listbox.setFont(blocos.fonte_tk(fonte, em_pontos=True))
++        if estilo_lista:
++            folha = _folha_da_listbox(estilo_lista)
++        else:
++            # A Listbox crua: branca, e com a barra de rolagem clara do sistema.
++            self.listbox.setProperty("claro", True)
++            self.listbox.setProperty("barra_nativa", True)
++            folha = ""
++        self.listbox.setStyleSheet(
++            f"QListWidget {{ {blocos.folha_fonte_tk(fonte, em_pontos=True)} outline: none; }} {folha}"
++            f" QListWidget::item {{ padding: {estilo.FOLGA_LINHA_LISTA_TK}px 0; }}"
++            " QListWidget::item:hover:!selected { background: transparent; }")
++        self.listbox.addItems([str(item) for item in itens])
++        quadro = QHBoxLayout()
++        quadro.setContentsMargins(20, 0, 20, 0)
++        quadro.addWidget(self.listbox)
++        layout.addLayout(quadro, 1)
++        layout.addSpacing(pady_quadro + 15)
++
++        self.botao_todos = None
++        botoes = []
++        if com_selecionar_todos:
++            self.botao_todos = _botao("Selecionar Todos", largura=150, cor="#3A3A3A")
++            self.botao_todos.clicked.connect(self.selecionar_todos)
++            botoes.append(self.botao_todos)
++        self.botao_confirmar = _botao(texto_confirmar, largura=150, variante="primario")
++        self.botao_confirmar.clicked.connect(self.confirmar)
++        botoes.append(self.botao_confirmar)
++        layout.addLayout(_linha_de_botoes(*botoes))
++        self._abrir()
++
++    @property
++    def selecionados(self) -> list[str]:
++        return [self.listbox.item(i).text() for i in self.indices]
++
++    @property
++    def indices(self) -> list[int]:
++        return sorted(self.listbox.row(item) for item in self.listbox.selectedItems())
++
++    def selecionar_todos(self) -> None:
++        self.listbox.selectAll()
++
++    def confirmar(self) -> None:
++        escolha = self.indices if self._devolver_indices else self.selecionados
++        self._confirmar_com(escolha, self._ao_confirmar)
++
++
++def _folha_da_listbox(opcoes: dict) -> str:
++    """As opções do `tk.Listbox` em folha de estilo do QListWidget."""
++    fundo = estilo.cinza_tk(opcoes.get("bg", "#FFFFFF"))
++    texto = estilo.cinza_tk(opcoes.get("fg", "#000000"))
++    selecao = estilo.cinza_tk(opcoes.get("selectbackground", "#0078D7"))
++    texto_selecao = estilo.cinza_tk(opcoes.get("selectforeground", "white"))
++    borda = int(opcoes.get("borderwidth", 1))
++    linha = f"border: {borda}px solid #A0A0A0;" if borda else "border: none;"
++    return (f"QListWidget {{ background: {fundo}; color: {texto}; {linha} }}"
++            f" QListWidget::item:selected {{ background: {selecao}; color: {texto_selecao}; }}")
++
++
++class TabelaSelecaoDialog(_JanelaQueAbre):
++    """Tabela (o `ttk.Treeview` do CTk) para escolher várias linhas.
++
++    `linhas` são pares `(chave, valores)`; volta a CHAVE (em texto, como o iid
++    do Treeview) -- nunca a posição visual. `larguras` como no CTk:
++    `{"coluna": {"width": 150, "anchor": "center"}}` (120 sem largura).
++    """
++
++    def __init__(self, parent=None, *, colunas, linhas, titulo: str = "Seleção de Itens",
++                 instrucao: str = "Selecione as linhas para processar:", geometria: str = "900x600",
++                 larguras: dict | None = None, preselecionar_tudo: bool = False,
++                 texto_confirmar: str = "Confirmar Seleção", com_cancelar: bool = True,
++                 modal: bool = True, ao_confirmar=None) -> None:
++        super().__init__(parent, titulo=titulo, geometria=geometria, modal=modal)
++        self._ao_confirmar = ao_confirmar
++        colunas = list(colunas)
++
++        layout = QVBoxLayout(self)
++        layout.setContentsMargins(0, 10, 0, 10)  # rótulo pady=10 ... botões pady=10
++        layout.setSpacing(0)
++        self.rotulo = QLabel(instrucao)
++        self.rotulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        self.rotulo.setMinimumHeight(blocos.ALTURA_MINIMA_ROTULO)
++        self.rotulo.setFont(blocos.fonte_tk(theme.FONTE_SECAO))
++        self.rotulo.setStyleSheet("background: transparent;")
++        layout.addWidget(self.rotulo)
++        layout.addSpacing(20)
++
++        self.tree = QTreeWidget()
++        self.tree.setColumnCount(len(colunas))
++        self.tree.setHeaderLabels([str(c) for c in colunas])
++        self.tree.setRootIsDecorated(False)
++        self.tree.setUniformRowHeights(True)
++        self.tree.setProperty("barra_nativa", True)
++        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
++        # ttk.Scrollbar empacotada: sempre à vista.
++        self.tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        cabecalho = self.tree.header()
++        cabecalho.setStretchLastSection(False)
++        cabecalho.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
++        cabecalho.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)  # heading do ttk: centrado
++        larguras = larguras or {}
++        self._larguras_base = []
++        alinhamentos = []
++        for i, coluna in enumerate(colunas):
++            conf = larguras.get(coluna, {})
++            largura = int(conf.get("width", 120))
++            self._larguras_base.append(largura)
++            self.tree.setColumnWidth(i, largura)
++            alinhamentos.append(Qt.AlignmentFlag.AlignCenter if conf.get("anchor") == "center"
++                                else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
++        for chave, valores in linhas:
++            item = QTreeWidgetItem([str(v) for v in valores])
++            item.setData(0, Qt.ItemDataRole.UserRole, str(chave))
++            for i, alinhamento in enumerate(alinhamentos):
++                item.setTextAlignment(i, alinhamento)
++            self.tree.addTopLevelItem(item)
++            if preselecionar_tudo:
++                item.setSelected(True)
++        self._esticar = _EsticaColunas(self.tree, self._larguras_base)
++
++        quadro = QHBoxLayout()
++        quadro.setContentsMargins(10, 0, 10, 0)  # padx=10, pady=10
++        quadro.addWidget(self.tree)
++        layout.addLayout(quadro, 1)
++        layout.addSpacing(20)
++
++        self.botao_confirmar = _botao(texto_confirmar, variante="primario", largura=140)
++        self.botao_confirmar.clicked.connect(self.confirmar)
++        botoes = [self.botao_confirmar]
++        self.botao_cancelar = None
++        if com_cancelar:
++            self.botao_cancelar = _botao("Cancelar", largura=140, cor="#3A3A3A")
++            self.botao_cancelar.clicked.connect(self.reject)
++            botoes.append(self.botao_cancelar)
++        layout.addLayout(_linha_de_botoes(*botoes))
++        self._abrir()
++
++    @classmethod
++    def de_dataframe(cls, master, dataframe, **kwargs):
++        """A chave de cada linha é o ÍNDICE do DataFrame, não a posição."""
++        linhas = [(indice, linha.to_numpy().tolist()) for indice, linha in dataframe.iterrows()]
++        return cls(master, colunas=list(dataframe.columns), linhas=linhas, **kwargs)
++
++    @property
++    def selecionados(self) -> list[str]:
++        """As chaves marcadas, na ordem da tabela."""
++        return [self.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
++                for i in range(self.tree.topLevelItemCount()) if self.tree.topLevelItem(i).isSelected()]
++
++    def confirmar(self) -> None:
++        selecionados = self.selecionados
++        if not selecionados:
++            # Confirmar sem nada seria um cancelamento silencioso.
++            QMessageBox.warning(self, "Aviso", "Selecione ao menos um item.")
++            return
++        self._confirmar_com(selecionados, self._ao_confirmar)
++
++
++class _EsticaColunas(QObject):
++    """O ttk.Treeview estica as colunas (`stretch=True`, o padrão) para ocupar a
++    largura: a sobra é repartida IGUALMENTE entre elas. Encolher abaixo das
++    larguras pedidas, não -- aí aparece a rolagem horizontal."""
++
++    def __init__(self, tree: QTreeWidget, base: list[int]) -> None:
++        super().__init__(tree)
++        self._tree, self._base = tree, base
++        tree.viewport().installEventFilter(self)
++
++    def eventFilter(self, objeto, evento) -> bool:  # noqa: N802 -- nome do Qt
++        if evento.type() == QEvent.Type.Resize and self._base:
++            sobra = self._tree.viewport().width() - sum(self._base)
++            extra = max(0, sobra) // len(self._base)
++            resto = max(0, sobra) - extra * len(self._base)
++            for i, largura in enumerate(self._base):
++                self._tree.setColumnWidth(i, largura + extra + (resto if i == len(self._base) - 1 else 0))
++        return False
++
++
++class ArquivosTravadosDialog(QDialog):
++    """Arquivos que não puderam ser gravados, cada um com o motivo e o que fazer;
++    Repetir x Seguir. A decisão volta em `resultado["repetir"]`.
++
++    `itens`: `(nome, motivo, o_que_fazer)`; `momento`: "antes", "depois" ou
++    "na_hora" (`TEXTOS_TRAVADOS`). Sem modal: a pessoa vai ao Excel fechar os
++    arquivos com a janela aberta. "X" e Esc = Seguir.
++    """
++
++    def __init__(self, parent=None, *, itens, momento, evento_espera, resultado: dict) -> None:
++        super().__init__(parent)
++        textos = TEXTOS_TRAVADOS[momento]
++        self.itens = [tuple(item) for item in itens]
++        self._evento = evento_espera
++        self._resultado = resultado
++        self._decidido = False
++        self.setWindowTitle(textos["titulo"])
++        self.resize(620, 380)
++        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
++
++        layout = QVBoxLayout(self)
++        # pady do Tk somados: (16, 6) | 4 | (6, 4) | (4, 16).
++        layout.setContentsMargins(20, 16, 20, 16)
++        layout.setSpacing(0)
++        self.rotulo_explicacao = blocos.rotulo(textos["explicacao"], tamanho=13, alinhar="esquerda")
++        layout.addWidget(self.rotulo_explicacao)
++        layout.addSpacing(6 + 4)
++
++        area, lista = blocos.area_rolavel(cor=theme.COR_CARTAO)
++        self.area = area
++        for nome, motivo, o_que_fazer in self.itens:
++            lista.addSpacing(8)
++            r_nome = blocos.rotulo(nome, tamanho=14, negrito=True, alinhar="esquerda")
++            r_motivo = blocos.rotulo(f"Motivo: {motivo}. {o_que_fazer}", tamanho=12,
++                                     cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO_CLARO), alinhar="esquerda")
++            for r in (r_nome, r_motivo):
++                r.setContentsMargins(10, 0, 10, 0)
++                lista.addWidget(r)
++            lista.addSpacing(6)
++        layout.addWidget(area, 1)
++        layout.addSpacing(4 + 6)
++
++        self.rotulo_rodape = blocos.rotulo(textos["rodape"], tamanho=12,
++                                           cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO), alinhar="esquerda")
++        layout.addWidget(self.rotulo_rodape)
++        layout.addSpacing(4 + 4)
++
++        self.botao_repetir = blocos.botao(textos["repetir"], variante="primario", largura=170, altura=40,
++                                          tamanho_fonte=14, negrito=True)
++        self.botao_seguir = blocos.botao(textos["seguir"], variante="contorno", largura=170, altura=40)
++        for b in (self.botao_repetir, self.botao_seguir):
++            b.setAutoDefault(False)
++        self.botao_repetir.clicked.connect(self.repetir)
++        self.botao_seguir.clicked.connect(self.seguir)
++        layout.addLayout(_linha_de_botoes(self.botao_repetir, self.botao_seguir))
++
++    def _responder(self, repetir: bool) -> None:
++        self._decidido = True
++        self._resultado["repetir"] = repetir
++        self._evento.set()
++
++    def repetir(self) -> None:
++        self._responder(True)
++        self.accept()
++
++    def seguir(self) -> None:
++        self._responder(False)
++        self.reject()
++
++    def reject(self) -> None:
++        """Esc chega aqui sem passar pelo `closeEvent`: também solta o worker."""
++        if not self._decidido:
++            self._responder(False)
++        super().reject()
++
++    def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        if not self._decidido:
++            self._responder(False)
++        super().closeEvent(evento)
+diff --git a/sigft/app_qt/widgets/espera.py b/sigft/app_qt/widgets/espera.py
+index 555224d..ff6afbd 100644
+--- a/sigft/app_qt/widgets/espera.py
++++ b/sigft/app_qt/widgets/espera.py
+@@ -1,4 +1,4 @@
+-"""`pausar_e_esperar` e `perguntar_retry_excel` para as telas Qt.
++"""`pausar_e_esperar`, `perguntar_retry_excel` e `perguntar_arquivos_travados` para as telas Qt.
+ 
+ Mesma API e mesma regra da versão CustomTkinter:
+ * chamado de um worker: a janela nasce na thread da interface (`na_interface`)
+@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox
+ 
+ from sigft.app.textos_dialogos import MSG_EXCEL_BLOQUEADO, TEXTO_CONTINUAR, msg_excel_bloqueado
+ from sigft.app_qt import interface
+-from sigft.app_qt.widgets import dialogs
++from sigft.app_qt.widgets import dialogos_selecao, dialogs
+ 
+ 
+ class DialogosDeEspera:
+@@ -53,6 +53,16 @@ class DialogosDeEspera:
+             self, mensagem=mensagem, evento_espera=evento, resultado=res))
+         return bool(resultado.get("retry", False))
+ 
++    def perguntar_arquivos_travados(self, falhas, momento) -> bool:
++        """Arquivos que não puderam ser gravados (`core.excel.travas.Falha`):
++        `True` = Repetir, `False` = Seguir. É o `callback_travados(falhas,
++        momento)` do Gestão PMIB e do "Aplicar autorizações"; `momento` escolhe
++        os textos (`TEXTOS_TRAVADOS`). "X", Esc ou falha ao abrir = Seguir."""
++        itens = [(f.nome, f.diagnostico.motivo, f.diagnostico.o_que_fazer) for f in falhas]
++        resultado = self._abrir_e_esperar(lambda evento, res: dialogos_selecao.ArquivosTravadosDialog(
++            self, itens=itens, momento=momento, evento_espera=evento, resultado=res))
++        return bool(resultado.get("repetir", False))
++
+     # -- perguntas e avisos simples ------------------------------------------
+     def _na_interface_e_esperar(self, func):
+         """Roda `func()` na thread da interface e devolve o resultado.
+diff --git a/sigft/app_qt/widgets/painel_janela.py b/sigft/app_qt/widgets/painel_janela.py
+new file mode 100644
+index 0000000..3619798
+--- /dev/null
++++ b/sigft/app_qt/widgets/painel_janela.py
+@@ -0,0 +1,69 @@
++"""Janela que a Home abre para um painel (chaves, modelos e gastos de IA, mural).
++
++O de `sigft/app/widgets/painel_janela.py` em Qt. Não para robô nenhum (nada de
++`threading.Event`): abre, a pessoa olha, fecha. Minimiza, segue o tema e não
++trava a janela principal (sem modal).
++"""
++from __future__ import annotations
++
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QVBoxLayout, QWidget
++
++from sigft.app import theme
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import blocos
++
++# Mesma ideia do `_ABERTOS` dos diálogos: a janela vive enquanto está aberta,
++# mesmo que quem a abriu não guarde a referência.
++_ABERTAS: set = set()
++
++
++class JanelaPainel(QWidget):
++    """Hospeda o painel que `montar(parent)` desenha.
++
++    `parent` (= `self.conteudo`) é o QWidget de dentro de uma área rolável (o
++    CTkScrollableFrame de lá) e já vem com um QVBoxLayout alinhado ao topo: o
++    painel faz `parent.layout().addWidget(...)`. Abre ao ser construída.
++    """
++
++    def __init__(self, master=None, *, titulo: str, montar, geometria: str = "900x680") -> None:
++        # Janela de verdade (com minimizar), e não QDialog: no Windows o QDialog
++        # não tem o botão de minimizar, e o CTkToplevel tem.
++        super().__init__(master, Qt.WindowType.Window)
++        self.setObjectName("janela_painel")
++        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
++        self.setStyleSheet(f"#janela_painel {{ background: {estilo.cinza_tk('gray10')}; }}")
++        self.setWindowTitle(titulo)
++        largura, altura = (int(v) for v in geometria.lower().split("+")[0].split("x"))
++        self.resize(largura, altura)
++
++        layout = QVBoxLayout(self)
++        # CTkScrollableFrame pack(padx=10, pady=10); botão pack(pady=(0, 12)):
++        # entre os dois, 10 + 0.
++        layout.setContentsMargins(10, 10, 10, 12)
++        layout.setSpacing(0)
++        self.area, self._layout_conteudo = blocos.area_rolavel()
++        self.conteudo = self.area.widget()
++        layout.addWidget(self.area, 1)
++        layout.addSpacing(10)
++
++        montar(self.conteudo)
++
++        self.botao_fechar = blocos.botao("Fechar", variante="primario", largura=120, altura=28)
++        self.botao_fechar.setStyleSheet(
++            self.botao_fechar.styleSheet()
++            + f" QPushButton:hover {{ background: {theme.COLORS['primary_hover']}; }}")
++        self.botao_fechar.clicked.connect(self.close)
++        layout.addWidget(self.botao_fechar, 0, Qt.AlignmentFlag.AlignHCenter)
++
++        _ABERTAS.add(self)
++        self.show()
++        # O CTk punha `-topmost` por 200 ms só para a janela nascer na frente;
++        # no Qt, trocar a flag de "sempre por cima" exige reabrir a janela
++        # (pisca). Trazer para a frente faz o mesmo.
++        self.raise_()
++        self.activateWindow()
++
++    def closeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
++        _ABERTAS.discard(self)
++        super().closeEvent(evento)
+diff --git a/sigft/app_qt/widgets/pickers.py b/sigft/app_qt/widgets/pickers.py
+index df5e028..5949c0f 100644
+--- a/sigft/app_qt/widgets/pickers.py
++++ b/sigft/app_qt/widgets/pickers.py
+@@ -8,17 +8,29 @@ from __future__ import annotations
+ 
+ import os
+ 
+-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import (
++    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout, QWidget,
++)
+ 
+ from sigft.app import theme
+ from sigft.app_qt import file_dialogs
++from sigft.app_qt import estilo
+ from sigft.app_qt.estilo import cinza_tk
++from sigft.app_qt.widgets import blocos
+ 
+ COR_BOTAO_SELECAO = "#3A3A3A"
+ COR_BOTAO_SELECAO_HOVER = "#454545"
+ TEXTO_SEM_ARQUIVO = "Nenhum arquivo selecionado"
+ TEXTO_SEM_PASTA = "Nenhuma pasta selecionada"
+ 
++# A fila de fichas (`FileQueueList`): a lista é um `tk.Listbox` cru lá, com as
++# cores escritas à mão; fonte "Segoe UI" 11 (PONTOS -- widget cru do Tk).
++COR_FUNDO_LISTA = "#1E1E1E"
++FONTE_LISTA = ("Segoe UI", 11)
++# O emoji e os DOIS espaços são literais do app antigo.
++PREFIXO_ITEM = " 📊  "
++
+ 
+ class _LinhaSeletora(QWidget):
+     def __init__(self, parent=None, *, texto_botao: str, texto_vazio: str,
+@@ -129,3 +141,129 @@ class FolderPickerRow(_LinhaSeletora):
+             return
+         self.definir(pasta, os.path.basename(pasta) or pasta)
+         self._notificar()
++
++
++class FileQueueList(QWidget):
++    """A lista de fichas com Adicionar / Remover Seleção / Limpar Tudo.
++
++    Mesma API do CustomTkinter: `arquivos` (cópia), `adicionar()`,
++    `remover_selecionados()`, `limpar()`, `definir(caminhos)`, e
++    `ao_mudar(acao, quantidade, total)` com acao "adicionou"/"removeu"/"limpou".
++
++    `label_contador` ("Planilhas PMIB Selecionadas (N)") NÃO entra neste widget:
++    lá ele nasce no `master` e a tela o empacota onde quer -- aqui a tela faz
++    `layout.addWidget(fila.label_contador)` antes de pôr a fila.
++    """
++
++    def __init__(self, parent=None, *, chave: str, categoria: str = "excel",
++                 rotulo: str = "Planilhas PMIB Selecionadas", titulo_dialogo: str | None = None,
++                 filetypes=None, texto_adicionar: str = "Adicionar Fichas",
++                 prefixo_item: str = PREFIXO_ITEM, ao_mudar=None, dialog_fn=None) -> None:
++        super().__init__(parent)
++        self._chave, self._categoria = chave, categoria
++        self._rotulo, self._titulo_dialogo, self._filetypes = rotulo, titulo_dialogo, filetypes
++        self._prefixo_item = prefixo_item
++        self._ao_mudar, self._dialog_fn = ao_mudar, dialog_fn
++        self._arquivos: list[str] = []
++
++        # CTkLabel ("Roboto", 12, "bold"): pixels; altura mínima de CTkLabel.
++        self.label_contador = QLabel(f"{rotulo} (0)")
++        self.label_contador.setMinimumHeight(blocos.ALTURA_MINIMA_ROTULO)
++        self.label_contador.setStyleSheet("font-size: 12px; font-weight: bold; background: transparent;")
++
++        linha = QHBoxLayout(self)
++        linha.setContentsMargins(0, 0, 0, 0)
++        linha.setSpacing(0)
++
++        self.listbox = QListWidget()
++        self.listbox.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
++        # A tk.Scrollbar fica sempre à vista, ao lado da lista.
++        self.listbox.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
++        self.listbox.setFont(blocos.fonte_tk(FONTE_LISTA, em_pontos=True))
++        # A barra de rolagem fica a escura do app: lá a tela pedia uma tk.Scrollbar
++        # escura (bg=COR_CARTAO, troughcolor=#3A3A3A) -- o Windows ignora essas
++        # cores e a desenha clara, mas a intenção escrita era a escura.
++        self.listbox.setStyleSheet(
++            f"QListWidget {{ background: {COR_FUNDO_LISTA}; color: {theme.COLORS['text_light']};"
++            f" border: none; outline: none; {blocos.folha_fonte_tk(FONTE_LISTA, em_pontos=True)} }}"
++            f" QListWidget::item:selected {{ background: {theme.COLORS['primary']}; color: white; }}"
++            f" QListWidget::item {{ padding: {estilo.FOLGA_LINHA_LISTA_TK}px 0; }}"
++            " QListWidget::item:hover:!selected { background: transparent; }")
++        # pack(side="left", padx=(5, 0), pady=5) da lista e da barra.
++        caixa_lista = QVBoxLayout()
++        caixa_lista.setContentsMargins(5, 5, 0, 5)
++        caixa_lista.addWidget(self.listbox)
++        linha.addLayout(caixa_lista, 1)
++        linha.addSpacing(10)  # a coluna de botões: pack(side="right", padx=(10, 0))
++
++        coluna = QVBoxLayout()
++        coluna.setContentsMargins(0, 0, 0, 0)
++        coluna.setSpacing(10)  # pady=5 de cada botão: 5 + 5 entre dois
++        coluna.addSpacing(5)
++        self.botao_adicionar = blocos.botao(texto_adicionar, largura=estilo.LARGURA_BOTAO_CTK, altura=28)
++        self.botao_adicionar.setStyleSheet(
++            self.botao_adicionar.styleSheet()
++            + f" QPushButton {{ background: {COR_BOTAO_SELECAO}; }}"
++            + f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
++        self.botao_remover = blocos.botao("Remover Seleção", largura=estilo.LARGURA_BOTAO_CTK, altura=28)
++        self.botao_remover.setStyleSheet(
++            self.botao_remover.styleSheet()
++            + f" QPushButton {{ background: {theme.COLORS['danger']}; }}"
++            + f" QPushButton:hover {{ background: {estilo.AZUL_CTK_HOVER}; }}")
++        self.botao_limpar = blocos.botao("Limpar Tudo", variante="contorno",
++                                         largura=estilo.LARGURA_BOTAO_CTK, altura=28,
++                                         cor_texto=estilo.TEXTO_BOTAO_CTK)
++        for botao in (self.botao_adicionar, self.botao_remover, self.botao_limpar):
++            coluna.addWidget(botao)
++        coluna.addStretch()
++        linha.addLayout(coluna)
++
++        self.botao_adicionar.clicked.connect(self.adicionar)
++        self.botao_remover.clicked.connect(self.remover_selecionados)
++        self.botao_limpar.clicked.connect(self.limpar)
++
++    # -- API pública ---------------------------------------------------------
++    @property
++    def arquivos(self) -> list[str]:
++        return list(self._arquivos)
++
++    def adicionar(self) -> None:
++        escolhidos = file_dialogs.ask_open_files(self._chave, self._categoria, titulo=self._titulo_dialogo,
++                                                 filetypes=self._filetypes, dialog_fn=self._dialog_fn)
++        if not escolhidos:
++            return
++        for caminho in escolhidos:
++            if caminho not in self._arquivos:  # o mesmo arquivo duas vezes rodaria duas vezes
++                self._arquivos.append(caminho)
++        self._redesenhar()
++        self._notificar("adicionou", len(escolhidos))
++
++    def remover_selecionados(self) -> None:
++        selecionados = sorted((self.listbox.row(i) for i in self.listbox.selectedItems()), reverse=True)
++        if not selecionados:
++            return
++        for indice in selecionados:  # de trás para frente: os índices não andam
++            del self._arquivos[indice]
++        self._redesenhar()
++        self._notificar("removeu", len(selecionados))
++
++    def limpar(self) -> None:
++        self._arquivos.clear()
++        self._redesenhar()
++        self._notificar("limpou", 0)
++
++    def definir(self, caminhos) -> None:
++        """Substitui a fila inteira (restaurar estado); não avisa."""
++        self._arquivos = list(caminhos)
++        self._redesenhar()
++
++    # -- interno -------------------------------------------------------------
++    def _notificar(self, acao: str, quantidade: int) -> None:
++        if self._ao_mudar is not None:
++            self._ao_mudar(acao, quantidade, len(self._arquivos))
++
++    def _redesenhar(self) -> None:
++        self.listbox.clear()
++        self.listbox.addItems([estilo.mono(f"{self._prefixo_item}{os.path.basename(c)}")
++                               for c in self._arquivos])
++        self.label_contador.setText(f"{self._rotulo} ({len(self._arquivos)})")
+diff --git a/tests/test_qt_controles_e31.py b/tests/test_qt_controles_e31.py
+new file mode 100644
+index 0000000..4279c83
+--- /dev/null
++++ b/tests/test_qt_controles_e31.py
+@@ -0,0 +1,170 @@
++"""Controles do CustomTkinter que o Qt não tem (E3.1): abas (CTkTabview), área
++rolável (CTkScrollableFrame), barra de progresso, slider, e a folha global de
++rádio, lista crua (tk.Listbox) e tabela (ttk.Treeview).
++
++(Interruptor/CTkSwitch, CTkOptionMenu e a caixa de marcar: `widgets/controles.py`,
++da frente da Aplicação LMR, testados em `test_qt_controles.py`.)
++
++As medidas vêm das capturas do tema dark-blue (demo lado a lado em
++`capturas/e3.1/`): ver o relatório da E3.1.
++"""
++import pytest
++from PySide6.QtWidgets import QLabel, QRadioButton, QVBoxLayout, QWidget
++
++from sigft.app import theme
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import blocos
++from sigft.app_qt.widgets.abas import Abas
++
++
++@pytest.fixture
++def folha_do_app(qapp):
++    anterior = qapp.styleSheet()
++    qapp.setStyleSheet(estilo.folha_de_estilo())
++    yield
++    qapp.setStyleSheet(anterior)
++
++
++def _mostrar(qtbot, *widgets):
++    recipiente = QWidget()
++    layout = QVBoxLayout(recipiente)
++    for w in widgets:
++        layout.addWidget(w)
++    qtbot.addWidget(recipiente)
++    recipiente.show()
++    qtbot.waitExposed(recipiente)
++    return recipiente
++
++
++# --- Abas (CTkTabview) ------------------------------------------------------
++
++def test_abas_add_tab_set_get_e_aviso(qt_interface, qtbot):
++    mudancas = []
++    abas = Abas(ao_mudar=mudancas.append)
++    qtbot.addWidget(abas)
++    um = abas.add("Processamento IA (Gerar Excel)")
++    dois = abas.add("Robô Web (Preencher Portal)")
++    assert isinstance(um.layout(), QVBoxLayout)
++    assert abas.tab("Robô Web (Preencher Portal)") is dois
++    assert abas.get() == "Processamento IA (Gerar Excel)"  # a primeira fica escolhida
++    abas.botoes["Robô Web (Preencher Portal)"].click()
++    assert abas.get() == "Robô Web (Preencher Portal)" and abas.pilha.currentWidget() is dois
++    assert mudancas == ["Robô Web (Preencher Portal)"]
++    abas.set("Processamento IA (Gerar Excel)")
++    assert abas.botoes["Processamento IA (Gerar Excel)"].isChecked()
++    with pytest.raises(ValueError):
++        abas.add("Robô Web (Preencher Portal)")
++
++
++def test_abas_geometria_do_ctktabview(qt_interface, qtbot, folha_do_app):
++    # Medido na captura: barra de 27 px (26 do CTk + 1 de arredondamento) a 10 px do topo, centrada; o quadro
++    # começa 18 px abaixo do topo (a barra entra 18 px nele); o conteúdo da aba
++    # começa em y=42 e x=6 (canto de 6 px). Cada botão: texto + 14 px.
++    abas = Abas()
++    aba = abas.add("Processamento IA (Gerar Excel)")
++    abas.add("Robô Web")
++    abas.setFixedSize(420, 200)
++    recipiente = _mostrar(qtbot, abas)  # noqa: F841 -- segura vivo
++    barra, quadro = abas.barra, abas.quadro
++    assert barra.y() == 10 and barra.height() == 27
++    assert abs((barra.x() + barra.width() / 2) - abas.width() / 2) <= 1
++    assert quadro.y() == 18 and quadro.height() == 200 - 18 and quadro.width() == 420
++    topo = aba.mapTo(abas, aba.rect().topLeft())
++    assert (topo.x(), topo.y()) == (6, 42)
++    b = abas.botoes["Robô Web"]
++    assert b.width() == b.fontMetrics().horizontalAdvance("Robô Web") + 14
++    assert barra.width() == sum(x.width() for x in abas.botoes.values())
++
++
++def test_abas_cores_por_parametro(qt_interface, qtbot):
++    # As telas pintam fg_color="#2B2B2B", segmented_button_fg_color="#161616" e
++    # o selecionado em primary.
++    abas = Abas(cor_fundo="#2B2B2B", cor_barra="#161616", cor_selecionada=theme.COLORS["primary"],
++                cor_selecionada_hover=theme.COLORS["primary_hover"])
++    qtbot.addWidget(abas)
++    abas.add("A")
++    assert "#2B2B2B" in abas.quadro.styleSheet()
++    folha = abas.barra.styleSheet()
++    assert "#161616" in folha and theme.COLORS["primary"] in folha
++    padrao = Abas()
++    qtbot.addWidget(padrao)
++    assert estilo.cinza_tk("gray13") in padrao.quadro.styleSheet()  # CTkFrame fg_color
++    assert estilo.cinza_tk("gray29") in padrao.barra.styleSheet()
++
++
++# --- área rolável e barra de progresso ---------------------------------------
++
++def test_area_rolavel_devolve_area_e_layout(qt_interface, qtbot):
++    area, layout = blocos.area_rolavel(cor="#2B2B2B")
++    qtbot.addWidget(area)
++    layout.addWidget(QLabel("linha"))
++    assert area.widgetResizable()
++    assert area.widget().layout() is layout
++    assert "#2B2B2B" in area.styleSheet()
++    transparente, _ = blocos.area_rolavel()
++    qtbot.addWidget(transparente)
++    assert "transparent" in transparente.styleSheet()
++
++
++def test_barra_progresso_do_ctkprogressbar(qt_interface, qtbot):
++    barra = blocos.barra_progresso(largura=600, altura=12, cor=theme.COLORS["primary"])
++    qtbot.addWidget(barra)
++    assert (barra.width(), barra.height()) == (600, 12)
++    assert not barra.isTextVisible()
++    folha = barra.styleSheet()
++    assert theme.COLORS["primary"] in folha and estilo.TRILHO_CTK in folha
++    assert "border-radius: 6px" in folha  # metade da altura: corner_radius=1000
++    # set(0.4) do CTk numa barra de 200 x 8: o cheio termina em 8 + 0.4 * 192 = 84,8
++    # (medido: 384 numa barra em x=300), não em 80.
++    ctk = blocos.barra_progresso(largura=200)
++    qtbot.addWidget(ctk)
++    blocos.definir_progresso(ctk, 0.4)
++    assert ctk.value() == 424
++    blocos.definir_progresso(ctk, 0)
++    assert ctk.value() == 40  # o ponto de 8 px que o CTk mostra em zero
++    blocos.definir_progresso(ctk, 1.5)
++    assert ctk.value() == 1000
++    padrao = blocos.barra_progresso()
++    qtbot.addWidget(padrao)
++    assert padrao.height() == 8 and estilo.AZUL_CTK in padrao.styleSheet()
++
++
++# --- folha global: rádio, slider, tabela e lista crua ----------------------
++
++def test_radio_e_slider_com_as_medidas_do_ctk(qt_interface, qtbot, folha_do_app):
++    radio = QRadioButton("Opção A")
++    slider = blocos.slider(minimo=0, maximo=10, largura=200)
++    recipiente = _mostrar(qtbot, radio, slider)  # noqa: F841 -- segura vivo
++    # CTkRadioButton 22x22; CTkSlider 200x16.
++    assert estilo.TAMANHO_RADIO_CTK == 22
++    assert radio.height() == 22
++    assert (slider.width(), slider.height()) == (200, 16)
++    assert (slider.minimum(), slider.maximum()) == (0, 10)
++    qss = estilo.folha_de_estilo()
++    for trecho in ("QRadioButton::indicator", "QSlider::handle:horizontal",
++                   "QSlider::sub-page:horizontal", "QTreeView", "QHeaderView::section",
++                   'QListWidget[claro="true"]'):
++        assert trecho in qss, trecho
++
++
++def test_slider_com_as_cores_da_tela(qt_interface, qtbot):
++    # Analisador: button_color e progress_color = primary.
++    s = blocos.slider(cor_botao=theme.COLORS["primary"], cor_percorrido=theme.COLORS["primary"])
++    qtbot.addWidget(s)
++    assert s.styleSheet().count(theme.COLORS["primary"]) == 2
++
++
++def test_tabela_e_lista_crua_com_as_cores_do_tk(qt_interface):
++    import sys
++    t = estilo.TABELA_TK["win32" if sys.platform == "win32" else "outro"]
++    qss = estilo.folha_de_estilo()
++    assert f"selection-background-color: {t['selecao']}" in qss
++    assert "QTreeView { background: #FFFFFF; color: #000000;" in qss
++
++
++def test_fonte_tk_pixel_ou_ponto(qt_interface):
++    f = blocos.fonte_tk(("Roboto", 14, "bold"))
++    assert f.pixelSize() == 14 and f.bold()
++    g = blocos.fonte_tk(("Consolas", 11), em_pontos=True)
++    assert g.pointSize() == 11 and not g.bold()
++    assert g.families()[0] == "Consolas"
+diff --git a/tests/test_qt_dialogos_selecao.py b/tests/test_qt_dialogos_selecao.py
+new file mode 100644
+index 0000000..fe8a710
+--- /dev/null
++++ b/tests/test_qt_dialogos_selecao.py
+@@ -0,0 +1,310 @@
++"""Diálogos de seleção e de arquivos travados da interface Qt (E3.1).
++
++Mesmo contrato dos CustomTkinter (`sigft/app/widgets/dialogs.py`): a escolha
++volta por `ao_confirmar`, o "X" não chama ninguém, e o de arquivos travados
++solta o worker com a resposta segura (Seguir).
++"""
++import threading
++from types import SimpleNamespace
++
++import pytest
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QApplication, QAbstractItemView, QMessageBox, QWidget
++
++from sigft.app.textos_dialogos import TEXTOS_TRAVADOS
++from sigft.app_qt.widgets import dialogos_selecao as qd
++from sigft.app_qt.widgets.espera import DialogosDeEspera
++
++
++@pytest.fixture
++def folha_do_app(qapp):
++    """A folha do app aplicada, como em produção (sem ela os botões medem outra coisa)."""
++    from sigft.app_qt import estilo as _estilo
++    anterior = qapp.styleSheet()
++    qapp.setStyleSheet(_estilo.folha_de_estilo())
++    yield
++    qapp.setStyleSheet(anterior)
++
++
++def _abertos(tipo):
++    return [w for w in QApplication.topLevelWidgets() if isinstance(w, tipo) and w.isVisible()]
++
++
++# --- SelecaoMultiplaDialog ---------------------------------------------------
++
++def test_selecao_multipla_devolve_os_textos_marcados(qt_interface, qtbot):
++    escolhas = []
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["A", "B", "C"], ao_confirmar=escolhas.append)
++    qtbot.addWidget(dlg)
++    assert dlg.isVisible()  # nasce aberta, como o CTkToplevel
++    dlg.listbox.item(0).setSelected(True)
++    dlg.listbox.item(2).setSelected(True)
++    dlg.botao_confirmar.click()
++    assert escolhas == [["A", "C"]]
++    assert not dlg.isVisible()
++
++
++def test_selecao_multipla_clique_alterna_sem_ctrl(qt_interface, qtbot):
++    # tk.Listbox(selectmode="multiple"): cada clique marca/desmarca o item.
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["A", "B"])
++    qtbot.addWidget(dlg)
++    assert dlg.listbox.selectionMode() == QAbstractItemView.SelectionMode.MultiSelection
++
++
++def test_selecao_multipla_devolve_indices_e_seleciona_todos(qt_interface, qtbot):
++    escolhas = []
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["x", "y", "z"], com_selecionar_todos=True,
++                                   devolver_indices=True, ao_confirmar=escolhas.append)
++    qtbot.addWidget(dlg)
++    dlg.botao_todos.click()
++    dlg.botao_confirmar.click()
++    assert escolhas == [[0, 1, 2]]
++
++
++def test_selecao_multipla_sem_selecionar_todos_nao_tem_o_botao(qt_interface, qtbot):
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["x"])
++    qtbot.addWidget(dlg)
++    assert dlg.botao_todos is None
++
++
++def test_selecao_multipla_fechar_no_x_nao_chama_ninguem(qt_interface, qtbot):
++    escolhas = []
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["x"], ao_confirmar=escolhas.append)
++    qtbot.addWidget(dlg)
++    dlg.listbox.item(0).setSelected(True)
++    dlg.close()
++    assert escolhas == []
++
++
++def test_selecao_multipla_modal_e_esperar(qt_interface, qtbot):
++    # `esperar()` é o `wait_window` do CTk: volta quando a janela fecha e
++    # devolve a escolha (None se fechou sem confirmar).
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["a", "b"], modal=True, geometria="400x500")
++    qtbot.addWidget(dlg)
++    assert dlg.windowModality() == Qt.WindowModality.ApplicationModal
++    assert (dlg.width(), dlg.height()) == (400, 500)
++
++    def confirmar():
++        dlg.listbox.item(1).setSelected(True)
++        dlg.botao_confirmar.click()
++
++    from PySide6.QtCore import QTimer
++    QTimer.singleShot(50, confirmar)
++    assert dlg.esperar() == ["b"]
++
++    outro = qd.SelecaoMultiplaDialog(None, itens=["a"], modal=True)
++    qtbot.addWidget(outro)
++    QTimer.singleShot(50, outro.close)
++    assert outro.esperar() is None
++
++
++def test_selecao_multipla_estilo_da_lista_vira_folha(qt_interface, qtbot):
++    dlg = qd.SelecaoMultiplaDialog(
++        None, itens=["x"], fonte_lista=("Consolas", 12), fonte_instrucao=("Roboto", 14, "bold"),
++        estilo_lista={"bg": "#1E1E1E", "fg": "white", "selectbackground": "#035D67",
++                      "highlightthickness": 0, "borderwidth": 0})
++    qtbot.addWidget(dlg)
++    folha = dlg.listbox.styleSheet()
++    assert "#1E1E1E" in folha and "#035D67" in folha and "white" in folha
++    # tk.Listbox: tamanho positivo é PONTO; CTkLabel: pixel.
++    assert dlg.listbox.font().pointSize() == 12
++    assert dlg.rotulo.font().pixelSize() == 14 and dlg.rotulo.font().bold()
++
++
++def test_selecao_multipla_sem_estilo_e_a_listbox_crua_clara(qt_interface, qtbot):
++    dlg = qd.SelecaoMultiplaDialog(None, itens=["x"])
++    qtbot.addWidget(dlg)
++    assert dlg.listbox.property("claro") is True
++
++
++# --- TabelaSelecaoDialog -----------------------------------------------------
++
++def _tabela(qtbot, **kw):
++    kw.setdefault("colunas", ("Descrição", "PMIB"))
++    kw.setdefault("linhas", [(10, ("Bomba", "001")), (20, ("Motor", "002")), (30, ("Eixo", "003"))])
++    dlg = qd.TabelaSelecaoDialog(None, **kw)
++    qtbot.addWidget(dlg)
++    return dlg
++
++
++def test_tabela_devolve_as_chaves_e_nao_a_posicao(qt_interface, qtbot):
++    escolhas = []
++    dlg = _tabela(qtbot, ao_confirmar=escolhas.append)
++    assert dlg.isVisible()
++    assert dlg.windowModality() == Qt.WindowModality.ApplicationModal  # modal por padrão
++    assert dlg.tree.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
++    dlg.tree.topLevelItem(2).setSelected(True)
++    dlg.tree.topLevelItem(0).setSelected(True)
++    assert dlg.selecionados == ["10", "30"]  # ordem da tabela, chave em texto (iid do Treeview)
++    dlg.botao_confirmar.click()
++    assert escolhas == [["10", "30"]]
++
++
++def test_tabela_preselecionar_tudo_larguras_e_ancora(qt_interface, qtbot):
++    dlg = _tabela(qtbot, preselecionar_tudo=True,
++                  larguras={"Descrição": {"width": 400}, "PMIB": {"width": 150, "anchor": "center"}})
++    assert dlg.selecionados == ["10", "20", "30"]
++    # ttk estica as colunas: a sobra da largura vai IGUAL para cada uma.
++    qtbot.waitExposed(dlg)
++    largura0, largura1 = dlg.tree.columnWidth(0), dlg.tree.columnWidth(1)
++    assert largura0 >= 400 and largura0 - largura1 == 400 - 150
++    assert largura0 + largura1 == dlg.tree.viewport().width()
++    item = dlg.tree.topLevelItem(0)
++    assert item.textAlignment(1) & Qt.AlignmentFlag.AlignHCenter
++    assert dlg.tree.headerItem().text(0) == "Descrição"
++    # sem largura informada: 120, o padrão do código antigo (e a mesma sobra)
++    outro = _tabela(qtbot)
++    qtbot.waitExposed(outro)
++    assert outro.tree.columnWidth(0) == outro.tree.columnWidth(1) >= 120
++
++
++def test_tabela_confirmar_sem_nada_avisa_e_nao_fecha(qt_interface, qtbot, monkeypatch):
++    avisos = []
++    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: avisos.append(a[1:3]))
++    escolhas = []
++    dlg = _tabela(qtbot, ao_confirmar=escolhas.append)
++    dlg.botao_confirmar.click()
++    assert avisos == [("Aviso", "Selecione ao menos um item.")]
++    assert escolhas == [] and dlg.isVisible()
++
++
++def test_tabela_cancelar_e_sem_cancelar(qt_interface, qtbot):
++    escolhas = []
++    dlg = _tabela(qtbot, ao_confirmar=escolhas.append)
++    dlg.botao_cancelar.click()
++    assert escolhas == [] and not dlg.isVisible()
++    sem = _tabela(qtbot, com_cancelar=False, modal=False)
++    assert sem.botao_cancelar is None
++    assert sem.windowModality() == Qt.WindowModality.NonModal
++
++
++def test_tabela_de_dataframe_usa_o_indice(qt_interface, qtbot):
++    pd = pytest.importorskip("pandas")
++    if not isinstance(getattr(pd, "DataFrame", None), type):
++        pytest.skip("pandas dublado pelo conftest")
++    df = pd.DataFrame({"A": ["x", "y", "z"], "B": [1, 2, 3]}, index=[5, 7, 9])
++    escolhas = []
++    dlg = qd.TabelaSelecaoDialog.de_dataframe(None, df[df["B"] > 1], ao_confirmar=escolhas.append)
++    qtbot.addWidget(dlg)
++    assert dlg.tree.topLevelItemCount() == 2
++    assert dlg.tree.topLevelItem(0).text(0) == "y"
++    dlg.tree.topLevelItem(1).setSelected(True)
++    dlg.botao_confirmar.click()
++    assert escolhas == [["9"]]
++
++
++def test_tabela_de_dataframe_com_um_dublê(qt_interface, qtbot):
++    # Independe do pandas real: só usa `columns` e `iterrows()`.
++    class Linha(list):
++        def to_numpy(self):
++            return SimpleNamespace(tolist=lambda: list(self))
++
++    df = SimpleNamespace(columns=["A", "B"],
++                         iterrows=lambda: iter([(3, Linha(["p", 1.5])), (8, Linha(["q", None]))]))
++    dlg = qd.TabelaSelecaoDialog.de_dataframe(None, df, preselecionar_tudo=True)
++    qtbot.addWidget(dlg)
++    assert dlg.selecionados == ["3", "8"]
++    assert [dlg.tree.topLevelItem(1).text(i) for i in range(2)] == ["q", "None"]
++
++
++# --- ArquivosTravadosDialog e perguntar_arquivos_travados ------------------
++
++ITENS = [("_STATUS_PMIB.xlsx", "está aberto no Excel", "Feche-o."),
++         ("mapa.xlsx", "é somente leitura", "Tire o atributo.")]
++
++
++@pytest.mark.parametrize("momento", ["antes", "depois", "na_hora"])
++def test_travados_mostra_os_textos_do_momento(qt_interface, qtbot, momento):
++    evento, resultado = threading.Event(), {}
++    dlg = qd.ArquivosTravadosDialog(None, itens=ITENS, momento=momento,
++                                    evento_espera=evento, resultado=resultado)
++    qtbot.addWidget(dlg)
++    textos = TEXTOS_TRAVADOS[momento]
++    assert dlg.windowTitle() == textos["titulo"]
++    assert dlg.botao_repetir.text() == textos["repetir"]
++    assert dlg.botao_seguir.text() == textos["seguir"]
++    rotulos = [r.text() for r in dlg.findChildren(type(dlg.rotulo_explicacao))]
++    assert textos["explicacao"] in rotulos and textos["rodape"] in rotulos
++    assert "_STATUS_PMIB.xlsx" in rotulos
++    assert "Motivo: está aberto no Excel. Feche-o." in rotulos
++
++
++def test_travados_repetir_seguir_e_x(qt_interface, qtbot):
++    for acao, esperado in (("repetir", True), ("seguir", False), ("fechar", False)):
++        evento, resultado = threading.Event(), {}
++        dlg = qd.ArquivosTravadosDialog(None, itens=ITENS, momento="antes",
++                                        evento_espera=evento, resultado=resultado)
++        qtbot.addWidget(dlg)
++        dlg.show()
++        {"repetir": dlg.botao_repetir.click, "seguir": dlg.botao_seguir.click,
++         "fechar": dlg.close}[acao]()
++        assert resultado == {"repetir": esperado}, acao
++        assert evento.is_set()
++
++
++class Tela(DialogosDeEspera, QWidget):
++    pass
++
++
++def _falha(nome, motivo, o_que_fazer):
++    return SimpleNamespace(nome=nome, diagnostico=SimpleNamespace(motivo=motivo, o_que_fazer=o_que_fazer))
++
++
++def test_perguntar_arquivos_travados_do_worker(qt_interface, qtbot):
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    falhas = [_falha(*item) for item in ITENS]
++    t = threading.Thread(target=lambda: respostas.append(tela.perguntar_arquivos_travados(falhas, "depois")),
++                         daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.ArquivosTravadosDialog)) == 1, timeout=2000)
++    dlg = _abertos(qd.ArquivosTravadosDialog)[0]
++    assert dlg.itens == ITENS
++    assert dlg.thread() is tela.thread()
++    dlg.botao_repetir.click()
++    t.join(3)
++    assert respostas == [True]
++
++
++def test_perguntar_arquivos_travados_esc_e_seguir(qt_interface, qtbot):
++    from PySide6.QtTest import QTest
++
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(
++        tela.perguntar_arquivos_travados([_falha(*ITENS[0])], "na_hora")), daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: len(_abertos(qd.ArquivosTravadosDialog)) == 1, timeout=2000)
++    QTest.keyClick(_abertos(qd.ArquivosTravadosDialog)[0], Qt.Key.Key_Escape)
++    t.join(3)
++    assert respostas == [False]
++
++
++def test_travados_medidas_do_customtkinter(qt_interface, qtbot, folha_do_app):
++    evento, resultado = threading.Event(), {}
++    dlg = qd.ArquivosTravadosDialog(None, itens=ITENS, momento="antes",
++                                    evento_espera=evento, resultado=resultado)
++    qtbot.addWidget(dlg)
++    assert (dlg.width(), dlg.height()) == (620, 380)
++    for botao in (dlg.botao_repetir, dlg.botao_seguir):
++        assert (botao.width(), botao.height()) == (170, 40)
++    assert dlg.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
++    assert dlg.windowModality() == Qt.WindowModality.NonModal
++
++
++def test_falha_ao_abrir_a_lista_de_travados_solta_o_worker(qt_interface, qtbot, monkeypatch, capsys):
++    def quebrado(*a, **k):
++        raise RuntimeError("falha de construcao")
++
++    monkeypatch.setattr(qd, "ArquivosTravadosDialog", quebrado)
++    tela = Tela()
++    qtbot.addWidget(tela)
++    respostas = []
++    t = threading.Thread(target=lambda: respostas.append(
++        tela.perguntar_arquivos_travados([_falha(*ITENS[0])], "antes")), daemon=True)
++    t.start()
++    qtbot.waitUntil(lambda: not t.is_alive(), timeout=3000)
++    assert respostas == [False]  # resposta segura: Seguir
++    assert "falha de construcao" in capsys.readouterr().err
+diff --git a/tests/test_qt_fila_arquivos.py b/tests/test_qt_fila_arquivos.py
+new file mode 100644
+index 0000000..5387028
+--- /dev/null
++++ b/tests/test_qt_fila_arquivos.py
+@@ -0,0 +1,100 @@
++"""`FileQueueList` da interface Qt: mesma API do CustomTkinter (E3.1)."""
++import pytest
++
++from sigft.app import theme
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import pickers
++
++
++@pytest.fixture
++def folha_do_app(qapp):
++    """A folha do app aplicada, como em produção (sem ela os botões medem outra coisa)."""
++    from sigft.app_qt import estilo as _estilo
++    anterior = qapp.styleSheet()
++    qapp.setStyleSheet(_estilo.folha_de_estilo())
++    yield
++    qapp.setStyleSheet(anterior)
++
++
++def _fila(qtbot, respostas, **kw):
++    respostas = iter(respostas)
++    avisos = []
++    fila = pickers.FileQueueList(chave="upload_conditions.fichas", rotulo="Planilhas PMIB Selecionadas",
++                                 ao_mudar=lambda *a: avisos.append(a),
++                                 dialog_fn=lambda **k: next(respostas), **kw)
++    qtbot.addWidget(fila)
++    qtbot.addWidget(fila.label_contador)
++    return fila, avisos
++
++
++def test_adicionar_sem_repetir_e_contador(qt_interface, qtbot):
++    fila, avisos = _fila(qtbot, [("/a/F1.xlsx", "/a/F2.xlsx"), ("/a/F2.xlsx", "/b/F3.xlsx")])
++    assert fila.label_contador.text() == "Planilhas PMIB Selecionadas (0)"
++    fila.botao_adicionar.click()
++    fila.botao_adicionar.click()
++    assert fila.arquivos == ["/a/F1.xlsx", "/a/F2.xlsx", "/b/F3.xlsx"]
++    assert fila.label_contador.text() == "Planilhas PMIB Selecionadas (3)"
++    # o aviso conta os ESCOLHIDOS (2), não os novos -- como no CTk
++    assert avisos == [("adicionou", 2, 2), ("adicionou", 2, 3)]
++    assert fila.listbox.item(0).text() == estilo.mono(pickers.PREFIXO_ITEM + "F1.xlsx")
++
++
++def test_cancelar_o_dialogo_nao_muda_nada(qt_interface, qtbot):
++    fila, avisos = _fila(qtbot, [()])
++    fila.botao_adicionar.click()
++    assert fila.arquivos == [] and avisos == []
++
++
++def test_remover_selecionados_de_tras_para_frente(qt_interface, qtbot):
++    fila, avisos = _fila(qtbot, [("/1.xlsx", "/2.xlsx", "/3.xlsx", "/4.xlsx")])
++    fila.botao_adicionar.click()
++    fila.listbox.item(1).setSelected(True)
++    fila.listbox.item(3).setSelected(True)
++    fila.botao_remover.click()
++    assert fila.arquivos == ["/1.xlsx", "/3.xlsx"]
++    assert avisos[-1] == ("removeu", 2, 2)
++    assert fila.label_contador.text().endswith("(2)")
++    # sem seleção, remover não faz nada nem avisa
++    fila.botao_remover.click()
++    assert len(avisos) == 2
++
++
++def test_limpar_definir_e_copia(qt_interface, qtbot):
++    fila, avisos = _fila(qtbot, [])
++    fila.definir(["/x.xlsx", "/y.xlsx"])
++    assert fila.label_contador.text().endswith("(2)") and avisos == []
++    copia = fila.arquivos
++    copia.append("/z")
++    assert fila.arquivos == ["/x.xlsx", "/y.xlsx"]
++    fila.botao_limpar.click()
++    assert fila.arquivos == [] and avisos == [("limpou", 0, 0)]
++    assert fila.listbox.count() == 0
++
++
++def test_selecao_estendida_e_cores_da_lista(qt_interface, qtbot):
++    from PySide6.QtWidgets import QAbstractItemView
++
++    fila, _ = _fila(qtbot, [], texto_adicionar="Adicionar JSONs")
++    assert fila.listbox.selectionMode() == QAbstractItemView.SelectionMode.ExtendedSelection
++    assert fila.botao_adicionar.text() == "Adicionar JSONs"
++    folha = fila.listbox.styleSheet()
++    assert pickers.COR_FUNDO_LISTA in folha and theme.COLORS["primary"] in folha
++    # tk.Listbox("Segoe UI", 11): 11 PONTOS
++    assert fila.listbox.font().pointSize() == 11
++
++
++def test_medidas_iguais_as_do_customtkinter(qt_interface, qtbot, folha_do_app):
++    # Botões 140x28 (CTkButton padrão) empilhados com pady=5; coluna à direita
++    # com padx=(10, 0); lista com padx=(5, 0) e pady=5.
++    fila, _ = _fila(qtbot, [])
++    fila.resize(600, 200)
++    fila.show()
++    qtbot.waitExposed(fila)
++    b1, b2, b3 = fila.botao_adicionar, fila.botao_remover, fila.botao_limpar
++    assert (b1.width(), b1.height()) == (140, 28)
++    assert b2.y() - (b1.y() + b1.height()) == 10  # pady=5 dos dois
++    assert b3.y() - (b2.y() + b2.height()) == 10
++    assert b1.y() == 5
++    assert fila.width() - (b1.x() + b1.width()) == 0
++    assert fila.listbox.x() == 5 and fila.listbox.y() == 5
++    assert fila.height() - (fila.listbox.y() + fila.listbox.height()) == 5
+diff --git a/tests/test_qt_painel_janela.py b/tests/test_qt_painel_janela.py
+new file mode 100644
+index 0000000..b383193
+--- /dev/null
++++ b/tests/test_qt_painel_janela.py
+@@ -0,0 +1,66 @@
++"""`JanelaPainel` da interface Qt (E3.1): hospeda um `montar(parent)`."""
++import pytest
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QLabel, QScrollArea
++
++from sigft.app_qt.widgets.painel_janela import JanelaPainel
++
++
++@pytest.fixture
++def folha_do_app(qapp):
++    """A folha do app aplicada, como em produção (sem ela os botões medem outra coisa)."""
++    from sigft.app_qt import estilo as _estilo
++    anterior = qapp.styleSheet()
++    qapp.setStyleSheet(_estilo.folha_de_estilo())
++    yield
++    qapp.setStyleSheet(anterior)
++
++
++def test_monta_o_painel_dentro_da_area_rolavel(qt_interface, qtbot):
++    recebidos = []
++
++    def montar(parent):
++        recebidos.append(parent)
++        parent.layout().addWidget(QLabel("painel de gastos"))
++
++    janela = JanelaPainel(None, titulo="Gastos de IA", montar=montar)
++    qtbot.addWidget(janela)
++    assert janela.isVisible()
++    assert janela.windowTitle() == "Gastos de IA"
++    assert (janela.width(), janela.height()) == (900, 680)
++    assert recebidos == [janela.conteudo]
++    assert isinstance(janela.area, QScrollArea) and janela.area.widget() is janela.conteudo
++    assert [w.text() for w in janela.conteudo.findChildren(QLabel)] == ["painel de gastos"]
++
++
++def test_nao_trava_a_janela_principal_e_minimiza(qt_interface, qtbot):
++    janela = JanelaPainel(None, titulo="Mural", montar=lambda p: None, geometria="700x500")
++    qtbot.addWidget(janela)
++    assert (janela.width(), janela.height()) == (700, 500)
++    assert janela.windowModality() == Qt.WindowModality.NonModal
++    flags = janela.windowFlags()
++    assert flags & Qt.WindowType.Window
++    assert flags & Qt.WindowType.WindowMinimizeButtonHint
++
++
++def test_botao_fechar(qt_interface, qtbot, folha_do_app):
++    janela = JanelaPainel(None, titulo="x", montar=lambda p: None)
++    qtbot.addWidget(janela)
++    assert janela.botao_fechar.text() == "Fechar"
++    assert janela.botao_fechar.width() == 120
++    janela.botao_fechar.click()
++    assert not janela.isVisible()
++
++
++def test_medidas_do_customtkinter(qt_interface, qtbot, folha_do_app):
++    # CTkScrollableFrame com padx=10/pady=10; botão Fechar 120 de largura com
++    # pady=(0, 12), centrado.
++    janela = JanelaPainel(None, titulo="x", montar=lambda p: None)
++    qtbot.addWidget(janela)
++    qtbot.waitExposed(janela)
++    area, botao = janela.area, janela.botao_fechar
++    assert (area.x(), area.y()) == (10, 10)
++    assert janela.width() - (area.x() + area.width()) == 10
++    assert botao.y() - (area.y() + area.height()) == 10
++    assert janela.height() - (botao.y() + botao.height()) == 12
++    assert abs((botao.x() + botao.width() / 2) - janela.width() / 2) <= 1
+diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
+index a6b2996..0441c02 100644
+--- a/tests/test_qt_sem_tkinter.py
++++ b/tests/test_qt_sem_tkinter.py
+@@ -50,6 +50,9 @@ def _importa_sem_tk(modulo):
+     "sigft.app_qt.file_dialogs",
+     "sigft.app_qt.widgets.pickers",
+     "sigft.app_qt.widgets.blocos",
++    "sigft.app_qt.widgets.dialogos_selecao",
++    "sigft.app_qt.widgets.abas",
++    "sigft.app_qt.widgets.painel_janela",
+     "sigft.app_qt.views.translator",
+     "sigft.app_qt.views.apagar_lmr",
+     "sigft.app_qt.views.lmr",
+-- 
+2.43.0
+

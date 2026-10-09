@@ -1,0 +1,450 @@
+From 3a569fbefcc93ed369765227c77634d135da49e2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 8 Oct 2026 12:29:19 +0000
+Subject: [PATCH 06/14] Qt6: botoes com a altura pedida, cinza do Tk, console e
+ margens iguais ao CustomTkinter
+
+Comparacao de capturas reais do Tradutor (Qt x CustomTkinter) mostrou
+defeitos quase todos em codigo compartilhado:
+
+- blocos.botao: o min-height: 28px da folha do app ganhava do
+  setFixedHeight e todo botao saia com 28 px. A altura vai agora na folha
+  do proprio botao (min/max-height), descontando a borda da variante
+  (estilo.BORDA_DA_VARIANTE), porque no Qt min-height nao conta a borda e
+  no CTk height conta. Novo cor_texto, que repete o estado desabilitado.
+- estilo.cinza_tk("gray") = #808080: o Tk 8.6 usa o valor do W3C para
+  gray/grey, nao o #BEBEBE do X11. Tradutor usa cinza_tk(COR_TEXTO_APOIO).
+- #console: fundo gray20 (#333333), sem borda, texto gray84, como o
+  CTkTextbox do tema dark-blue.
+- ModuleFrame: margens 20+PADDING_X / 20+PADDING_Y e espaco 2*PADDING_Y
+  (show_frame com padx/pady=20 + grid de cada peca com PADDING); header
+  com altura natural, porque o pack do CTk encolhe o quadro ate o titulo
+  (29 px medidos, nao 50).
+- Tradutor: espacos verticais do pack antigo (20/10/30/20/10/20).
+- Botao do glossario: variante nova contorno_padrao (borda #949A9F do
+  tema, texto text_light). "contorno" fica com #555 e cinza, que e o do
+  dialogo "Arquivo Bloqueado". Hover das duas como no CTk.
+- Botao desabilitado com texto gray60 (text_color_disabled do tema); o
+  menu lateral continua gray45, como no CTk.
+- blocos.cartao sem setAlignment no layout: rotulo com quebra ocupa a
+  largura toda; sai o setWordWrap(False) do Tradutor. Rotulo com altura
+  minima 28 (a do CTkLabel).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/estilo.py               | 37 ++++++++++++++----
+ sigft/app_qt/views/translator.py     | 33 ++++++++++------
+ sigft/app_qt/widgets/blocos.py       | 53 +++++++++++++++++++-------
+ sigft/app_qt/widgets/module_frame.py | 17 +++++++--
+ tests/test_qt_blocos.py              | 57 ++++++++++++++++++++++++++++
+ tests/test_qt_estilo.py              |  3 +-
+ tests/test_qt_tela_translator.py     | 33 ++++++++++++++++
+ 7 files changed, 197 insertions(+), 36 deletions(-)
+ create mode 100644 tests/test_qt_blocos.py
+
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index 8791f87..1274ffb 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -25,6 +25,15 @@ ALTURA_BOTAO_BARRA = 40
+ # coloriam à mão.
+ AZUL_CTK = "#1F538D"
+ AZUL_CTK_HOVER = "#14375E"
++# CTkButton do mesmo tema: borda (índice 1 = escuro) de um botão com
++# `border_width` e sem `border_color`, e texto de um botão desabilitado (gray60).
++BORDA_CTK = "#949A9F"
++TEXTO_DESABILITADO_CTK = "gray60"
++
++# Espessura da borda (px) de cada variante de botão que tem borda. `blocos.botao`
++# desconta isto da altura: no Qt o `min-height` da folha NÃO inclui a borda, e no
++# CustomTkinter `height` é a altura total do botão, borda incluída.
++BORDA_DA_VARIANTE = {"contorno": 1, "contorno_padrao": 1}
+ 
+ _SELETOR_TEXTO = "\ufe0e"   # U+FE0E: pede a forma de texto (preto e branco)
+ _SELETOR_EMOJI = "\ufe0f"   # U+FE0F: pede a forma de emoji (colorida)
+@@ -49,9 +58,13 @@ _NIVEIS_CINZA_X11 = (
+ 
+ 
+ def cinza_tk(nome: str) -> str:
+-    """`"grayNN"` do Tk em hexadecimal. O Qt não conhece esses nomes e pinta preto."""
++    """`"grayNN"` do Tk em hexadecimal. O Qt não conhece esses nomes e pinta preto.
++
++    `"gray"` sem número é #808080, e NÃO o #BEBEBE do rgb.txt do X11: o Tk 8.6
++    adotou o valor do W3C/CSS para gray/grey (os "grayNN" seguem o X11).
++    """
+     if nome in ("gray", "grey"):
+-        return "#BEBEBE"
++        return "#808080"
+     achado = re.fullmatch(r"gr[ae]y(\d{1,3})", nome)
+     if not achado or int(achado.group(1)) > 100:
+         return nome
+@@ -115,6 +128,11 @@ def folha_de_estilo() -> str:
+     """A folha QSS do app inteiro, montada a partir de `theme.py`."""
+     c = theme.COLORS
+     fam = '"Roboto", "Noto Emoji"'
++    # Notas que não cabem dentro da folha (comentário nela vazaria "gray" no QSS):
++    # * variante "contorno": o "Ignorar e Continuar" de sigft/app/widgets/dialogs.py
++    #   (borda #555 e texto COR_TEXTO_APOIO, escritos à mão); "contorno_padrao": botão
++    #   transparente com border_width=1 e sem border_color/text_color -- o do tema;
++    # * #console: CTkTextbox do tema dark-blue -- fg gray20, border_width 0, texto gray84.
+     return f"""
+ QMainWindow, #conteudo, #tela {{ background: {c['background']}; }}
+ QDialog {{ background: {cinza_tk('gray10')}; }}
+@@ -127,10 +145,11 @@ QPushButton {{ border-radius: 6px; color: {c['text_light']}; background: {AZUL_C
+ QPushButton:hover {{ background: {AZUL_CTK_HOVER}; }}
+ QPushButton[variante="primario"] {{ background: {c['primary']}; }}
+ QPushButton[variante="primario"]:hover {{ background: {c['primary_hover']}; }}
+-QPushButton:disabled {{ color: {cinza_tk('gray45')}; }}
++QPushButton:disabled {{ color: {cinza_tk(TEXTO_DESABILITADO_CTK)}; }}
+ QPushButton[menu="true"] {{ background: transparent; text-align: left; padding: 0 10px;
+     min-height: {ALTURA_BOTAO_MENU}px; max-height: {ALTURA_BOTAO_MENU}px; font-size: 12px; }}
+ QPushButton[menu="true"]:hover {{ background: {c['primary']}; }}
++QPushButton[menu="true"]:disabled {{ color: {cinza_tk('gray45')}; }}
+ #home {{ background: transparent; text-align: left; font-weight: bold;
+          border: 1px solid {cinza_tk('gray30')}; }}
+ #home:hover {{ background: {c['primary']}; }}
+@@ -141,8 +160,12 @@ QPushButton[variante="acento"]:hover {{ background: {c['accent_hover']}; }}
+ QPushButton[variante="neutro"] {{ background: #3A3A3A; }}
+ QPushButton[variante="neutro"]:hover {{ background: #4A4A4A; }}
+ QPushButton[variante="perigo"] {{ background: {c['danger']}; }}
+-QPushButton[variante="contorno"] {{ background: transparent; border: 1px solid #555555;
+-    color: {cinza_tk('gray')}; }}
++QPushButton[variante="contorno"] {{ background: transparent;
++    border: {BORDA_DA_VARIANTE['contorno']}px solid #555555; color: {cinza_tk('gray')}; }}
++QPushButton[variante="contorno_padrao"] {{ background: transparent;
++    border: {BORDA_DA_VARIANTE['contorno_padrao']}px solid {BORDA_CTK}; color: {c['text_light']}; }}
++QPushButton[variante="contorno"]:hover, QPushButton[variante="contorno_padrao"]:hover {{
++    background: {AZUL_CTK_HOVER}; }}
+ #titulo_home {{ font-size: 32px; font-weight: bold; }}
+ #subtitulo_home {{ font-size: 16px; color: {cinza_tk('gray70')}; }}
+ #texto_simples {{ font-size: 14px; }}
+@@ -151,8 +174,8 @@ QPushButton[variante="contorno"] {{ background: transparent; border: 1px solid #
+ #card:hover {{ border: 1px solid {c['accent']}; }}
+ #card_titulo {{ color: {c['accent']}; font-size: 15px; font-weight: bold; background: transparent; }}
+ #card_desc {{ color: {cinza_tk('gray70')}; font-size: 12px; background: transparent; }}
+-#console {{ background: #1D1E1E; border: 1px solid #333333; border-radius: 6px;
+-            font-family: "Consolas", "Menlo", monospace; font-size: 12px; }}
++#console {{ background: {cinza_tk('gray20')}; border: none; border-radius: 6px;
++            color: {cinza_tk('gray84')}; font-family: "Consolas", "Menlo", monospace; font-size: 12px; }}
+ QCheckBox {{ font-size: 12px; }}
+ QCheckBox::indicator {{ width: 20px; height: 20px; border: 3px solid #949A9F;
+                         border-radius: 6px; background: transparent; }}
+diff --git a/sigft/app_qt/views/translator.py b/sigft/app_qt/views/translator.py
+index 1a758e3..f7b6f9b 100644
+--- a/sigft/app_qt/views/translator.py
++++ b/sigft/app_qt/views/translator.py
+@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
+ from PySide6.QtWidgets import QMessageBox
+ 
+ from sigft.app import backends, theme
+-from sigft.app_qt import file_dialogs, interface
++from sigft.app_qt import estilo, file_dialogs, interface
+ from sigft.app_qt.widgets import blocos
+ from sigft.app_qt.widgets.module_frame import ModuleFrame
+ from sigft.core import plataforma
+@@ -24,30 +24,39 @@ class ModuloTranslator(ModuleFrame):
+         super().__init__(parent, controller, titulo="Tradutor Técnico (PT -> ES)")
+ 
+     def _build_ui(self) -> None:
++        # Espaços verticais do `pack` da tela antiga (pady de cada peça). O pady
++        # de dois vizinhos SOMA no Tk, então o espaço entre eles é a soma dos
++        # dois: por isso o espaçamento automático do cartão vai a zero.
++        self.content_layout.addSpacing(20)              # cartão: pady=20
+         corpo = blocos.cartao(self.content_layout)
++        corpo.setSpacing(0)
++        corpo.setContentsMargins(20, 20, 20, 20)        # título: pady=(20, …); glossário: (…, 20)
+         corpo.addWidget(blocos.rotulo("Tradução Automática de Características", tamanho=16,
+                                       negrito=True, cor=theme.COLORS["accent"]))
+-        descricao = blocos.rotulo(
++        corpo.addSpacing(10)                            # título (…, 10) + descrição (0, …)
++        corpo.addWidget(blocos.rotulo(
+             "Selecione as planilhas para traduzir do Português para Espanhol.\n"
+             "O sistema cria uma nova aba traduzida.\n"
+             "A tradução roda neste computador: nenhuma resposta sai daqui.",
+-            cor="#BEBEBE")
+-        # As 3 linhas já vêm quebradas no texto. Com quebra automática, o
+-        # rótulo centralizado no cartão recebe largura estreita e altura de
+-        # uma linha, e o texto aparece cortado.
+-        descricao.setWordWrap(False)
+-        corpo.addWidget(descricao)
++            cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO)))
+         self.btn_run = blocos.botao("Selecionar Arquivos e Iniciar", variante="primario",
+-                                    largura=300, altura=50, tamanho_fonte=14, negrito=True)
++                                    largura=300, altura=50, tamanho_fonte=14, negrito=True,
++                                    cor_texto=theme.COLORS["text_white"])
+         self.btn_run.clicked.connect(self.iniciar_traducao)
+-        self.btn_stop = blocos.botao("PARAR AGORA", variante="perigo", largura=200, altura=40)
++        self.btn_stop = blocos.botao("PARAR AGORA", variante="perigo", largura=200, altura=40,
++                                     cor_texto=theme.COLORS["text_white"])
+         self.btn_stop.setEnabled(False)
+         self.btn_stop.clicked.connect(self.parar_traducao)
++        # Lá: fg_color="transparent", border_width=1 e texto text_light.
+         self.btn_glossario = blocos.botao("Abrir glossário (correções de termos)",
+-                                          variante="contorno", largura=300, altura=32)
++                                          variante="contorno_padrao", largura=300, altura=32)
+         self.btn_glossario.clicked.connect(self.abrir_glossario)
+-        for b in (self.btn_run, self.btn_stop, self.btn_glossario):
++        # descrição (…, 20) + iniciar (10, …); iniciar (…, 10) + parar (10, …);
++        # parar (…, 10) + glossário (0, …).
++        for espaco, b in ((30, self.btn_run), (20, self.btn_stop), (10, self.btn_glossario)):
++            corpo.addSpacing(espaco)
+             corpo.addWidget(b, alignment=Qt.AlignmentFlag.AlignHCenter)
++        self.content_layout.addSpacing(20)
+         self.content_layout.addStretch()
+ 
+     def _tradutor(self):
+diff --git a/sigft/app_qt/widgets/blocos.py b/sigft/app_qt/widgets/blocos.py
+index 2bd2426..eacf64b 100644
+--- a/sigft/app_qt/widgets/blocos.py
++++ b/sigft/app_qt/widgets/blocos.py
+@@ -9,15 +9,30 @@ from __future__ import annotations
+ from PySide6.QtCore import Qt
+ from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout
+ 
+-_ALINHAMENTO = {"centro": Qt.AlignmentFlag.AlignCenter, "esquerda": Qt.AlignmentFlag.AlignLeft}
++from sigft.app_qt import estilo
++
++# "esquerda" é o anchor="w" do CTkLabel: encostado à esquerda, centrado na vertical.
++_ALINHAMENTO = {
++    "centro": Qt.AlignmentFlag.AlignCenter,
++    "esquerda": Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
++}
++
++# Altura mínima de um CTkLabel (o `height` padrão dele): um rótulo de uma linha
++# ocupa isto na tela antiga mesmo com fonte menor, com o texto centrado.
++ALTURA_MINIMA_ROTULO = 28
+ 
+ 
+ def cartao(layout_pai) -> QVBoxLayout:
++    """O quadro cinza. Rótulos ocupam a largura toda (centram o próprio texto);
++    botão de largura fixa vai centrado com `addWidget(b, alignment=AlignHCenter)`.
++
++    Sem `setAlignment` no layout inteiro: ele dava a um rótulo com quebra de
++    linha uma largura estreita demais, e o texto saía cortado.
++    """
+     quadro = QFrame(objectName="cartao")
+     layout = QVBoxLayout(quadro)
+     layout.setContentsMargins(20, 20, 20, 20)
+     layout.setSpacing(10)
+-    layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+     layout_pai.addWidget(quadro)
+     return layout
+ 
+@@ -27,30 +42,42 @@ def rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str | N
+     etiqueta = QLabel(texto)
+     etiqueta.setAlignment(_ALINHAMENTO[alinhar])
+     etiqueta.setWordWrap(True)
+-    estilo = f"font-size: {tamanho}px; background: transparent;"
++    etiqueta.setMinimumHeight(ALTURA_MINIMA_ROTULO)
++    folha = f"font-size: {tamanho}px; background: transparent;"
+     if negrito:
+-        estilo += " font-weight: bold;"
++        folha += " font-weight: bold;"
+     if cor:
+-        estilo += f" color: {cor};"
+-    etiqueta.setStyleSheet(estilo)
++        folha += f" color: {cor};"
++    etiqueta.setStyleSheet(folha)
+     return etiqueta
+ 
+ 
+ def botao(texto: str, *, variante: str | None = None, largura: int | None = None,
+           altura: int | None = None, tamanho_fonte: int | None = None,
+-          negrito: bool = False) -> QPushButton:
++          negrito: bool = False, cor_texto: str | None = None) -> QPushButton:
+     b = QPushButton(texto)
+     if variante:
+         b.setProperty("variante", variante)
+     if largura:
+         b.setFixedWidth(largura)
++    folha = ""
+     if altura:
+-        b.setFixedHeight(altura)
+-    estilo = ""
++        # Não basta `setFixedHeight`: ao aplicar a folha do app, o Qt troca a
++        # altura mínima pelo `min-height` dela (28 px) e o botão encolhe. A
++        # altura vai na folha do PRÓPRIO botão, que ganha da global. O
++        # `min-height` do Qt não conta a borda; o `height` do CTk conta.
++        interna = altura - 2 * estilo.BORDA_DA_VARIANTE.get(variante or "", 0)
++        folha += f" min-height: {interna}px; max-height: {interna}px;"
+     if tamanho_fonte:
+-        estilo += f"font-size: {tamanho_fonte}px;"
++        folha += f" font-size: {tamanho_fonte}px;"
+     if negrito:
+-        estilo += " font-weight: bold;"
+-    if estilo:
+-        b.setStyleSheet(estilo)
++        folha += " font-weight: bold;"
++    extra = ""
++    if cor_texto:
++        folha += f" color: {cor_texto};"
++        # A folha do botão ganha da do app em TODOS os estados: sem repetir o
++        # desabilitado aqui, o texto ficaria com `cor_texto` mesmo desligado.
++        extra = f" QPushButton:disabled {{ color: {estilo.cinza_tk(estilo.TEXTO_DESABILITADO_CTK)}; }}"
++    if folha:
++        b.setStyleSheet(f"QPushButton {{{folha} }}{extra}")
+     return b
+diff --git a/sigft/app_qt/widgets/module_frame.py b/sigft/app_qt/widgets/module_frame.py
+index e97eee5..d5ab903 100644
+--- a/sigft/app_qt/widgets/module_frame.py
++++ b/sigft/app_qt/widgets/module_frame.py
+@@ -23,6 +23,9 @@ from sigft.app_qt import interface
+ from sigft.app_qt.widgets.console import ConsoleFrame
+ from sigft.app_qt.widgets.espera import DialogosDeEspera
+ 
++# O padx/pady=20 com que o `show_frame` do CustomTkinter põe cada tela na janela.
++MARGEM_DA_TELA = 20
++
+ 
+ def _reabilitar(botao) -> None:
+     """Devolve o botão. A tela pode ter sido fechada antes de a tarefa acabar."""
+@@ -52,8 +55,14 @@ class ModuleFrame(DialogosDeEspera, QWidget):
+         self.controller = controller
+         self.embutida = embutida
+         raiz = QVBoxLayout(self)
+-        raiz.setContentsMargins(theme.PADDING_X, theme.PADDING_Y, theme.PADDING_X, theme.PADDING_Y)
+-        raiz.setSpacing(theme.PADDING_Y)
++        # As medidas do CustomTkinter somadas: `show_frame` põe a tela inteira
++        # com padx=20/pady=20 (sigft/app/main.py), e o `ModuleFrame` de lá põe
++        # header, conteúdo e console cada um com padx=PADDING_X/pady=PADDING_Y
++        # (sigft/app/widgets/module_frame.py). O pady de dois vizinhos soma:
++        # entre eles ficam 2 * PADDING_Y.
++        raiz.setContentsMargins(MARGEM_DA_TELA + theme.PADDING_X, MARGEM_DA_TELA + theme.PADDING_Y,
++                                MARGEM_DA_TELA + theme.PADDING_X, MARGEM_DA_TELA + theme.PADDING_Y)
++        raiz.setSpacing(2 * theme.PADDING_Y)
+ 
+         self.content = QWidget()
+         self.content_layout = QVBoxLayout(self.content)
+@@ -79,7 +88,9 @@ class ModuleFrame(DialogosDeEspera, QWidget):
+             if cor_titulo:
+                 self.label_titulo.setStyleSheet(f"color: {cor_titulo};")
+             linha_header.addWidget(self.label_titulo)
+-            self.header.setFixedHeight(theme.ALTURA_HEADER)
++            # SEM `setFixedHeight(theme.ALTURA_HEADER)`: lá o título entra no
++            # header com `pack`, e o quadro encolhe até a altura do título
++            # (29 px medidos, não os 50 pedidos). Altura natural aqui também.
+             raiz.addWidget(self.header)
+             raiz.addWidget(self.content, peso_conteudo)
+             self.progress_bar = None
+diff --git a/tests/test_qt_blocos.py b/tests/test_qt_blocos.py
+new file mode 100644
+index 0000000..c07ec48
+--- /dev/null
++++ b/tests/test_qt_blocos.py
+@@ -0,0 +1,57 @@
++"""Peças de `sigft/app_qt/widgets/blocos.py` medidas na tela, com a folha do app."""
++import pytest
++from PySide6.QtCore import Qt
++from PySide6.QtWidgets import QVBoxLayout, QWidget
++
++from sigft.app import theme
++from sigft.app_qt import estilo
++from sigft.app_qt.widgets import blocos
++
++
++@pytest.fixture
++def com_folha(qt_interface):
++    """A folha de estilo do app aplicada, como em produção; devolvida no fim."""
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    yield qt_interface
++    qt_interface.setStyleSheet(anterior)
++
++
++@pytest.mark.parametrize("variante, altura", [
++    ("primario", 50), ("perigo", 40), ("contorno_padrao", 32), ("contorno", 40), (None, 35),
++])
++def test_botao_fica_com_a_altura_pedida(com_folha, qtbot, variante, altura):
++    # A folha do app tem `min-height: 28px` para QPushButton; antes ela ganhava
++    # do `setFixedHeight` e TODO botão saía com 28 px (30 com borda).
++    tela = QWidget()
++    QVBoxLayout(tela).addWidget(b := blocos.botao("x", variante=variante, largura=200, altura=altura))
++    qtbot.addWidget(tela)
++    tela.show()
++    qtbot.waitExposed(tela)
++    assert b.height() == altura
++    assert b.sizeHint().height() == altura
++    assert b.width() == 200
++
++
++def test_cor_do_texto_nao_vale_para_o_botao_desligado(com_folha, qtbot):
++    b = blocos.botao("x", altura=40, cor_texto="#FFFFFF")
++    qtbot.addWidget(b)
++    folha = b.styleSheet()
++    assert "color: #FFFFFF" in folha
++    assert f"QPushButton:disabled {{ color: {estilo.cinza_tk('gray60')}; }}" in folha
++
++
++def test_rotulo_com_quebra_ocupa_a_largura_do_cartao(com_folha, qtbot):
++    # Com `setAlignment(AlignHCenter)` no layout do cartão, o rótulo com quebra
++    # automática ganhava largura estreita e o texto saía cortado.
++    tela = QWidget()
++    tela.resize(800, 400)
++    corpo = blocos.cartao(QVBoxLayout(tela))
++    texto = "Primeira linha bem comprida do texto de apoio.\nSegunda.\nTerceira linha."
++    corpo.addWidget(r := blocos.rotulo(texto, cor=estilo.cinza_tk(theme.COR_TEXTO_APOIO)))
++    qtbot.addWidget(tela)
++    tela.show()
++    qtbot.waitExposed(tela)
++    assert corpo.alignment() == Qt.AlignmentFlag(0)
++    assert r.width() == corpo.contentsRect().width()
++    assert r.height() >= r.heightForWidth(r.width())
+diff --git a/tests/test_qt_estilo.py b/tests/test_qt_estilo.py
+index 7984d20..d859a8f 100644
+--- a/tests/test_qt_estilo.py
++++ b/tests/test_qt_estilo.py
+@@ -10,7 +10,8 @@ from sigft.app_qt import estilo
+ def test_cinza_tk_converte_como_o_tk():
+     assert estilo.cinza_tk("gray70") == "#B3B3B3"
+     assert estilo.cinza_tk("gray30") == "#4D4D4D"
+-    assert estilo.cinza_tk("gray") == "#BEBEBE"
++    # "gray" sem número: o Tk 8.6 usa o valor do W3C (#808080), não o #BEBEBE do X11.
++    assert estilo.cinza_tk("gray") == "#808080"
+     assert estilo.cinza_tk("#123456") == "#123456"
+     assert estilo.cinza_tk("gray50") == "#7F7F7F"
+     assert estilo.cinza_tk("gray90") == "#E5E5E5"
+diff --git a/tests/test_qt_tela_translator.py b/tests/test_qt_tela_translator.py
+index f9b86b2..665bb7e 100644
+--- a/tests/test_qt_tela_translator.py
++++ b/tests/test_qt_tela_translator.py
+@@ -81,3 +81,36 @@ def test_backend_que_nao_carregou_nao_abre_dialogo(tela, monkeypatch):
+     monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_files", lambda *a, **k: chamou.append(1))
+     tela.btn_run.click()
+     assert chamou == []
++
++
++def test_medidas_iguais_as_do_customtkinter(qt_interface, qtbot):
++    # Medidas da tela antiga (CustomTkinter, 1280x850, sondadas com winfo_*),
++    # relativas à área da tela: título em (20, 10) dentro da tela posta com
++    # padx/pady=20; cartão 20 px abaixo do conteúdo; botões 50/40/32 de altura
++    # com 30/20/10 px de espaço entre as peças; console 20 px abaixo do conteúdo.
++    from sigft.app_qt import estilo
++
++    anterior = qt_interface.styleSheet()
++    qt_interface.setStyleSheet(estilo.folha_de_estilo())
++    try:
++        t = tela_mod.ModuloTranslator()
++        qtbot.addWidget(t)
++        t.resize(1003, 850)
++        t.show()
++        qtbot.waitExposed(t)
++
++        def pos(w):
++            return w.mapTo(t, w.rect().topLeft())
++
++        assert (pos(t.label_titulo).x(), pos(t.label_titulo).y()) == (40, 30)
++        assert pos(t.content).y() - (pos(t.header).y() + t.header.height()) == 20
++        assert pos(t.console).y() - (pos(t.content).y() + t.content.height()) == 20
++        assert t.height() - (pos(t.console).y() + t.console.height()) == 30
++        cartao = t.btn_run.parentWidget()
++        assert pos(cartao).y() - pos(t.content).y() == 20
++        assert (t.btn_run.height(), t.btn_stop.height(), t.btn_glossario.height()) == (50, 40, 32)
++        assert pos(t.btn_stop).y() - (pos(t.btn_run).y() + 50) == 20
++        assert pos(t.btn_glossario).y() - (pos(t.btn_stop).y() + 40) == 10
++        assert pos(cartao).y() + cartao.height() - (pos(t.btn_glossario).y() + 32) == 20
++    finally:
++        qt_interface.setStyleSheet(anterior)
+-- 
+2.43.0
+

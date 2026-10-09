@@ -1,0 +1,132 @@
+From 6acc60feeefe249489cce2866f3c5dde43a81cbc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 7 Oct 2026 19:07:23 +0000
+Subject: [PATCH 02/26] Qt6: PySide6 e pytest-qt no ambiente, CI em 3.10 e 3.12
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ .github/workflows/ci.yml  | 14 +++++++++++++-
+ requirements-dev.txt      |  3 +++
+ requirements.txt          |  3 +++
+ tests/conftest.py         | 16 ++++++++++++++++
+ tests/test_qt_ambiente.py | 15 +++++++++++++++
+ 5 files changed, 50 insertions(+), 1 deletion(-)
+ create mode 100644 tests/test_qt_ambiente.py
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 666b065..ac92f77 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -26,6 +26,13 @@ jobs:
+     runs-on: ubuntu-latest
+     timeout-minutes: 20
+ 
++    strategy:
++      fail-fast: false
++      matrix:
++        # 3.10 e o minimo; 3.12 e o que a maioria instala hoje. O Qt e a
++        # parte nova que mais depende de versao -- os dois ficam no portao.
++        python: ["3.10", "3.12"]
++
+     env:
+       # Mesmo motivo do workflow de Release: um `print` com acento num teste
+       # ou num script morreria por UnicodeEncodeError. Aqui e barato ligar.
+@@ -40,9 +47,14 @@ jobs:
+           # 3.10 e o MINIMO que o SIG-FT.bat aceita, e o alvo do ruff/mypy no
+           # pyproject.toml. Testar no minimo e o que pega uso de sintaxe nova
+           # por engano; a maquina do usuario pode estar exatamente nele.
+-          python-version: "3.10"
++          python-version: ${{ matrix.python }}
+           cache: pip
+ 
++      # O PySide6 precisa destas bibliotecas do sistema mesmo em modo
++      # offscreen (sem elas: "libEGL.so.1: cannot open shared object file").
++      - name: Bibliotecas do sistema para o Qt
++        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libfontconfig1 libgl1
++
+       # A suite roda SEM as dependencias pesadas (pandas, playwright,
+       # google-generativeai...): tests/conftest.py as dubla. Instalar tudo aqui
+       # seria minutos de CI para exercitar exatamente o mesmo codigo.
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+index 79fda7d..5d142db 100644
+--- a/requirements-dev.txt
++++ b/requirements-dev.txt
+@@ -8,6 +8,9 @@
+ # produção instaladas (ver tests/conftest.py, que faz stub delas via
+ # unittest.mock para permitir importar os módulos *_backend.py).
+ pytest
++# Fixture `qtbot`: monta widgets Qt de verdade, sem display (offscreen).
++pytest-qt
++PySide6
+ 
+ # lxml — desde 2026-10-05 é dependência de PRODUÇÃO (está no requirements.txt:
+ # o editor cirúrgico que grava nos `_STATUS_PMIB`). Fica aqui também porque o CI
+diff --git a/requirements.txt b/requirements.txt
+index d837833..4009cb4 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,5 +1,8 @@
+ # Interface
+ customtkinter
++# Interface Qt (migração em andamento: sigft/app_qt/). LGPL -- ver
++# docs/superpowers/specs/2026-10-07-migracao-qt6-design.md, decisões.
++PySide6
+ pillow
+ 
+ # Dados / Excel
+diff --git a/tests/conftest.py b/tests/conftest.py
+index ad3cc42..ba7f4f5 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -35,6 +35,13 @@ comportamento das funções caracterizadas continua sendo o comportamento real
+ do código em produção (só os SDKs pesados — nunca usados pelas funções puras
+ testadas aqui — é que viram Mocks).
+ """
++import os as _os_qt
++
++# [Qt6] Sem display no CI e no contêiner: o Qt desenha em memória. Tem de vir
++# antes de qualquer import do PySide6, e setdefault deixa quem quiser ver a
++# janela (QT_QPA_PLATFORM=xcb) rodar com display de verdade.
++_os_qt.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
++
+ import importlib.util
+ import os
+ import sys
+@@ -249,3 +256,12 @@ def _isola_os_dados_do_usuario(monkeypatch, tmp_path_factory):
+     _dados.esquecer_pasta()
+     yield pasta
+     _dados.esquecer_pasta()
++
++
++@pytest.fixture
++def qt_interface(qapp):
++    """QApplication pronta e o canal thread -> interface instalado."""
++    from sigft.app_qt import interface
++
++    interface.instalar()
++    return qapp
+diff --git a/tests/test_qt_ambiente.py b/tests/test_qt_ambiente.py
+new file mode 100644
+index 0000000..74575b6
+--- /dev/null
++++ b/tests/test_qt_ambiente.py
+@@ -0,0 +1,15 @@
++"""O Qt roda na suíte sem display (QT_QPA_PLATFORM=offscreen)."""
++import os
++
++from PySide6.QtWidgets import QLabel
++
++
++def test_plataforma_offscreen():
++    assert os.environ.get("QT_QPA_PLATFORM") == "offscreen"
++
++
++def test_widget_monta_sem_display(qtbot):
++    rotulo = QLabel("SIG-FT")
++    qtbot.addWidget(rotulo)
++    rotulo.show()
++    assert rotulo.text() == "SIG-FT"
+-- 
+2.43.0
+
