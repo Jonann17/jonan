@@ -1,7 +1,7 @@
 From 683148d68d254a7946406ca9ae6e052aa1c67312 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:30:14 +0000
-Subject: [PATCH 07/13] Qt6: janela de pesos do Analyzer ignora Esc e Enter e
+Subject: [PATCH 07/14] Qt6: janela de pesos do Analyzer ignora Esc e Enter e
  nao abre duas vezes
 
 Esc fechava e perdia os pesos digitados; Enter num campo salvava (botao

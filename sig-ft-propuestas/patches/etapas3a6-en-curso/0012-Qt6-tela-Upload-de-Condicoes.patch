@@ -1,7 +1,7 @@
 From dcb5e8f9a58fc008787e7707adb34788ca15fa70 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:41:19 +0000
-Subject: [PATCH 12/13] Qt6: tela Upload de Condicoes
+Subject: [PATCH 12/14] Qt6: tela Upload de Condicoes
 
 Porta de sigft/app/views/upload_conditions.py (TELAS "UploadConditions").
 A montagem comum com a tela de Tech Specs (quadro global com Interruptor,
