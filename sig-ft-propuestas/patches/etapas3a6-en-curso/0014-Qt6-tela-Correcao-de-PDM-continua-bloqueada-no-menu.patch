@@ -1,7 +1,7 @@
 From a37d43c79483ed6f2e6e06afeb750703436de4b8 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 9 Oct 2026 11:23:01 +0000
-Subject: [PATCH 14/18] Qt6: tela Correcao de PDM (continua bloqueada no menu)
+Subject: [PATCH] Qt6: tela Correcao de PDM (continua bloqueada no menu)
 
 Port de sigft/app/views/correcao_pdm.py para sigft/app_qt/views/correcao_pdm.py,
 mesmos servicos (correcao_pdm, correcao_pdm_planilha, pdm_catalogo). A tela

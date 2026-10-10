@@ -35,3 +35,9 @@ E4.10: notas p/ LOG: lote processa a fila como estava no clique (itens novos fic
 E4.10: minor (deferred): _area_como_a_do_ctk = 4a copia local da area com barra sempre visivel (+ recorte de 6 px) -> parametro em blocos.area_rolavel no polimento
 Polimento pendente: botoes de tela pegam foco e Espaco os aperta (CTk nunca dava foco) -> NoFocus no blocos.botao? (todas as telas)
 E4.10: review pendente (pacote review-e4.10.diff)
+E4.10: integrado 354543f: check.sh TUDO OK (6175 passed, 28 skipped), ruff limpo
+E5.1: implementador a14a189 DONE_WITH_CONCERNS: f8dfd08 -> 748d3a4 em local/jonan-cambios; relatorio e5.1-report.md (copiado do scratchpad)
+E5.1: notas p/ LOG: "Aplicar mesmo assim?" com padrao Nao (Tk: Sim); MenuDeOpcoes ignora a roda do mouse (como o CTkOptionMenu; vale p/ Busca PMIB e LMR); grade da Home nas posicoes medidas do CTk (cards 438 px); catalogo/pasta de logs/GitHub so com dubles; altura de linha 15 px medida no Linux
+E5.1: minor (deferred): _ler_mural, _caminho_do_mapeamento e tabelas do mural copiados do CTk (testes travam os dois lados) -> unificar no corte
+E5.1: review ad54afb despachada (pacote review-e5.1.diff)
+E4.10: review a47b7fe despachada (pacote review-e4.10.diff)

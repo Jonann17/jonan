@@ -1,8 +1,8 @@
 From 2f3dbea316b41ae8d530071d6a328f4d2ed6d5ca Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 17:37:36 +0000
-Subject: [PATCH 01/18] Qt6: arquivos travados minimizavel, barra indeterminada
- e limpeza dos estilos compartilhados
+Subject: [PATCH] Qt6: arquivos travados minimizavel, barra indeterminada e
+ limpeza dos estilos compartilhados
 
 Revisao da E3.1: a janela de arquivos travados vira janela independente
 com minimizar (como o CTkToplevel sem transient); modo indeterminado da

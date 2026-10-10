@@ -1,8 +1,8 @@
 From fc3ee97068624af18bfa75cbedbff9760573dc89 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 9 Oct 2026 16:15:40 +0000
-Subject: [PATCH 17/18] Qt6: uploads com erro de JSON no console, botoes sem
- foco e um robo por vez
+Subject: [PATCH] Qt6: uploads com erro de JSON no console, botoes sem foco e
+ um robo por vez
 
 Revisao das telas de upload (E4.4/E4.5):
 - _pre_start_web volta para dentro do try, como no CTk: JSON que nao e

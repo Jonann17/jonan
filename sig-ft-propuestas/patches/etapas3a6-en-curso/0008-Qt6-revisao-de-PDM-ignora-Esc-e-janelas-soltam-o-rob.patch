@@ -1,8 +1,8 @@
 From 78e7afd10d084f1e036fbedfbcd9567dfcac08da Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:30:54 +0000
-Subject: [PATCH 08/18] Qt6: revisao de PDM ignora Esc e janelas soltam o robo
- ao sumir
+Subject: [PATCH] Qt6: revisao de PDM ignora Esc e janelas soltam o robo ao
+ sumir
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
