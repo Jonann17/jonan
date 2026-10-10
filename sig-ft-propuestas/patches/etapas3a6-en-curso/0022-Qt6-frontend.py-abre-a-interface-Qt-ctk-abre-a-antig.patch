@@ -1,0 +1,1427 @@
+From 61bf09fa4e1849e60f02e78c52b0d8b34c2d44e5 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 11:52:45 +0000
+Subject: [PATCH] Qt6: frontend.py abre a interface Qt (--ctk abre a antiga) e
+ lancador para macOS
+
+- frontend.py entrega a linha de comando a sigft.app_qt.main logo depois do
+  despacho de --conferir-pacote e antes dos imports do CustomTkinter (o modo
+  Qt nao importa tkinter) e sai mesmo se a Qt voltar; --ctk mantem a interface
+  antiga, inclusive --ctk --smoke; os reexports de `import frontend` ficam.
+- --smoke da Qt grava conferencia-da-janela.txt nos dois caminhos, com os
+  avisos de backend, e visita todas as telas de TELAS menos as bloqueadas:
+  tela que vira TelaComErro reprova, com o nome, o motivo e a pilha.
+- conferencia.py confere PySide6, shiboken6, sigft.app_qt.main e o modulo de
+  cada tela; um teste trava a lista com as fabricas de TELAS.
+- PySide6-Essentials>=6.9 no requirements.txt, repetido no requirements-dev.txt
+  (padrao do lxml); requirements-qt.txt sai.
+- SIG-FT.command + scripts/_bootstrap_venv.sh: o SIG-FT.bat do Mac (Python
+  3.10+, venv fora de pasta sincronizada, carimbo do requirements, navegador
+  do Playwright uma vez, janela aberta no erro).
+- README: como abrir no Windows e no Mac, e o --ctk.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ README.md                           |  21 +-
+ SIG-FT.command                      |  49 +++++
+ frontend.py                         |  24 ++-
+ requirements-dev.txt                |   8 +-
+ requirements-qt.txt                 |  15 --
+ requirements.txt                    |  11 +
+ scripts/_bootstrap_venv.sh          | 302 ++++++++++++++++++++++++++++
+ sigft/app/conferencia.py            |  24 +++
+ sigft/app_qt/main.py                |  63 +++++-
+ sigft/app_qt/views/nao_migrada.py   |   4 +-
+ tests/test_conferencia_do_pacote.py |  68 +++++++
+ tests/test_lancador_mac.py          | 293 +++++++++++++++++++++++++++
+ tests/test_qt_corte.py              | 150 ++++++++++++++
+ tests/test_qt_main.py               |   3 +
+ tests/test_qt_smoke.py              | 143 +++++++++++++
+ 15 files changed, 1146 insertions(+), 32 deletions(-)
+ create mode 100755 SIG-FT.command
+ delete mode 100644 requirements-qt.txt
+ create mode 100755 scripts/_bootstrap_venv.sh
+ create mode 100644 tests/test_lancador_mac.py
+ create mode 100644 tests/test_qt_corte.py
+ create mode 100644 tests/test_qt_smoke.py
+
+diff --git a/README.md b/README.md
+index 0818e4c..14e73e2 100644
+--- a/README.md
++++ b/README.md
+@@ -50,6 +50,22 @@ Para conferir se a instalação está sã, `Testar-SIG-FT.bat` roda a suíte de
+ testes automatizados: é offline, não abre navegador, não chama IA e não toca no
+ portal PMIB.
+ 
++### Mac, a partir do código
++
++1. Baixe o repositório em **Code → Download ZIP** e extraia a pasta.
++2. Dê **dois cliques em `SIG-FT.command`**. Na **primeira vez** o macOS barra o
++   clique duplo (arquivo baixado da internet, sem assinatura): clique com o
++   **botão direito → Abrir → Abrir**. No macOS 15 ou mais novo, se o botão
++   *Abrir* não aparecer: **Ajustes do Sistema → Privacidade e Segurança → Abrir
++   Mesmo Assim**.
++
++Ele faz o mesmo que o `SIG-FT.bat`, numa janela do Terminal: na primeira
++execução cria o ambiente virtual e instala as dependências; depois só abre o
++aplicativo. Precisa do **Python 3.10 ou mais novo**
++([python.org/downloads/macos](https://www.python.org/downloads/macos/)). Com o
++projeto no iCloud Drive, OneDrive, Dropbox ou Google Drive, o ambiente virtual
++vai para `~/Library/Application Support/SIG-FT/venv`.
++
+ ### Testar sem ter dados reais em mãos
+ 
+ `Gerar-Dados-de-Teste.bat` cria a pasta `dados_de_teste/` com planilhas
+@@ -83,9 +99,12 @@ Detalhes de comportamento dos `.bat`:
+ 
+ ```bash
+ pip install -r requirements.txt
+-python frontend.py
++python frontend.py          # a interface Qt, a oficial
++python frontend.py --ctk    # a interface antiga (CustomTkinter), durante a transição
+ ```
+ 
++No Mac, `./SIG-FT.command --ctk` no Terminal também abre a interface antiga.
++
+ - **Entry point**: `frontend.py` (abre a Splash Screen, que carrega os backends dinamicamente e abre o app).
+ - **Windows**: os módulos Tradutor (`xlwings`, exige Excel instalado) e alguns recursos (`os.startfile`) só funcionam em Windows.
+ - **Logo**: coloque `assets/logo.png` (não versionado) para exibir a marca na splash e sidebar. O app funciona sem ela.
+diff --git a/SIG-FT.command b/SIG-FT.command
+new file mode 100755
+index 0000000..4fec46f
+--- /dev/null
++++ b/SIG-FT.command
+@@ -0,0 +1,49 @@
++#!/bin/bash
++# =============================================================================
++#  SIG-FT -- clique duas vezes neste arquivo, no Finder, para abrir o
++#  aplicativo no Mac. (E o SIG-FT.bat do Windows.)
++#
++#  Na PRIMEIRA vez o macOS barra o clique duplo num arquivo baixado da
++#  internet: clique com o botao direito -> Abrir -> Abrir.
++#
++#  Na primeira execucao ele cria o ambiente virtual e instala as dependencias
++#  (leva alguns minutos). Nas vezes seguintes ele so abre o aplicativo.
++#
++#  Nao precisa instalar nada antes, so o Python 3 (3.10 ou mais novo):
++#  https://www.python.org/downloads/macos/
++#
++#  Rede corporativa com Zscaler: veja o README.md, secao
++#  "Rede corporativa (Zscaler)".
++# =============================================================================
++
++RAIZ="$(cd "$(dirname "$0")" && pwd)"
++
++_sigft_encerrar_com_erro() {
++    echo
++    echo "[SIG-FT] Encerrado com erro. As mensagens acima dizem o motivo."
++    echo
++    # O `pause` do .bat: sem isto, o Terminal pode fechar a janela (ou
++    # esconder a mensagem) antes de a pessoa conseguir ler.
++    read -r -p "Pressione Enter para fechar esta janela." _
++    exit 1
++}
++
++# O titulo da janela do Terminal (o `title SIG-FT` do .bat).
++[ -t 1 ] && printf '\033]0;SIG-FT\007'
++
++# shellcheck source=scripts/_bootstrap_venv.sh
++. "$RAIZ/scripts/_bootstrap_venv.sh" || _sigft_encerrar_com_erro
++SIGFT_RAIZ="$RAIZ"
++sigft_bootstrap || _sigft_encerrar_com_erro
++
++# Roda a partir da raiz do projeto: .env, assets/ e as planilhas de trabalho
++# sao resolvidos por caminho relativo.
++cd "$RAIZ" || _sigft_encerrar_com_erro
++
++echo "[SIG-FT] Abrindo o aplicativo. Pode fechar esta janela do Terminal so DEPOIS"
++echo "         de fechar o SIG-FT -- e nela que aparecem os erros."
++echo
++# Os argumentos seguem adiante: no Terminal, `./SIG-FT.command --ctk` abre a
++# interface antiga.
++"$SIGFT_PY" "$RAIZ/frontend.py" "$@" || _sigft_encerrar_com_erro
++exit 0
+diff --git a/frontend.py b/frontend.py
+index 69970f5..174f66b 100644
+--- a/frontend.py
++++ b/frontend.py
+@@ -12,9 +12,12 @@ aplicativo, tudo junto. Cada peça mudou para o seu lugar:
+     sigft/app/widgets/           console, esqueleto de tela, pickers, diálogos
+     sigft/app/backends.py        o registro que o splash carrega (CP 7.3)
+ 
+-**A forma de abrir o aplicativo continua a mesma** — `python frontend.py`, e o
+-`SIG-FT.bat`, que faz exatamente isso, não precisou mudar. A forma nova é
+-`python -m sigft.app.main`; as duas fazem o mesmo.
++**A forma de abrir o aplicativo continua a mesma; o que abre mudou** (E6.1,
++2026-10-10): `python frontend.py` — e o `SIG-FT.bat` e o `SIG-FT.command` (Mac),
++que fazem exatamente isso — abre a interface Qt (`sigft/app_qt/`).
++`python frontend.py --ctk` abre a CustomTkinter de antes, enquanto durar a
++transição. `python -m sigft.app_qt.main` e `python -m sigft.app.main` abrem cada
++uma direto.
+ 
+ Por que o shim existe, em vez de simplesmente apagar o arquivo
+ --------------------------------------------------------------
+@@ -29,6 +32,8 @@ agora é `sigft/app/theme.py`, e há teste travando os dois juntos.
+ """
+ from __future__ import annotations
+ 
++import sys
++
+ # Antes de tudo: com Python antigo o app abria pela metade, com erro enigmático.
+ from sigft.core.python_minimo import exigir_python_minimo
+ 
+@@ -51,6 +56,18 @@ if __name__ == "__main__":
+ 
+     _despachar_cedo()
+ 
++    # A interface oficial é a Qt (E6.1), e ela entra AQUI, antes dos imports do
++    # CustomTkinter logo abaixo: o modo Qt não importa tkinter (o Python do
++    # Homebrew, no Mac, nem o traz). `--ctk` abre a interface antiga.
++    if "--ctk" not in sys.argv:
++        from sigft.app_qt.main import executar_da_linha_de_comando as _abrir_qt
++
++        _abrir_qt()
++        # Não volta: o `main()` da Qt termina o processo (`instancia.encerrar`)
++        # e o `--smoke` sai com `sys.exit`. Se um dia voltar, sai aqui mesmo,
++        # em vez de cair no CustomTkinter.
++        sys.exit(0)
++
+ from sigft.app.main import (
+     CONFIG_FILE,
+     SIG_FT_App,
+@@ -115,6 +132,7 @@ __all__ = [
+ 
+ 
+ if __name__ == "__main__":
++    # Só com `--ctk` chega aqui (sem ele, a Qt já recebeu a linha de comando).
+     # `executar_da_linha_de_comando()`, e não `main()` direto: é ele que trata
+     # `--smoke`. Chamar `main()` aqui engoliria a flag, porque o `__main__` do
+     # `sigft/app/main.py` não roda no bundle. Ver o aviso lá em cima.
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+index 1210aed..b1ec25b 100644
+--- a/requirements-dev.txt
++++ b/requirements-dev.txt
+@@ -10,9 +10,11 @@
+ pytest
+ # Fixture `qtbot`: monta widgets Qt de verdade, sem display (offscreen).
+ pytest-qt
+-# PySide6 (so a UI Qt em migracao) fica em arquivo proprio: nao entra no
+-# requirements.txt de producao ate o corte (Etapa 6).
+--r requirements-qt.txt
++# PySide6-Essentials -- desde o corte (E6.1, 2026-10-10) e dependencia de
++# PRODUCAO (esta no requirements.txt: a interface oficial e a Qt). Fica aqui
++# tambem porque o CI instala so este arquivo, e a suite monta as telas Qt de
++# verdade. Mesma regra do lxml, logo abaixo.
++PySide6-Essentials>=6.9
+ 
+ # lxml — desde 2026-10-05 é dependência de PRODUÇÃO (está no requirements.txt:
+ # o editor cirúrgico que grava nos `_STATUS_PMIB`). Fica aqui também porque o CI
+diff --git a/requirements-qt.txt b/requirements-qt.txt
+deleted file mode 100644
+index 6e11733..0000000
+--- a/requirements-qt.txt
++++ /dev/null
+@@ -1,15 +0,0 @@
+-# Interface Qt (PySide6) -- a UI em migração, pacote sigft/app_qt/.
+-#
+-# Este arquivo é SEPARADO do requirements.txt de propósito: o app oficial ainda é
+-# o CustomTkinter, e o SIG-FT.bat reinstala o requirements.txt quando o hash dele
+-# muda (e aborta se o pip falhar). Pôr o PySide6 lá faria todo usuário baixar
+-# ~650 MB por uma interface que ninguém usa ainda. Ele entra no requirements.txt
+-# só no corte (Etapa 6 da migração).
+-#
+-# Uso (desenvolvimento): python -m pip install -r requirements-qt.txt
+-# (o requirements-dev.txt já inclui este arquivo).
+-#
+-# PySide6-Essentials = QtCore, QtGui, QtWidgets e QtTest (o que usamos), sem o
+-# metapacote completo. >=6.9 porque `QFontDatabase.setApplicationEmojiFontFamilies`,
+-# usado em sigft/app_qt/estilo.py, só existe a partir do Qt 6.9.
+-PySide6-Essentials>=6.9
+diff --git a/requirements.txt b/requirements.txt
+index d837833..d21815f 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,4 +1,15 @@
+ # Interface
++# PySide6-Essentials: a interface OFICIAL desde o corte (E6.1, 2026-10-10), o
++# pacote `sigft/app_qt/`. O essencial do Qt (usamos QtCore, QtGui e QtWidgets),
++# sem os add-ons do metapacote `PySide6` (WebEngine, 3D, Multimedia...).
++# >=6.9 porque `QFontDatabase.setApplicationEmojiFontFamilies`, usado em
++# `sigft/app_qt/estilo.py`, so existe a partir do Qt 6.9.
++# Quem ja tem o ambiente virtual nao faz nada: o SIG-FT.bat (e o SIG-FT.command,
++# no Mac) reinstala sozinho na proxima abertura, porque o hash deste arquivo
++# mudou. E o maior download da lista: ~80 MB no Windows, ~120 MB no Mac (que
++# precisa do macOS 12 ou mais novo), so nessa primeira abertura.
++PySide6-Essentials>=6.9
++# A interface antiga, que o `--ctk` ainda abre durante a transicao.
+ customtkinter
+ pillow
+ 
+diff --git a/scripts/_bootstrap_venv.sh b/scripts/_bootstrap_venv.sh
+new file mode 100755
+index 0000000..84cae79
+--- /dev/null
++++ b/scripts/_bootstrap_venv.sh
+@@ -0,0 +1,302 @@
++#!/bin/bash
++# =============================================================================
++#  SIG-FT -- bootstrap do ambiente virtual no Mac (script interno)
++#
++#  Nao rode este arquivo direto. O SIG-FT.command faz `source` dele e chama
++#  `sigft_bootstrap`. O `source` so DEFINE funcoes -- nao faz nada sozinho, e
++#  e isso que deixa os testes (tests/test_lancador_mac.py) chamarem cada uma.
++#
++#  E o scripts/_bootstrap_venv.bat do Windows, no que vale no Mac:
++#     1. escolhe/cria o ambiente virtual (venv);
++#     2. instala o requirements.txt (e o requirements-dev.txt com SIGFT_DEV=1)
++#        so quando o arquivo mudou desde a ultima instalacao;
++#     3. baixa o navegador do Playwright uma vez, sem derrubar nada se falhar;
++#     4. devolve o python do venv em $SIGFT_PY (e a pasta em $SIGFT_VENV_DIR).
++#
++#  Escrito para o bash 3.2, que e o que o macOS traz: nada de ${x,,},
++#  `mapfile` ou vetor associativo.
++# =============================================================================
++
++sigft_bootstrap() {
++    # A raiz do projeto: este arquivo vive em <raiz>/scripts/.
++    if [ -z "${SIGFT_RAIZ:-}" ]; then
++        SIGFT_RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++    fi
++
++    # --- 1. onde fica o venv, e cria se ainda nao existe ---------------------
++    _sigft_escolher_venv
++    if [ ! -x "$SIGFT_VENV_DIR/bin/python" ]; then
++        _sigft_criar_venv || return 1
++    fi
++    SIGFT_PY="$SIGFT_VENV_DIR/bin/python"
++
++    # --- 2. dependencias -----------------------------------------------------
++    _sigft_resolver_pip_args
++    _sigft_instalar "$SIGFT_RAIZ/requirements.txt" requirements || return 1
++    if [ -n "${SIGFT_DEV:-}" ]; then
++        _sigft_instalar "$SIGFT_RAIZ/requirements-dev.txt" requirements-dev || return 1
++    fi
++
++    # --- 3. navegador do Playwright ------------------------------------------
++    # Nunca derruba a abertura: ver _sigft_instalar_navegador.
++    _sigft_instalar_navegador
++    return 0
++}
++
++
++# =============================================================================
++#  Onde fica o venv
++# =============================================================================
++
++_sigft_escolher_venv() {
++    # Ordem: variavel SIGFT_VENV > .venv do projeto > Application Support >
++    # criar novo (na raiz, ou em Application Support se a pasta sincroniza).
++    local suporte="$HOME/Library/Application Support/SIG-FT/venv"
++    if [ -n "${SIGFT_VENV:-}" ]; then
++        SIGFT_VENV_DIR="$SIGFT_VENV"
++    elif [ -x "$SIGFT_RAIZ/.venv/bin/python" ]; then
++        SIGFT_VENV_DIR="$SIGFT_RAIZ/.venv"
++    elif [ -x "$suporte/bin/python" ]; then
++        SIGFT_VENV_DIR="$suporte"
++    elif _sigft_pasta_sincronizada "$SIGFT_RAIZ"; then
++        # O servico tentaria sincronizar as dezenas de milhares de arquivos do
++        # venv -- entao ele vai para fora da pasta sincronizada.
++        SIGFT_VENV_DIR="$suporte"
++        echo "[SIG-FT] A pasta do projeto esta num servico de sincronizacao"
++        echo "         (iCloud Drive/OneDrive/Dropbox/Google Drive/Box). Para nao"
++        echo "         sincronizar milhares de arquivos, o ambiente virtual vai ficar"
++        echo "         fora dela: $suporte"
++        echo
++    else
++        SIGFT_VENV_DIR="$SIGFT_RAIZ/.venv"
++    fi
++}
++
++_sigft_minusculo() {
++    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
++}
++
++_sigft_pasta_sincronizada() {
++    # 0 = parece pasta de servico de sincronizacao. Confere o caminho como veio
++    # e o fisico (`pwd -P`), porque a pasta pode chegar por um link.
++    local dado fisico c
++    dado="$(_sigft_minusculo "$1")"
++    fisico="$(_sigft_minusculo "$(cd "$1" 2>/dev/null && pwd -P)")"
++    for c in "$dado" "$fisico"; do
++        case "$c" in
++            # iCloud Drive; e Library/CloudStorage e onde o macOS 12.3+ poe
++            # OneDrive, Dropbox, Google Drive e Box.
++            *"/library/mobile documents/"*|*"/library/cloudstorage/"*) return 0 ;;
++            *onedrive*|*/dropbox|*/dropbox/*|*"google drive"*|*googledrive*) return 0 ;;
++            */box/*|*"/box sync"*) return 0 ;;
++        esac
++    done
++    _sigft_icloud_mesa_e_documentos "$1"
++}
++
++_sigft_icloud_mesa_e_documentos() {
++    # Com "Mesa e Documentos" ligado no iCloud, ~/Desktop e ~/Documents
++    # sincronizam NO LUGAR: o caminho nao muda. A pista e o link que o iCloud
++    # Drive ganha para a pasta. Se a pista falhar para um lado, o pior caso e o
++    # venv em Application Support, que funciona do mesmo jeito.
++    local pasta
++    for pasta in Desktop Documents; do
++        case "$1/" in
++            "$HOME/$pasta/"*)
++                [ -L "$HOME/Library/Mobile Documents/com~apple~CloudDocs/$pasta" ] && return 0 ;;
++        esac
++    done
++    return 1
++}
++
++
++# =============================================================================
++#  O Python e o venv
++# =============================================================================
++
++_sigft_python_serve() {
++    # 0 = este comando e um Python 3.10 ou mais novo.
++    "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' >/dev/null 2>&1
++}
++
++_sigft_achar_python() {
++    # O primeiro Python 3.10+ entre os candidatos (os argumentos, ou a lista
++    # padrao). Mesma preferencia do .bat: 3.12 primeiro.
++    SIGFT_PY_BASE=""
++    if [ "$#" -eq 0 ]; then
++        set -- python3.12 python3.13 python3.11 python3.10 python3 \
++               /Library/Frameworks/Python.framework/Versions/Current/bin/python3 \
++               /opt/homebrew/bin/python3 /usr/local/bin/python3
++    fi
++    local candidato caminho
++    for candidato in "$@"; do
++        caminho="$(command -v "$candidato" 2>/dev/null)" || continue
++        [ -n "$caminho" ] || continue
++        # O /usr/bin/python3 do macOS e um atalho: sem as "Command Line Tools"
++        # ele abre uma janela oferecendo instala-las, em vez de rodar. (E com
++        # elas costuma ser o 3.9, que a conferencia abaixo recusa.)
++        if [ "$caminho" = "/usr/bin/python3" ] && [ "$(uname -s)" = "Darwin" ] \
++                && ! xcode-select -p >/dev/null 2>&1; then
++            continue
++        fi
++        if _sigft_python_serve "$caminho"; then
++            SIGFT_PY_BASE="$caminho"
++            return 0
++        fi
++    done
++    return 1
++}
++
++_sigft_criar_venv() {
++    echo "[SIG-FT] Primeira execucao: criando o ambiente virtual em"
++    echo "         $SIGFT_VENV_DIR"
++    echo "         Isso baixa as dependencias e leva alguns minutos. Nas proximas"
++    echo "         vezes o aplicativo abre direto."
++    echo
++    _sigft_achar_python
++    if [ -z "$SIGFT_PY_BASE" ]; then
++        echo "[ERRO] Nao achei o Python 3.10 (ou mais novo) neste Mac."
++        echo "       Instale o Python 3.12 de https://www.python.org/downloads/macos/"
++        echo "       e abra o SIG-FT.command de novo."
++        return 1
++    fi
++    echo "[SIG-FT] Usando o interpretador: $SIGFT_PY_BASE"
++    mkdir -p "$(dirname "$SIGFT_VENV_DIR")"
++    "$SIGFT_PY_BASE" -m venv "$SIGFT_VENV_DIR"
++    if [ ! -x "$SIGFT_VENV_DIR/bin/python" ]; then
++        echo
++        echo "[ERRO] Nao consegui criar o ambiente virtual em:"
++        echo "       $SIGFT_VENV_DIR"
++        echo "       Verifique se voce tem permissao de escrita nessa pasta."
++        return 1
++    fi
++    return 0
++}
++
++
++# =============================================================================
++#  Dependencias
++# =============================================================================
++
++_sigft_resolver_pip_args() {
++    # Rede corporativa com inspecao SSL (Zscaler e afins) costuma quebrar o pip.
++    # Mesmos argumentos e mesma ordem de prioridade do .bat:
++    #    1. variavel de ambiente SIGFT_PIP_ARGS
++    #    2. arquivo pip_corporativo.txt na raiz (1a linha que nao e comentario)
++    SIGFT_PIP_ARGS_EFETIVO="--isolated --index-url https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org"
++    local linha
++    if [ -f "$SIGFT_RAIZ/pip_corporativo.txt" ]; then
++        while IFS= read -r linha || [ -n "$linha" ]; do
++            linha="${linha%$'\r'}"
++            case "$linha" in ''|'#'*) continue ;; esac
++            SIGFT_PIP_ARGS_EFETIVO="$linha"
++            echo "[SIG-FT] Argumentos de pip vindos de pip_corporativo.txt."
++            break
++        done < "$SIGFT_RAIZ/pip_corporativo.txt"
++    fi
++    if [ -n "${SIGFT_PIP_ARGS:-}" ]; then
++        SIGFT_PIP_ARGS_EFETIVO="$SIGFT_PIP_ARGS"
++    fi
++}
++
++_sigft_hash_arquivo() {
++    # shasum vem em todo macOS; sha256sum e o do Linux; cksum (POSIX) e o
++    # ultimo recurso -- tambem muda quando o arquivo muda.
++    if command -v shasum >/dev/null 2>&1; then
++        shasum -a 256 "$1" | awk '{print $1}'
++    elif command -v sha256sum >/dev/null 2>&1; then
++        sha256sum "$1" | awk '{print $1}'
++    else
++        cksum "$1" | awk '{print $1 "-" $2}'
++    fi
++}
++
++_sigft_precisa_instalar() {
++    # 0 = precisa instalar: sem carimbo, ou o arquivo mudou desde a ultima
++    # instalacao que deu certo (o carimbo guarda o hash dela).
++    local atual anterior=""
++    atual="$(_sigft_hash_arquivo "$1")"
++    if [ -f "$2" ]; then
++        read -r anterior < "$2"
++    fi
++    [ "$atual" != "$anterior" ]
++}
++
++_sigft_instalar() {
++    # $1 = arquivo de requirements   $2 = nome curto do carimbo
++    local arquivo="$1" carimbo="$SIGFT_VENV_DIR/.sigft-$2.stamp" nome
++    [ -f "$arquivo" ] || return 0
++    _sigft_precisa_instalar "$arquivo" "$carimbo" || return 0
++    nome="$(basename "$arquivo")"
++    echo
++    echo "[SIG-FT] Instalando as dependencias de $nome ..."
++    # Atualizar o pip e so uma cortesia: se falhar, segue com o pip do venv --
++    # por isso nao ha checagem nesta linha, so na de baixo. Os argumentos vao
++    # sem aspas de proposito: sao varios.
++    # shellcheck disable=SC2086
++    "$SIGFT_PY" -m pip install --upgrade pip $SIGFT_PIP_ARGS_EFETIVO
++    # shellcheck disable=SC2086
++    if ! "$SIGFT_PY" -m pip install $SIGFT_PIP_ARGS_EFETIVO -r "$arquivo"; then
++        echo
++        echo "[ERRO] Falha ao instalar as dependencias de $nome."
++        _sigft_dica_rede
++        return 1
++    fi
++    _sigft_hash_arquivo "$arquivo" > "$carimbo"
++    echo "[SIG-FT] Dependencias de $nome instaladas."
++    echo
++    return 0
++}
++
++_sigft_instalar_navegador() {
++    # O pacote `playwright` traz so a biblioteca; o navegador (Chromium, ~150
++    # MB) e baixado a parte. UMA vez (carimbo no venv), e NUNCA derruba a
++    # abertura: em rede corporativa e o download que mais falha, e o
++    # aplicativo abre sem ele.
++    [ -n "${SIGFT_SEM_NAVEGADOR:-}" ] && return 0
++    local carimbo="$SIGFT_VENV_DIR/.sigft-playwright.stamp"
++    [ -f "$carimbo" ] && return 0
++    "$SIGFT_PY" -c "import playwright" >/dev/null 2>&1 || return 0
++
++    # Ja instalado por fora (outro projeto, ou a mao)? So carimba.
++    if "$SIGFT_PY" -c "from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(); b.close(); p.stop()" >/dev/null 2>&1; then
++        echo ok > "$carimbo"
++        return 0
++    fi
++
++    echo
++    echo "[SIG-FT] Baixando o navegador Chromium (~150 MB, so na primeira vez)."
++    echo "         Ele serve aos recursos que usam navegador (o robo do portal e a"
++    echo "         leitura de paginas que so montam com JavaScript). Se falhar, o"
++    echo "         aplicativo abre do mesmo jeito."
++    echo
++    # Rede com inspecao SSL: o download nao passa pelo pip, e sim pelo processo
++    # Node do Playwright, que so obedece a NODE_EXTRA_CA_CERTS.
++    if [ -z "${NODE_EXTRA_CA_CERTS:-}" ] && [ -n "${SSL_CERT_FILE:-}" ]; then
++        export NODE_EXTRA_CA_CERTS="$SSL_CERT_FILE"
++    fi
++    if ! "$SIGFT_PY" -m playwright install chromium; then
++        echo
++        echo "[SIG-FT] Nao consegui baixar o navegador -- SEGUINDO ASSIM MESMO."
++        echo "         Os recursos que dependem dele ficam indisponiveis; todo o"
++        echo "         resto funciona. Para tentar de novo:"
++        echo "         \"$SIGFT_PY\" -m playwright install chromium"
++        echo
++        return 0
++    fi
++    echo ok > "$carimbo"
++    echo "[SIG-FT] Navegador instalado."
++    echo
++    return 0
++}
++
++_sigft_dica_rede() {
++    echo
++    echo "       Se voce esta em rede corporativa com inspecao SSL (Zscaler), o pip"
++    echo "       costuma falhar com \"SSLError\" ou \"CERTIFICATE_VERIFY_FAILED\"."
++    echo "       Copie pip_corporativo.txt.exemplo para pip_corporativo.txt e ajuste"
++    echo "       os argumentos (indice interno, proxy, --trusted-host) conforme o"
++    echo "       que o time de TI indicar. Detalhes no README.md, secao"
++    echo "       \"Rede corporativa (Zscaler)\"."
++    echo "       No Mac, o PySide6 (a interface) exige o macOS 12 ou mais novo."
++}
+diff --git a/sigft/app/conferencia.py b/sigft/app/conferencia.py
+index 8b1a948..3e25541 100644
+--- a/sigft/app/conferencia.py
++++ b/sigft/app/conferencia.py
+@@ -54,6 +54,7 @@ MODULOS_ESSENCIAIS = [
+     "sigft.core.excel.cirurgico",
+     "playwright",
+     "requests",
++    # a interface antiga: fica enquanto o `--ctk` existir (E6.1).
+     "customtkinter",
+     "PIL",
+     "fitz",           # pymupdf: primeira camada da leitura de PDF
+@@ -65,6 +66,29 @@ MODULOS_ESSENCIAIS = [
+     "sentencepiece",
+     "sigft.core.tradutor_local",
+     "sigft.services.translator",
++    # a interface Qt, a oficial desde o corte (E6.1, 2026-10-10).
++    "PySide6.QtCore",
++    "PySide6.QtGui",
++    "PySide6.QtWidgets",
++    "shiboken6",
++    "sigft.app_qt.main",
++    # As telas Qt são importadas na PRIMEIRA visita (as fábricas de
++    # `sigft.app_qt.main.TELAS`): uma que ficasse fora do pacote só apareceria
++    # quando alguém clicasse no menu. `tests/test_conferencia_do_pacote.py`
++    # trava esta lista com o registro: tela nova em `TELAS` entra aqui também.
++    "sigft.app_qt.views.home",
++    "sigft.app_qt.views.translator",
++    "sigft.app_qt.views.aplicacao_lmr",
++    "sigft.app_qt.views.cria_fichas",
++    "sigft.app_qt.views.pdm",
++    "sigft.app_qt.views.analyzer",
++    "sigft.app_qt.views.upload_conditions",
++    "sigft.app_qt.views.upload_tech_specs",
++    "sigft.app_qt.views.correcao_pdm",
++    "sigft.app_qt.views.copia_fichas",
++    "sigft.app_qt.views.autospec",
++    "sigft.app_qt.views.pmib_manager",
++    "sigft.app_qt.views.busca_pmib",
+ ]
+ 
+ # A frase que a conferência traduz dentro do .exe, e o que a tradução tem de
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index f8b3ea8..9b823bc 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -425,8 +425,38 @@ def main() -> None:
+     instancia.encerrar(0)
+ 
+ 
++def _visitar_telas(janela: SIG_FT_App) -> tuple[list[str], list[tuple[str, BaseException]]]:
++    """Abre cada tela de `TELAS` pelo funil de sempre (`show_frame`).
++
++    As telas nascem na primeira visita: sem isto, um módulo de tela que ficou
++    fora do pacote só apareceria quando alguém clicasse no menu. As bloqueadas
++    ficam de fora -- `show_frame` as recusa de propósito.
++    """
++    linhas: list[str] = []
++    quebradas: list[tuple[str, BaseException]] = []
++    for chave in TELAS:
++        if chave in catalogo.TELAS_BLOQUEADAS:
++            continue
++        janela.show_frame(chave)
++        tela = janela.pilha.currentWidget()
++        if isinstance(tela, TelaComErro):
++            quebradas.append((chave, tela.erro))
++            linhas.append(f"  FALHOU  {chave}: {type(tela.erro).__name__}: {tela.erro}")
++        else:
++            linhas.append(f"  OK      {chave}")
++    return linhas, quebradas
++
++
+ def _smoke() -> int:
+-    """Monta a janela principal e sai, sem laço de eventos (para o CI)."""
++    """Monta a janela, visita as telas e sai, sem laço de eventos (Release e CI).
++
++    O relatório é GRAVADO, e não só impresso: o `.exe` é `console=False`, e o
++    que ele imprime não chega ao passo do Release, que lê o arquivo. Mesma
++    lição do `_smoke` de `sigft/app/main.py` (run #3 de 2026-09-21), com os
++    avisos de backend nos dois caminhos.
++    """
++    from sigft.app.conferencia import ARQUIVO_JANELA, gravar_relatorio
++
+     avisos: list[str] = []
+     try:
+         _preparar_qt()
+@@ -436,17 +466,32 @@ def _smoke() -> int:
+                 f"{type(erro).__name__}: {erro}"))
+         janela = SIG_FT_App()
+         janela.fechar_sem_perguntar = True
++        linhas, quebradas = _visitar_telas(janela)
+         janela.close()
+     except Exception as erro:  # noqa: BLE001 -- é o que se quer relatar
+-        for aviso in avisos:
+-            print(aviso)
+-        print(f"[smoke] FALHOU: {type(erro).__name__}: {erro}")
+-        traceback.print_exc()
++        relatorio = "\n".join(avisos + [
++            f"[smoke] FALHOU: {type(erro).__name__}: {erro}", "",
++            traceback.format_exc()])
++        gravar_relatorio(ARQUIVO_JANELA, relatorio)
++        print(relatorio)
+         return 1
+-    for aviso in avisos:
+-        print(aviso)
+-    print("[smoke] a janela principal Qt montou e fechou sem erro.")
+-    return 0
++
++    partes = avisos + ["[smoke] telas visitadas:", *linhas]
++    if (bloqueadas := [chave for chave in TELAS if chave in catalogo.TELAS_BLOQUEADAS]):
++        partes.append(f"[smoke] bloqueadas no menu (nao visitadas): {', '.join(bloqueadas)}")
++    if quebradas:
++        partes.append(f"[smoke] FALHOU: telas que nao abriram ({len(quebradas)}): "
++                      + ", ".join(chave for chave, _ in quebradas))
++        for chave, erro in quebradas:
++            partes += ["", f"--- {chave} ---",
++                       "".join(traceback.format_exception(erro)).rstrip()]
++    else:
++        partes.append(f"[smoke] a janela principal Qt montou, as {len(linhas)} telas "
++                      "abriram e ela fechou sem erro.")
++    relatorio = "\n".join(partes)
++    gravar_relatorio(ARQUIVO_JANELA, relatorio)
++    print(relatorio)
++    return 1 if quebradas else 0
+ 
+ 
+ def executar_da_linha_de_comando() -> None:
+diff --git a/sigft/app_qt/views/nao_migrada.py b/sigft/app_qt/views/nao_migrada.py
+index ded97f9..d5dda31 100644
+--- a/sigft/app_qt/views/nao_migrada.py
++++ b/sigft/app_qt/views/nao_migrada.py
+@@ -12,7 +12,7 @@ class TelaNaoMigrada(QWidget):
+         layout = QVBoxLayout(self)
+         self.mensagem = QLabel(
+             f"A tela \"{nome}\" ainda não foi migrada para a interface nova.\n"
+-            "Use a versão atual (python frontend.py) para ela.")
++            "Use a interface antiga (python frontend.py --ctk) para ela.")
+         self.mensagem.setAlignment(Qt.AlignmentFlag.AlignCenter)
+         self.mensagem.setStyleSheet("font-size: 16px; color: #B3B3B3;")
+         layout.addWidget(self.mensagem)
+@@ -24,6 +24,8 @@ class TelaComErro(QWidget):
+     def __init__(self, nome: str, erro: BaseException, parent=None) -> None:
+         super().__init__(parent)
+         self.setObjectName("tela")
++        # O `--smoke` lê o motivo (com a pilha) daqui para o relatório do Release.
++        self.erro = erro
+         layout = QVBoxLayout(self)
+         self.mensagem = QLabel(
+             f"A tela \"{nome}\" não conseguiu abrir.\n\n{type(erro).__name__}: {erro}\n\n"
+diff --git a/tests/test_conferencia_do_pacote.py b/tests/test_conferencia_do_pacote.py
+index 30373a0..e7179e0 100644
+--- a/tests/test_conferencia_do_pacote.py
++++ b/tests/test_conferencia_do_pacote.py
+@@ -299,3 +299,71 @@ def test_a_lista_padrao_cobre_o_tradutor_local():
+     for modulo in ("ctranslate2", "sentencepiece", "sigft.core.tradutor_local",
+                    "sigft.services.translator"):
+         assert modulo in conferencia.MODULOS_ESSENCIAIS, modulo
++
++
++# =============================================================================
++# A interface Qt dentro do pacote (E6.1, o corte)
++# =============================================================================
++# Desde o corte o `.exe` abre a Qt. As telas Qt sao importadas na PRIMEIRA
++# visita (as fabricas de `sigft.app_qt.main.TELAS`): uma que o PyInstaller
++# deixasse de fora passaria pela abertura e pelo `--smoke` de um build sem a
++# conferencia, e a pessoa descobriria ao clicar no menu. A conferencia procura
++# cada uma dentro do `.exe` antes de publicar.
++
++def test_a_lista_padrao_cobre_o_qt():
++    from sigft.app import conferencia
++
++    for modulo in ("PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
++                   "shiboken6", "sigft.app_qt.main"):
++        assert modulo in conferencia.MODULOS_ESSENCIAIS, modulo
++
++
++def _modulos_da_fabrica(fabrica) -> set:
++    """Os modulos que uma fabrica de `TELAS` precisa, lidos do bytecode dela.
++
++    Dois formatos convivem no registro: a fabrica com o import DENTRO
++    (`from sigft.app_qt.views.x import Tela`, o `IMPORT_NAME`) e o lambda que
++    usa uma classe importada no topo do `main.py` (o `LOAD_GLOBAL`, cujo
++    modulo e o `__module__` da classe). Lido do objeto vivo, e nao de uma
++    lista escrita aqui: uma tela nova entra no teste sozinha.
++    """
++    import dis
++
++    modulos = set()
++    for instrucao in dis.get_instructions(fabrica):
++        if instrucao.opname == "IMPORT_NAME":
++            modulos.add(instrucao.argval)
++        elif instrucao.opname == "LOAD_GLOBAL":
++            objeto = fabrica.__globals__.get(instrucao.argval)
++            if isinstance(objeto, type) and objeto.__module__.startswith("sigft.app_qt."):
++                modulos.add(objeto.__module__)
++    return modulos
++
++
++def test_toda_tela_registrada_esta_na_conferencia_do_pacote():
++    """As duas listas andam juntas: tela registrada em `TELAS` sem entrar na
++    conferencia reprova aqui, e tela de `MODULOS_ESSENCIAIS` que saiu do
++    registro tambem (a conferencia acusaria FALTA de um modulo que nem existe
++    mais, e o Release pararia por nada)."""
++    from sigft.app import conferencia
++    from sigft.app_qt import main as qmain
++
++    essenciais = set(conferencia.MODULOS_ESSENCIAIS)
++    das_telas = {}
++    for chave, fabrica in qmain.TELAS.items():
++        modulos = _modulos_da_fabrica(fabrica)
++        assert modulos, f"nao achei o modulo da tela {chave!r} na fabrica dela"
++        for modulo in modulos:
++            das_telas[modulo] = chave
++
++    faltando = {m: chave for m, chave in das_telas.items() if m not in essenciais}
++    assert not faltando, (
++        "telas registradas em `sigft.app_qt.main.TELAS` que a conferencia do "
++        "pacote nao procura -- acrescente em `conferencia.MODULOS_ESSENCIAIS`: "
++        + ", ".join(f"{m} (tela {c!r})" for m, c in sorted(faltando.items())))
++
++    sobrando = sorted(m for m in essenciais
++                      if m.startswith("sigft.app_qt.views.") and m not in das_telas)
++    assert not sobrando, (
++        "modulos de tela na conferencia que nenhuma fabrica de `TELAS` importa "
++        "mais -- tire de `conferencia.MODULOS_ESSENCIAIS`: " + ", ".join(sobrando))
+diff --git a/tests/test_lancador_mac.py b/tests/test_lancador_mac.py
+new file mode 100644
+index 0000000..253d3f2
+--- /dev/null
++++ b/tests/test_lancador_mac.py
+@@ -0,0 +1,293 @@
++"""O lancador do Mac: `SIG-FT.command` + `scripts/_bootstrap_venv.sh` (E6.1).
++
++Mesmo papel do `SIG-FT.bat` + `scripts/_bootstrap_venv.bat`, no que vale no Mac:
++Python 3.10+, venv em `<raiz>/.venv` (ou em `~/Library/Application Support`
++quando a pasta e de servico de sincronizacao), `requirements.txt` instalado so
++quando muda (carimbo com o hash), navegador do Playwright uma vez, e a janela
++do Terminal aberta com a mensagem quando algo da errado.
++
++Os testes rodam os scripts DE VERDADE, com um "python" de mentira que anota o
++que lhe pedem: provam a logica do lancador, nao o pip.
++"""
++import os
++import shutil
++import stat
++import subprocess
++import sys
++import time
++from pathlib import Path
++
++import pytest
++
++RAIZ = Path(__file__).resolve().parent.parent
++COMMAND = RAIZ / "SIG-FT.command"
++BOOTSTRAP = RAIZ / "scripts" / "_bootstrap_venv.sh"
++BASH = shutil.which("bash")
++
++pytestmark = pytest.mark.skipif(sys.platform == "win32" or BASH is None,
++                                reason="lancador do Mac: precisa de bash num sistema POSIX")
++
++# Anota "diretorio-fisico|argumentos" e responde com o codigo que o teste pedir.
++_PYTHON_DE_MENTIRA = """#!/bin/sh
++printf '%s\\n' "$(pwd -P)|$*" >> "$SIGFT_TESTE_REGISTRO"
++case "$*" in
++  *frontend.py*) exit "${SIGFT_TESTE_CODIGO_APP:-0}" ;;
++  *" -r "*) exit "${SIGFT_TESTE_CODIGO_PIP:-0}" ;;
++esac
++exit 0
++"""
++
++
++def _executavel(caminho: Path, conteudo: str) -> Path:
++    caminho.parent.mkdir(parents=True, exist_ok=True)
++    caminho.write_text(conteudo, encoding="utf-8")
++    caminho.chmod(caminho.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
++    return caminho
++
++
++@pytest.fixture
++def venv(tmp_path):
++    """Um venv de mentira: `bin/python` e o python que anota."""
++    pasta = tmp_path / "venv"
++    _executavel(pasta / "bin" / "python", _PYTHON_DE_MENTIRA)
++    return pasta
++
++
++def _ambiente(tmp_path, **extra):
++    ambiente = {k: v for k, v in os.environ.items()
++                if not k.startswith(("SIGFT_", "PIP_"))}
++    ambiente.update(HOME=str(tmp_path / "home"),
++                    SIGFT_TESTE_REGISTRO=str(tmp_path / "registro.txt"))
++    ambiente.update({k: str(v) for k, v in extra.items()})
++    return ambiente
++
++
++def _bash(trecho, tmp_path, **extra):
++    """Roda `trecho` num bash que acabou de fazer `source` do bootstrap."""
++    script = f'source "{BOOTSTRAP}" || exit 99\n{trecho}'
++    return subprocess.run([BASH, "-c", script], env=_ambiente(tmp_path, **extra),
++                          cwd=str(tmp_path), capture_output=True, text=True, timeout=60)
++
++
++def _registro(tmp_path):
++    arquivo = tmp_path / "registro.txt"
++    return arquivo.read_text(encoding="utf-8").splitlines() if arquivo.exists() else []
++
++
++# -- os dois arquivos ------------------------------------------------------------
++
++@pytest.mark.parametrize("script", [COMMAND, BOOTSTRAP], ids=lambda p: p.name)
++def test_sintaxe_do_script(script):
++    resultado = subprocess.run([BASH, "-n", str(script)], capture_output=True, text=True)
++    assert resultado.returncode == 0, resultado.stderr
++
++
++@pytest.mark.parametrize("script", [COMMAND, BOOTSTRAP], ids=lambda p: p.name)
++def test_bit_de_execucao_gravado_no_git(script):
++    """Sem o bit, o clique duplo no Finder recusa o arquivo. E e o modo gravado
++    no git que chega a quem baixa o ZIP ou clona -- nao o do disco de quem
++    commitou."""
++    relativo = script.relative_to(RAIZ).as_posix()
++    resultado = subprocess.run(["git", "ls-files", "-s", "--", relativo], cwd=str(RAIZ),
++                               capture_output=True, text=True)
++    if resultado.returncode != 0:
++        pytest.skip("fora de um repositorio git (ZIP): o modo nao e conferivel")
++    assert resultado.stdout.strip(), f"{relativo} nao esta no git"
++    assert resultado.stdout.split()[0] == "100755", (
++        f"{relativo} esta no git sem o bit de execucao: git update-index --chmod=+x {relativo}")
++
++
++# -- o carimbo: so instala quando o requirements muda -------------------------------
++
++def test_instala_na_primeira_vez_e_de_novo_so_quando_o_arquivo_muda(tmp_path, venv):
++    requisitos = tmp_path / "requirements.txt"
++    requisitos.write_text("pandas\n", encoding="utf-8")
++
++    resultado = _bash(
++        f'_sigft_instalar "{requisitos}" requirements; echo "rc=$?"\n'
++        f'_sigft_instalar "{requisitos}" requirements; echo "rc=$?"\n'
++        f'echo openpyxl >> "{requisitos}"\n'
++        f'_sigft_instalar "{requisitos}" requirements; echo "rc=$?"\n',
++        tmp_path, SIGFT_VENV_DIR=venv, SIGFT_PY=venv / "bin" / "python",
++        SIGFT_PIP_ARGS_EFETIVO="--isolated")
++
++    assert resultado.stdout.count("rc=0") == 3, resultado.stdout + resultado.stderr
++    instalacoes = [linha for linha in _registro(tmp_path) if f"-r {requisitos}" in linha]
++    assert len(instalacoes) == 2, _registro(tmp_path)
++    assert all("--isolated" in linha for linha in instalacoes)
++    assert (venv / ".sigft-requirements.stamp").is_file()
++
++
++def test_pip_que_falha_nao_grava_o_carimbo_e_tenta_de_novo(tmp_path, venv):
++    requisitos = tmp_path / "requirements.txt"
++    requisitos.write_text("pandas\n", encoding="utf-8")
++    comum = dict(SIGFT_VENV_DIR=venv, SIGFT_PY=venv / "bin" / "python",
++                 SIGFT_PIP_ARGS_EFETIVO="--isolated")
++
++    falhou = _bash(f'_sigft_instalar "{requisitos}" requirements; echo "rc=$?"',
++                   tmp_path, SIGFT_TESTE_CODIGO_PIP=1, **comum)
++
++    assert "rc=0" not in falhou.stdout
++    assert "[ERRO]" in falhou.stdout
++    assert not (venv / ".sigft-requirements.stamp").exists()
++
++    de_novo = _bash(f'_sigft_instalar "{requisitos}" requirements; echo "rc=$?"',
++                    tmp_path, **comum)
++
++    assert "rc=0" in de_novo.stdout
++    assert len([linha for linha in _registro(tmp_path) if " -r " in linha]) == 2
++
++
++# -- onde fica o venv ----------------------------------------------------------------
++
++@pytest.mark.parametrize(("caminho", "sincronizada"), [
++    ("/Users/ana/Library/Mobile Documents/com~apple~CloudDocs/SIG-FT", True),   # iCloud Drive
++    ("/Users/ana/Library/CloudStorage/OneDrive-GEVernova/SIG-FT", True),
++    ("/Users/ana/Library/CloudStorage/GoogleDrive-ana@ge.com/Meu Drive/SIG-FT", True),
++    ("/Users/ana/OneDrive - GE Vernova/SIG-FT", True),
++    ("/Users/ana/Dropbox/SIG-FT", True),
++    ("/Users/ana/Google Drive/SIG-FT", True),
++    ("/Users/ana/Box Sync/SIG-FT", True),
++    ("/Users/ana/Downloads/SIG-FT-main", False),
++    ("/Users/ana/Projetos/dropboxer/SIG-FT", False),
++])
++def test_reconhece_pasta_de_servico_de_sincronizacao(tmp_path, caminho, sincronizada):
++    resultado = _bash(f'_sigft_pasta_sincronizada "{caminho}" && echo SIM || echo NAO', tmp_path)
++    assert resultado.stdout.strip() == ("SIM" if sincronizada else "NAO"), resultado.stderr
++
++
++def test_reconhece_o_icloud_mesa_e_documentos(tmp_path):
++    """Com "Mesa e Documentos" no iCloud, o caminho continua `~/Documents/...`:
++    a pista e o link que o iCloud Drive ganha para a pasta."""
++    casa = tmp_path / "home"
++    (casa / "Documents" / "SIG-FT").mkdir(parents=True)
++    nuvem = casa / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
++    nuvem.mkdir(parents=True)
++    projeto = casa / "Documents" / "SIG-FT"
++    pergunta = f'_sigft_pasta_sincronizada "{projeto}" && echo SIM || echo NAO'
++
++    assert _bash(pergunta, tmp_path).stdout.strip() == "NAO"
++    (nuvem / "Documents").symlink_to(casa / "Documents")
++    assert _bash(pergunta, tmp_path).stdout.strip() == "SIM"
++
++
++def test_venv_fica_fora_da_pasta_sincronizada(tmp_path):
++    raiz = tmp_path / "Dropbox" / "SIG-FT"
++    raiz.mkdir(parents=True)
++
++    resultado = _bash('_sigft_escolher_venv; echo "VENV=$SIGFT_VENV_DIR"', tmp_path,
++                      SIGFT_RAIZ=raiz)
++
++    suporte = tmp_path / "home" / "Library" / "Application Support" / "SIG-FT" / "venv"
++    assert f"VENV={suporte}" in resultado.stdout, resultado.stdout + resultado.stderr
++
++
++def test_venv_fica_na_raiz_fora_de_pasta_sincronizada(tmp_path):
++    raiz = tmp_path / "Projetos" / "SIG-FT"
++    raiz.mkdir(parents=True)
++
++    resultado = _bash('_sigft_escolher_venv; echo "VENV=$SIGFT_VENV_DIR"', tmp_path,
++                      SIGFT_RAIZ=raiz)
++
++    assert f"VENV={raiz / '.venv'}" in resultado.stdout, resultado.stdout + resultado.stderr
++
++
++def test_sigft_venv_manda_no_lugar_do_venv(tmp_path):
++    raiz = tmp_path / "Dropbox" / "SIG-FT"
++    raiz.mkdir(parents=True)
++
++    resultado = _bash('_sigft_escolher_venv; echo "VENV=$SIGFT_VENV_DIR"', tmp_path,
++                      SIGFT_RAIZ=raiz, SIGFT_VENV=tmp_path / "meu-venv")
++
++    assert f"VENV={tmp_path / 'meu-venv'}" in resultado.stdout
++
++
++# -- o Python ----------------------------------------------------------------------
++
++def test_escolhe_o_primeiro_python_que_serve(tmp_path):
++    # O de mentira nao interpreta nada: responde a conferencia de versao com o
++    # codigo de saida (1 = antigo demais).
++    velho = _executavel(tmp_path / "py" / "python-velho", "#!/bin/sh\nexit 1\n")
++    novo = _executavel(tmp_path / "py" / "python-novo", "#!/bin/sh\nexit 0\n")
++    outro = _executavel(tmp_path / "py" / "python-outro", "#!/bin/sh\nexit 0\n")
++
++    resultado = _bash(f'_sigft_achar_python "{velho}" "{novo}" "{outro}"; '
++                      f'echo "BASE=$SIGFT_PY_BASE"', tmp_path)
++
++    assert f"BASE={novo}" in resultado.stdout, resultado.stdout + resultado.stderr
++
++
++def test_a_conferencia_de_versao_aceita_um_python_de_verdade(tmp_path):
++    """O Python de mentira so devolve codigo; este prova que o trecho que o
++    lancador manda ao interpretador (`-c ...`) e Python valido e aceita 3.10+."""
++    resultado = _bash(f'_sigft_python_serve "{sys.executable}" && echo SERVE', tmp_path)
++    assert ("SERVE" in resultado.stdout) == (sys.version_info >= (3, 10)), resultado.stderr
++
++
++def test_sem_python_explica_e_da_o_link(tmp_path):
++    resultado = _bash('_sigft_achar_python() { SIGFT_PY_BASE=""; }\n'
++                      '_sigft_criar_venv; echo "rc=$?"', tmp_path,
++                      SIGFT_VENV_DIR=tmp_path / "venv-novo")
++
++    assert "rc=1" in resultado.stdout
++    assert "python.org" in resultado.stdout
++    assert "3.10" in resultado.stdout
++
++
++def test_primeira_abertura_cria_o_venv_na_raiz_e_instala(tmp_path, venv):
++    """O caminho de quem acabou de baixar: sem venv, acha um Python 3.10+, cria
++    `<raiz>/.venv` com ele e instala o `requirements.txt` com o python do venv."""
++    raiz = tmp_path / "Projetos" / "SIG-FT"
++    raiz.mkdir(parents=True)
++    (raiz / "requirements.txt").write_text("pandas\n", encoding="utf-8")
++    # O "Python do sistema": confere a versao (exit 0) e, no `-m venv DIR`,
++    # monta DIR com o python que anota.
++    _executavel(tmp_path / "bin" / "python3.12", (
++        "#!/bin/sh\n"
++        "printf '%s\\n' \"BASE|$*\" >> \"$SIGFT_TESTE_REGISTRO\"\n"
++        "if [ \"$1\" = -m ] && [ \"$2\" = venv ]; then\n"
++        f"  mkdir -p \"$3/bin\" && cp \"{venv / 'bin' / 'python'}\" \"$3/bin/python\"\n"
++        "fi\n"
++        "exit 0\n"))
++
++    resultado = _bash('sigft_bootstrap; echo "rc=$?"; echo "PY=$SIGFT_PY"', tmp_path,
++                      SIGFT_RAIZ=raiz, SIGFT_SEM_NAVEGADOR=1,
++                      PATH=f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
++
++    assert "rc=0" in resultado.stdout, resultado.stdout + resultado.stderr
++    assert f"PY={raiz / '.venv' / 'bin' / 'python'}" in resultado.stdout
++    registro = _registro(tmp_path)
++    assert f"BASE|-m venv {raiz / '.venv'}" in registro, registro
++    assert any(f"-r {raiz / 'requirements.txt'}" in linha and not linha.startswith("BASE|")
++               for linha in registro), registro
++
++
++# -- o SIG-FT.command inteiro ----------------------------------------------------------
++
++@pytest.mark.parametrize("argumentos", [[], ["--ctk"]])
++def test_command_roda_o_frontend_da_raiz_com_o_python_do_venv(tmp_path, venv, argumentos):
++    resultado = subprocess.run(
++        [str(COMMAND), *argumentos], input="", capture_output=True, text=True, timeout=60,
++        cwd=str(tmp_path), env=_ambiente(tmp_path, SIGFT_VENV=venv, SIGFT_SEM_NAVEGADOR=1))
++
++    assert resultado.returncode == 0, resultado.stdout + resultado.stderr
++    esperado = f"{RAIZ}|{RAIZ / 'frontend.py'}" + "".join(f" {a}" for a in argumentos)
++    assert esperado in _registro(tmp_path), _registro(tmp_path)
++
++
++@pytest.mark.parametrize("falha", ["SIGFT_TESTE_CODIGO_APP", "SIGFT_TESTE_CODIGO_PIP"])
++def test_command_com_erro_deixa_a_mensagem_na_tela_ate_o_enter(tmp_path, venv, falha):
++    processo = subprocess.Popen(
++        [str(COMMAND)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT, text=True, cwd=str(tmp_path),
++        env=_ambiente(tmp_path, SIGFT_VENV=venv, SIGFT_SEM_NAVEGADOR=1, **{falha: 3}))
++    try:
++        time.sleep(1.5)
++        assert processo.poll() is None, "fechou sem esperar a pessoa ler o erro"
++        saida, _ = processo.communicate("\n", timeout=30)
++    finally:
++        if processo.poll() is None:
++            processo.kill()
++
++    assert processo.returncode == 1
++    assert "Encerrado com erro" in saida
+diff --git a/tests/test_qt_corte.py b/tests/test_qt_corte.py
+new file mode 100644
+index 0000000..56fddd3
+--- /dev/null
++++ b/tests/test_qt_corte.py
+@@ -0,0 +1,150 @@
++"""O corte (E6.1): `python frontend.py` abre a interface Qt; `--ctk`, a antiga.
++
++`frontend.py` e o que o `SIG-FT.spec` empacota e o que o `SIG-FT.bat` (e, no
++Mac, o `SIG-FT.command`) roda: trocar a interface oficial e trocar o despacho
++dele. O que se cobra aqui:
++
++1. sem `--ctk`, ele entrega a linha de comando a Qt e NAO segue adiante -- o
++   modo Qt nao importa tkinter nem CustomTkinter (no Mac com o Python do
++   Homebrew nem ha Tk), e nao cai no CTk nem se a Qt voltar;
++2. `--smoke` pelo ponto de entrada do bundle grava o relatorio da Qt, que e o
++   que o passo do Release le;
++3. com `--ctk`, tudo como antes, inclusive `--ctk --smoke`;
++4. `import frontend` continua dando os nomes do CustomTkinter (os reexports).
++"""
++import os
++import runpy
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++RAIZ = Path(__file__).resolve().parent.parent
++FRONTEND = RAIZ / "frontend.py"
++
++# Roda o `frontend.py` como `__main__` num interpretador limpo (o conftest dubla
++# o Tk NESTE processo), com tkinter/customtkinter bloqueados por um finder: se
++# o despacho chegar aos imports do CTk, o import estoura aqui.
++_RODAR_SEM_TK = r"""
++import importlib.abc, runpy, sys, types
++sys.path.insert(0, {raiz!r})
++
++class _SemTk(importlib.abc.MetaPathFinder):
++    def find_spec(self, nome, caminho=None, alvo=None):
++        if nome.split('.')[0] in ('tkinter', '_tkinter', 'customtkinter'):
++            raise ImportError('Tk bloqueado pelo teste: ' + nome)
++
++sys.meta_path.insert(0, _SemTk())
++
++if {qt_falsa!r}:
++    # A Qt de mentira VOLTA normalmente: o frontend tem de sair mesmo assim.
++    import sigft.app_qt
++    falsa = types.ModuleType('sigft.app_qt.main')
++    falsa.executar_da_linha_de_comando = lambda: print('QT ABRIU COM', sys.argv[1:])
++    sys.modules['sigft.app_qt.main'] = falsa
++    sigft.app_qt.main = falsa
++
++sys.argv = [{frontend!r}, *{argumentos!r}]
++try:
++    runpy.run_path({frontend!r}, run_name='__main__')
++    print('VOLTOU SEM SAIR')
++finally:
++    print('TK NO PROCESSO:', sorted(m for m in sys.modules
++                                    if m.split('.')[0] in ('tkinter', 'customtkinter')))
++"""
++
++
++def _rodar_sem_tk(argumentos, cwd, *, qt_falsa):
++    codigo = _RODAR_SEM_TK.format(raiz=str(RAIZ), frontend=str(FRONTEND),
++                                  argumentos=list(argumentos), qt_falsa=qt_falsa)
++    ambiente = {**os.environ, "QT_QPA_PLATFORM": "offscreen",
++                "SIGFT_DADOS_DIR": str(Path(cwd) / "dados")}
++    return subprocess.run([sys.executable, "-c", codigo], cwd=str(cwd), env=ambiente,
++                          capture_output=True, text=True, timeout=180)
++
++
++@pytest.mark.parametrize("argumentos", [[], ["--smoke"]])
++def test_sem_ctk_entrega_a_linha_de_comando_a_qt_e_nao_toca_no_tk(tmp_path, argumentos):
++    resultado = _rodar_sem_tk(argumentos, tmp_path, qt_falsa=True)
++
++    assert "Tk bloqueado" not in resultado.stderr, (
++        "o frontend.py chegou aos imports do CustomTkinter sem `--ctk`:\n"
++        + resultado.stderr[-1500:])
++    assert f"QT ABRIU COM {argumentos}" in resultado.stdout, resultado.stderr[-1500:]
++    assert "VOLTOU SEM SAIR" not in resultado.stdout, (
++        "a Qt voltou e o frontend.py seguiu em frente (cairia nos imports do CTk)")
++    assert "TK NO PROCESSO: []" in resultado.stdout
++    assert resultado.returncode == 0, resultado.stderr[-1500:]
++
++
++def test_smoke_pelo_ponto_de_entrada_grava_o_relatorio_da_qt(tmp_path):
++    """O passo do Release, com a Qt de verdade: `SIG-FT.exe --smoke` le o
++    `conferencia-da-janela.txt`. Com o Tk bloqueado, so a Qt consegue grava-lo.
++
++    O codigo de saida nao e cobrado: ele depende das dependencias pesadas
++    deste ambiente (backend que nao carrega so vira aviso). O que se prova e o
++    caminho: ponto de entrada -> smoke da Qt -> relatorio em arquivo.
++    """
++    resultado = _rodar_sem_tk(["--smoke"], tmp_path, qt_falsa=False)
++
++    assert "Tk bloqueado" not in resultado.stderr, resultado.stderr[-1500:]
++    relatorio = tmp_path / "conferencia-da-janela.txt"
++    assert relatorio.is_file(), (
++        f"o --smoke nao gravou o relatorio.\ncodigo: {resultado.returncode}\n"
++        f"stdout: {resultado.stdout[-800:]}\nstderr: {resultado.stderr[-1500:]}")
++    assert "[smoke]" in relatorio.read_text(encoding="utf-8")
++
++
++# -- `--ctk` e `import frontend`: o CustomTkinter de antes ----------------------
++# Neste processo o conftest dubla o Tk, entao o `frontend.py` roda inteiro; os
++# dois despachantes sao trocados por anotadores.
++
++@pytest.fixture
++def despachos(monkeypatch):
++    from sigft.app import main as ctk
++    from sigft.app_qt import main as qt
++
++    chamados = []
++    monkeypatch.setattr(ctk, "executar_da_linha_de_comando", lambda: chamados.append("ctk"))
++    monkeypatch.setattr(qt, "executar_da_linha_de_comando", lambda: chamados.append("qt"))
++    return chamados
++
++
++@pytest.mark.parametrize("argumentos", [["--ctk"], ["--ctk", "--smoke"]])
++def test_com_ctk_abre_a_interface_antiga(despachos, monkeypatch, argumentos):
++    # `--ctk --smoke`: quem trata o `--smoke` e o despachante do CTk, que o
++    # `tests/test_ponto_de_entrada.py` cobre.
++    monkeypatch.setattr(sys, "argv", [str(FRONTEND), *argumentos])
++
++    runpy.run_path(str(FRONTEND), run_name="__main__")
++
++    assert despachos == ["ctk"]
++
++
++def _requisitos(nome):
++    return [linha.split(";")[0].strip().lower()
++            for linha in (RAIZ / nome).read_text(encoding="utf-8").splitlines()
++            if linha.strip() and not linha.strip().startswith("#")]
++
++
++def test_requirements_de_producao_instala_o_pyside6():
++    """Sem ele, quem abre pelo `SIG-FT.bat` (ou pelo `SIG-FT.command`) cai num
++    `ModuleNotFoundError` na abertura: o CI nunca instala o `requirements.txt`,
++    entao so este teste ve. `>=6.9` porque `sigft/app_qt/estilo.py` usa
++    `QFontDatabase.setApplicationEmojiFontFamilies`, que so existe dali em
++    diante. (No `requirements-dev.txt` ele tambem esta, mas la a falta ja
++    quebraria a suite Qt inteira sozinha.)"""
++    assert "pyside6-essentials>=6.9" in _requisitos("requirements.txt")
++
++
++def test_import_frontend_continua_dando_os_nomes_do_customtkinter(despachos, monkeypatch):
++    from sigft.app import main as ctk
++
++    monkeypatch.setattr(sys, "argv", ["pytest"])
++
++    nomes = runpy.run_path(str(FRONTEND), run_name="frontend")
++
++    assert despachos == [], "importar o frontend abriu uma interface"
++    assert nomes["SIG_FT_App"] is ctk.SIG_FT_App
++    assert nomes["main"] is ctk.main
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index 6d28e65..82765b8 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -82,12 +82,14 @@ def test_fechar_com_tarefa_pergunta_antes(app_qt, monkeypatch):
+ 
+ 
+ def test_smoke_monta_e_sai_com_zero(qt_interface, monkeypatch, tmp_path):
++    monkeypatch.chdir(tmp_path)  # o smoke grava o relatório no diretório de trabalho
+     monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
+     monkeypatch.setattr(qmain.backends, "carregar_todos", lambda **k: None)
+     assert qmain._smoke() == 0
+ 
+ 
+ def test_smoke_relata_backend_que_nao_carregou(qt_interface, monkeypatch, tmp_path, capsys):
++    monkeypatch.chdir(tmp_path)
+     monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
+ 
+     def carregar(ao_falhar=None, **_):
+@@ -114,6 +116,7 @@ def test_smoke_nao_pergunta_nada_mesmo_com_thread_comum_viva(qt_interface, monke
+     """Offscreen ninguem responde o "Fechar o SIG-FT?": o --smoke travava (exit 124)."""
+     import threading
+ 
++    monkeypatch.chdir(tmp_path)
+     monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
+     monkeypatch.setattr(qmain.backends, "carregar_todos", lambda **k: None)
+ 
+diff --git a/tests/test_qt_smoke.py b/tests/test_qt_smoke.py
+new file mode 100644
+index 0000000..6af2dd1
+--- /dev/null
++++ b/tests/test_qt_smoke.py
+@@ -0,0 +1,143 @@
++"""`--smoke` da interface Qt: o que o Release le do `.exe` (E6.1).
++
++Desde o corte, `SIG-FT.exe --smoke` e respondido pela Qt. O `release.yml` le o
++`conferencia-da-janela.txt` porque o `.exe` e `console=False`: o que ele
++imprime NAO chega ao CI. Um smoke que so imprime reprova com "codigo 1" e mais
++nada -- foi o run #3 de 2026-09-21, contado no `_smoke` de `sigft/app/main.py`.
++Por isso o relatorio e gravado nos dois caminhos, com os avisos de backend.
++
++E as telas Qt nascem na PRIMEIRA visita (fabricas de `TELAS`): um modulo de
++tela que ficou fora do pacote so apareceria quando alguem clicasse no menu. O
++smoke visita todas (menos as bloqueadas no menu), e tela que vira
++`TelaComErro` reprova, com o nome e o motivo no relatorio.
++"""
++import pytest
++from PySide6.QtWidgets import QWidget
++
++from sigft.app import conferencia
++from sigft.app_qt import catalogo
++from sigft.app_qt import main as qmain
++
++
++@pytest.fixture
++def relatorio(qt_interface, monkeypatch, tmp_path):
++    """Caminho do relatorio, num diretorio limpo (e no de trabalho que o smoke
++    grava), sem backends de verdade e com as chaves num arquivo temporario."""
++    monkeypatch.chdir(tmp_path)
++    monkeypatch.setattr(qmain, "_arquivo_de_chaves", lambda: str(tmp_path / "api_config.json"))
++    monkeypatch.setattr(qmain.backends, "carregar_todos", lambda **k: None)
++    return tmp_path / conferencia.ARQUIVO_JANELA
++
++
++def _fabrica_que_anota(visitadas, chave):
++    def criar(parent, controller):
++        visitadas.append(chave)
++        return QWidget(parent)
++    return criar
++
++
++def _fabrica_que_quebra(erro):
++    def criar(parent, controller):
++        raise erro
++    return criar
++
++
++def _ler(arquivo):
++    return arquivo.read_text(encoding="utf-8")
++
++
++# -- o relatorio em arquivo ----------------------------------------------------
++
++def test_grava_o_relatorio_tambem_quando_da_certo(relatorio):
++    """O passo do workflow imprime o arquivo sempre. Se ele so existisse na
++    falha, um arquivo velho de outro build seria lido como se fosse deste."""
++    assert qmain._smoke() == 0
++    assert relatorio.is_file()
++    assert "FALHOU" not in _ler(relatorio)
++
++
++def test_aviso_de_backend_vai_para_o_relatorio(relatorio, monkeypatch):
++    """Backend que nao carregou nao reprova (o app abre igual, de proposito),
++    mas tem de estar escrito antes de chegar ao usuario."""
++    def carregar(ao_falhar=None, **_):
++        ao_falhar("AutoSpec RAG", ImportError("No module named 'faiss'"))
++
++    monkeypatch.setattr(qmain.backends, "carregar_todos", carregar)
++
++    assert qmain._smoke() == 0
++    texto = _ler(relatorio)
++    assert "AutoSpec RAG" in texto and "faiss" in texto
++
++
++def test_grava_o_motivo_quando_a_janela_nao_monta(relatorio, monkeypatch):
++    """Sem o motivo gravado, um smoke vermelho e um beco sem saida."""
++    def janela_que_quebra():
++        raise RuntimeError("widget orfao aqui")
++
++    monkeypatch.setattr(qmain, "SIG_FT_App", janela_que_quebra)
++
++    assert qmain._smoke() == 1
++    texto = _ler(relatorio)
++    assert "RuntimeError" in texto and "widget orfao aqui" in texto
++    assert "Traceback" in texto, "sem a pilha nao da para saber o que quebrou"
++
++
++def test_aviso_de_backend_vai_para_o_relatorio_tambem_na_falha(relatorio, monkeypatch):
++    """O backend que nao carregou costuma ser a PISTA da falha da janela."""
++    def carregar(ao_falhar=None, **_):
++        ao_falhar("Tradutor", ImportError("No module named 'ctranslate2'"))
++
++    def janela_que_quebra():
++        raise RuntimeError("quebrou")
++
++    monkeypatch.setattr(qmain.backends, "carregar_todos", carregar)
++    monkeypatch.setattr(qmain, "SIG_FT_App", janela_que_quebra)
++
++    assert qmain._smoke() == 1
++    assert "ctranslate2" in _ler(relatorio)
++
++
++# -- a visita as telas -----------------------------------------------------------
++
++def test_visita_todas_as_telas_registradas_menos_as_bloqueadas(relatorio, monkeypatch):
++    visitadas = []
++    telas = {chave: _fabrica_que_anota(visitadas, chave)
++             for chave in ("Home", "Primeira", "Segunda", "Fechada")}
++    monkeypatch.setattr(qmain, "TELAS", telas)
++    monkeypatch.setattr(catalogo, "TELAS_BLOQUEADAS", frozenset({"Fechada"}))
++
++    assert qmain._smoke() == 0
++    assert set(visitadas) == {"Home", "Primeira", "Segunda"}
++
++
++def test_tela_que_nao_abre_reprova_com_o_nome_e_o_motivo(relatorio, monkeypatch):
++    visitadas = []
++    monkeypatch.setattr(qmain, "TELAS", {
++        "Home": _fabrica_que_anota(visitadas, "Home"),
++        "Sumida": _fabrica_que_quebra(
++            ModuleNotFoundError("No module named 'sigft.app_qt.views.sumida'")),
++    })
++
++    assert qmain._smoke() == 1
++    texto = _ler(relatorio)
++    assert "Sumida" in texto
++    assert "ModuleNotFoundError" in texto and "sigft.app_qt.views.sumida" in texto
++    assert "Traceback" in texto, "sem a pilha nao da para saber QUAL import faltou"
++
++
++def test_uma_tela_quebrada_nao_esconde_as_outras(relatorio, monkeypatch):
++    """Cada hipotese no Release custa um build inteiro: o relatorio tem de
++    trazer TODAS as telas que nao abrem, nao so a primeira."""
++    visitadas = []
++    monkeypatch.setattr(qmain, "TELAS", {
++        "Home": _fabrica_que_anota(visitadas, "Home"),
++        "Quebrada1": _fabrica_que_quebra(ImportError("falta o modulo um")),
++        "Inteira": _fabrica_que_anota(visitadas, "Inteira"),
++        "Quebrada2": _fabrica_que_quebra(ImportError("falta o modulo dois")),
++    })
++
++    assert qmain._smoke() == 1
++    texto = _ler(relatorio)
++    assert "Quebrada1" in texto and "falta o modulo um" in texto
++    assert "Quebrada2" in texto and "falta o modulo dois" in texto
++    assert "Inteira" in visitadas
+-- 
+2.43.0
+

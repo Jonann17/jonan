@@ -1,0 +1,715 @@
+From 4530a3ae195e3ef2baf22c8100060b0cb6f5d836 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 11:53:30 +0000
+Subject: [PATCH] Qt6: Criacao de Fichas com a selecao do clique e um robo por
+ vez
+
+Rodada de correcao 1 da revisao da E4.9:
+- a IA usa as linhas, a planilha de PDMs e a chave tiradas no clique
+  (trocar a selecao no meio punha as descricoes novas sob as respostas
+  da IA); o worker nao grava mais nada na tela
+- falha ao abrir a revisao vira log e devolve "3. Analisar" (antes
+  ficava desligado para sempre)
+- resumo fechado e apagado (WA_DeleteOnClose), nao se acumula
+- rotulos sem cor com o gray84 do CTkLabel (#D6D6D6)
+- "Concluido" da edicao espera o OK, como o showinfo de la
+- herdados do CTk: o robo so aponta para lote com revisao confirmada
+  (df_processed e catalogo mudam no CONFIRMAR); um robo por vez
+  (criacao ou edicao, motivo no console); o robo leva o lote e o
+  catalogo do clique e o resumo e do lote dele; bot local por worker
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/cria_fichas.py | 196 +++++++++++++++++++++---------
+ tests/test_qt_tela_cria_fichas.py | 168 +++++++++++++++++++++++--
+ 2 files changed, 302 insertions(+), 62 deletions(-)
+
+diff --git a/sigft/app_qt/views/cria_fichas.py b/sigft/app_qt/views/cria_fichas.py
+index d4900eb..cd3d4f2 100644
+--- a/sigft/app_qt/views/cria_fichas.py
++++ b/sigft/app_qt/views/cria_fichas.py
+@@ -9,8 +9,11 @@ O que muda é só COMO as threads falam com a interface. Lá os workers mexiam
+ em botão e barra direto, abriam o resumo por `after(0)` e chamavam
+ `messagebox` de dentro do robô; aqui:
+ 
+-* o que o worker precisa da tela (código do projeto, "Pular IA") é lido no
+-  clique, e a volta é sempre por `interface.na_interface`;
++* o que o worker precisa da tela (código do projeto, "Pular IA", as linhas
++  selecionadas, a planilha de PDMs, o lote do robô) é tirado no clique, e a
++  volta é sempre por `interface.na_interface`;
++* o resultado da IA vai para a revisão, não para o lote do robô: o robô só
++  enxerga o que a pessoa confirmou; e um robô por vez (criação ou edição);
+ * a janela de decisão do robô (`JanelaAcaoRobo`) nasce na thread da interface
+   e o robô espera a resposta;
+ * o "Preparo" depois de RETRY/CHANGE_PDM continua SEGURANDO o robô até o OK
+@@ -18,6 +21,9 @@ em botão e barra direto, abriam o resumo por `after(0)` e chamavam
+ """
+ from __future__ import annotations
+ 
++import functools
++import traceback
++
+ import pandas as pd
+ from PySide6.QtCore import Qt
+ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QMessageBox, QSizePolicy, QVBoxLayout, QWidget
+@@ -40,6 +46,10 @@ ABA_CRIACAO = "Criação de Fichas"
+ ABA_EDICAO = "Editar código do projeto"
+ URL_LISTA = "https://apps.itaipu.gov.br/PMIB/PMIB_DatasheetList"
+ MSG_PREPARO = "Certifique-se de que a tela do navegador está na lista principal antes de clicar em OK."
++# Um robô por vez: a criação e a edição usam o mesmo navegador (`self.bot`), e
++# uma revisão confirmada no meio não pode subir um segundo robô.
++MSG_ROBO_OCUPADO = ("O robô já está trabalhando no portal (criação ou edição). "
++                    "Espere ele terminar antes de iniciar outro.")
+ PLACEHOLDER_PROJETO = (
+     "Ex: SERVIÇOS AUXILIARES ELÉTRICOS / CAP.05 - CONVERSORES ESTÁTICOS DE FREQUENCIA / "
+     "Especificar subsistema | #ST00=B01MSE00&EPB020 / 08934100BAX00-FS00PB-51 | "
+@@ -58,9 +68,10 @@ PESO_ABAS, PESO_CONSOLE = 3, 1
+ RECUO_ROLAGEM = 6
+ 
+ 
+-def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str | None = None,
++def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str = controles.COR_TEXTO_CTK,
+             largura: int | None = None):
+-    """CTkLabel de uma linha, anchor="w", 28 px de altura (`width` fixa se pedida)."""
++    """CTkLabel de uma linha, anchor="w", 28 px de altura (`width` fixa se pedida).
++    Sem `cor`, a do CTkLabel sem text_color (gray84), e não o text_light do app."""
+     r = blocos.rotulo(texto, tamanho=tamanho, negrito=negrito, cor=cor, alinhar="esquerda")
+     r.setWordWrap(False)
+     r.setFixedHeight(blocos.ALTURA_MINIMA_ROTULO)
+@@ -165,6 +176,9 @@ class ModuloCriaFichas(ModuleFrame):
+         # Do clique em "3. Analisar" até a revisão fechar, o botão fica
+         # desligado: nada (nem o "Pular IA") o religa no meio da cadeia.
+         self._ia_em_andamento = False
++        # Liga ao subir um robô (criação ou edição) e desliga no fim dele, os
++        # dois na thread da interface: os dois robôs usam o navegador e o `self.bot`.
++        self._robo_ativo = False
+         self.janela_resumo = None
+         self._df_da_janela_resumo = None
+         super().__init__(parent, controller, titulo="Módulo de Criação", altura_console=None)
+@@ -439,21 +453,32 @@ class ModuloCriaFichas(ModuleFrame):
+             if categorizador is None:
+                 return
+         self.api_key_gemini = self.controller.get_key("GEMINI") if self.controller is not None else ""
++        # As linhas e a planilha de PDMs saem daqui, do clique: a IA leva minutos
++        # e "Selecionar Excel" continua ligado -- trocar a seleção no meio poria
++        # as descrições novas sob as respostas dadas para as antigas. A seleção é
++        # TROCADA (`pos_selecao` cria outro DataFrame), nunca alterada no lugar:
++        # esta referência é a do clique.
++        df = self.df_data_selecionado
++        caminho_pdm = self.file_path_pdm
+ 
+         self._ia_em_andamento = True
+         self.btn_run_ai.setEnabled(False)
+         blocos.modo_indeterminado(self.progress, True)
+         # Sem `botao=`: o botão NÃO volta no fim do worker -- volta só se a
+         # cadeia falhar ou a revisão for fechada sem confirmar.
+-        self.iniciar_tarefa(self._ai_worker, cod_proj, pular, categorizador)
++        self.iniciar_tarefa(self._ai_worker, cod_proj, pular, categorizador, df, caminho_pdm,
++                            self.api_key_gemini)
+ 
+-    def _ai_worker(self, cod_proj, pular, categorizador) -> None:
+-        ok = False
++    def _ai_worker(self, cod_proj, pular, categorizador, df, caminho_pdm, chave) -> None:
++        """Só lê os argumentos (o que foi tirado no clique) e não grava nada na
++        tela: o resultado vai para `_depois_da_ia`, na thread da interface."""
++        resultado = None
+         try:
+             final_data = []
++            catalogo = None
+             if pular:
+                 self.log("Modo 'Pular IA'. Lendo dados do Excel...")
+-                for index, row in self.df_data_selecionado.iterrows():
++                for index, row in df.iterrows():
+                     item_json = {
+                         'item_processado': index,
+                         'codigo_projeto': cod_proj,
+@@ -470,22 +495,22 @@ class ModuloCriaFichas(ModuleFrame):
+             else:
+                 # Construir o categorizador ANTES do prompt é o que permite logar
+                 # o modelo de verdade (o construtor só resolve config, não chama a API).
+-                cat = categorizador(self.api_key_gemini)
++                cat = categorizador(chave)
+                 self.log(f"Processando com IA ({cat.modelo_em_uso})...")
+ 
+                 # A planilha-mestra da Itaipu (abas TEMPLATE_PDM/GRUPOS_CLASES)
+                 # direto, ou o formato manipulado antigo.
+-                self.catalogo = pdm_catalogo.carregar(self.file_path_pdm)
++                catalogo = pdm_catalogo.carregar(caminho_pdm)
+                 self.log(
+-                    f"Catálogo: {len(self.catalogo)} PDMs, "
+-                    f"{len(self.catalogo.classes_com_pdm())} classes com PDM."
++                    f"Catálogo: {len(catalogo)} PDMs, "
++                    f"{len(catalogo.classes_com_pdm())} classes com PDM."
+                 )
+ 
+-                res_json = cat.processar_lote(self.df_data_selecionado, self.catalogo, callback_log=self.log)
++                res_json = cat.processar_lote(df, catalogo, callback_log=self.log)
+                 sem_resposta = 0
+                 fora_do_catalogo = 0
+                 for i, item_json in enumerate(res_json):
+-                    row = self.df_data_selecionado.iloc[i]
++                    row = df.iloc[i]
+                     if item_json is None:
+                         # A IA não respondeu este item: fica 'NENHUM' para a
+                         # revisão, sem deslocar os seguintes.
+@@ -496,7 +521,7 @@ class ModuloCriaFichas(ModuleFrame):
+                             f"'NENHUM' para revisão: {str(row['DESCRIÇÃO'])[:40]}"
+                         )
+ 
+-                    ok_pdm, motivo = cria_fichas_svc.conferir_pdm(item_json, self.catalogo)
++                    ok_pdm, motivo = cria_fichas_svc.conferir_pdm(item_json, catalogo)
+                     if not ok_pdm:
+                         # PDM inventado pela IA: não pode chegar ao filtro do
+                         # portal, que aperta ENTER e leva o que estiver destacado.
+@@ -514,18 +539,34 @@ class ModuloCriaFichas(ModuleFrame):
+                     f"PDM fora do catálogo: {fora_do_catalogo}"
+                 )
+ 
+-            self.df_processed = pd.DataFrame(final_data)
++            # Para a REVISÃO, não para o `df_processed`: o robô só enxerga o que
++            # a pessoa confirmou (lá, fechar a revisão nova no "X" deixava o robô
++            # de um lote anterior apontado para dados que ninguém conferiu).
++            resultado = (pd.DataFrame(final_data), catalogo)
+             self.log("Abrindo janela de Revisão...")
+-            ok = True
+         except Exception as e:  # noqa: BLE001 -- vira log, como lá
+             self.log(f"Erro no processamento: {e}")
+-        interface.na_interface(self._depois_da_ia, ok)
++        finally:
++            interface.na_interface(self._depois_da_ia, resultado)
+ 
+-    def _depois_da_ia(self, ok: bool) -> None:
++    def _depois_da_ia(self, resultado) -> None:
++        """Na thread da interface, no fim do worker da IA (bem ou mal).
++
++        Protegida: uma exceção aqui sumiria na ponte (`interface._rodar` só a
++        imprime) e deixaria "3. Analisar" desligado para sempre.
++        """
+         self._parar_progresso()
+-        if ok:
+-            self.abrir_revisao_pdm()
+-        else:
++        if resultado is None:
++            self._fim_da_cadeia_da_ia()
++            return
++        df_novo, catalogo_novo = resultado
++        # "Pular IA" não carrega catálogo: a revisão usa o que a tela já tinha, como lá.
++        catalogo = catalogo_novo if catalogo_novo is not None else self.catalogo
++        try:
++            self.abrir_revisao_pdm(df_novo, catalogo)
++        except Exception as erro:  # noqa: BLE001 -- o botão tem de voltar
++            traceback.print_exc()
++            self.log(f"Erro ao abrir a revisão: {type(erro).__name__}: {erro}")
+             self._fim_da_cadeia_da_ia()
+ 
+     def _parar_progresso(self) -> None:
+@@ -543,10 +584,12 @@ class ModuloCriaFichas(ModuleFrame):
+         except RuntimeError:
+             pass  # tela já destruída
+ 
+-    def abrir_revisao_pdm(self) -> None:
+-        if self.df_processed is not None and not self.df_processed.empty:
+-            janela = JanelaRevisaoPDM(self, self.df_processed, self._pos_revisao_concluida,
+-                                      catalogo=self.catalogo)
++    def abrir_revisao_pdm(self, df, catalogo) -> None:
++        if df is not None and not df.empty:
++            # O catálogo vai junto para o CONFIRMAR: o da tela (o do robô) só
++            # muda com a revisão confirmada, como o `df_processed`.
++            confirmar = functools.partial(self._pos_revisao_concluida, catalogo=catalogo)
++            janela = JanelaRevisaoPDM(self, df, confirmar, catalogo=catalogo)
+             janela.finished.connect(self._revisao_fechada)
+         else:
+             QMessageBox.critical(self, "Erro", "Nenhum dado processado.")
+@@ -559,20 +602,51 @@ class ModuloCriaFichas(ModuleFrame):
+             # Fechada no "X": lá o botão ficava desligado até o "Limpar".
+             self._fim_da_cadeia_da_ia()
+ 
+-    def _pos_revisao_concluida(self, df_atualizado) -> None:
++    def _pos_revisao_concluida(self, df_atualizado, catalogo=None) -> None:
+         self.df_processed = df_atualizado
++        self.catalogo = catalogo
+         self.log(f"Revisão OK. {len(self.df_processed)} itens prontos.")
+-        self.btn_run_auto.setEnabled(True)
++        # Com um robô rodando, o "4. Robô Web" volta sozinho no fim dele (e
++        # então leva ESTE lote); ligá-lo agora subiria um segundo robô.
++        if not self._robo_ativo:
++            self.btn_run_auto.setEnabled(True)
+         _pintar(self.btn_run_auto, COLORS["accent"], COLORS["primary_hover"])
+         self.btn_run_ai.setEnabled(False)
+         self.btn_run_ai.setText("3. Analisar (OK)")
+ 
+     # --- robô de criação ---------------------------------------------------------
+     def run_automation_thread(self) -> None:
++        if self._robo_ocupado():
++            return
+         automacao = self.backend("AutomacaoPMIB")
+         if automacao is None:
+             return
+-        self.iniciar_tarefa(self._bot_worker, automacao, botao=self.btn_run_auto)
++        # O lote e o catálogo saem daqui, do clique: uma revisão confirmada com o
++        # robô rodando troca `df_processed`, e o resumo deste robô é do lote DELE.
++        self._iniciar_robo(self._bot_worker, automacao, self.df_processed, self.catalogo,
++                           botao=self.btn_run_auto)
++
++    # --- um robô por vez (criação ou edição) ----------------------------------------
++    def _robo_ocupado(self) -> bool:
++        """Com um robô já rodando, diz no console por que nada começa."""
++        if self._robo_ativo:
++            self.log(MSG_ROBO_OCUPADO)
++            return True
++        return False
++
++    def _iniciar_robo(self, worker, *args, botao) -> None:
++        self._robo_ativo = True
++        self.iniciar_tarefa(self._rodar_robo, worker, *args, botao=botao)
++
++    def _rodar_robo(self, worker, *args) -> None:
++        """Na tarefa: roda o robô e, dê no que der, devolve a vez (na interface)."""
++        try:
++            worker(*args)
++        finally:
++            interface.na_interface(self._robo_terminou)
++
++    def _robo_terminou(self) -> None:
++        self._robo_ativo = False
+ 
+     def _definir_progresso(self, barra, fracao) -> None:
+         try:
+@@ -580,22 +654,23 @@ class ModuloCriaFichas(ModuleFrame):
+         except RuntimeError:
+             pass  # tela já destruída
+ 
+-    def _bot_worker(self, automacao) -> None:
+-        self.bot = automacao()
++    def _bot_worker(self, automacao, df, catalogo) -> None:
++        bot = automacao()
++        self.bot = bot  # o "Limpar" fecha o navegador por aqui
+         try:
+-            self.bot.iniciar_driver()
+-            self.bot.abrir_portal(URL_LISTA)
++            bot.iniciar_driver()
++            bot.abrir_portal(URL_LISTA)
+             # A instrução de QUAL página abrir: a janela nasce na thread da
+             # interface e este worker espera o "Continuar".
+             self.pausar_e_esperar(MSG_LOGIN_NOVA_FICHA)
+             self.log("Iniciando Robô...")
+             sucessos = []
+-            total = len(self.df_processed)
++            total = len(df)
+ 
+             # Variável de controle para abortar o loop principal (STOP)
+             abortar_automacao = False
+ 
+-            for idx, row in self.df_processed.iterrows():
++            for idx, row in df.iterrows():
+                 if abortar_automacao:
+                     break
+ 
+@@ -607,7 +682,7 @@ class ModuloCriaFichas(ModuleFrame):
+                 retry = True
+ 
+                 while retry:
+-                    status, res = self.bot.processar_item_individual(row_atual)
++                    status, res = bot.processar_item_individual(row_atual)
+ 
+                     if status == "SUCESSO":
+                         self.log(f" -> ✅ SUCESSO: PMIB {res[0]} | PDM {res[1]}")
+@@ -615,6 +690,7 @@ class ModuloCriaFichas(ModuleFrame):
+                             pedido=row_atual.get('pdm_escolhido', ''),
+                             gravado=res[1],
+                             pmib=res[0],
++                            catalogo=catalogo,
+                         )
+                         sucessos.append((row_atual['descricao_original'], res[0], res[1]))
+                         retry = False
+@@ -651,7 +727,7 @@ class ModuloCriaFichas(ModuleFrame):
+                                              "VERIFICAR (PULADO)"))
+                             # Força o reset da tela para o próximo item do laço iniciar limpo
+                             try:
+-                                self.bot.abrir_portal(URL_LISTA)
++                                bot.abrir_portal(URL_LISTA)
+                             except Exception:  # noqa: BLE001 -- como lá: segue para o próximo
+                                 pass
+                             retry = False
+@@ -666,20 +742,21 @@ class ModuloCriaFichas(ModuleFrame):
+             # --- Fim do Loop (ou Interrupção) ---
+             self.log("Montando resumo final...")
+             df_selenium = pd.DataFrame(sucessos, columns=['descricao_original', 'PMIB_CRIADO', 'PDM_COM_REVISAO'])
+-            self.df_resumo_final = pd.merge(self.df_processed, df_selenium, on='descricao_original', how='inner')
++            resumo = pd.merge(df, df_selenium, on='descricao_original', how='inner')
+ 
+-            interface.na_interface(self._fim_do_robo)
++            interface.na_interface(self._fim_do_robo, resumo)
+ 
+             # Finaliza o driver
+             try:
+-                self.bot.driver.quit()
++                bot.driver.quit()
+             except Exception:  # noqa: BLE001 -- navegador já fechado
+                 pass
+ 
+         except Exception as e:  # noqa: BLE001 -- vira log, como lá
+             self.log(f"Erro Fatal na Thread do Robô: {e}")
+ 
+-    def _fim_do_robo(self) -> None:
++    def _fim_do_robo(self, resumo) -> None:
++        self.df_resumo_final = resumo
+         try:
+             self._mostrar_resumo()
+             self.btn_save.setEnabled(True)
+@@ -687,7 +764,7 @@ class ModuloCriaFichas(ModuleFrame):
+         except RuntimeError:
+             pass  # tela já destruída
+ 
+-    def _conferir_pdm_do_portal(self, pedido, gravado, pmib) -> None:
++    def _conferir_pdm_do_portal(self, pedido, gravado, pmib, catalogo) -> None:
+         """O PDM que o portal gravou é o que pedimos?
+ 
+         O fluxo do portal é filtrar-e-apertar-ENTER: uma string que casa vários
+@@ -706,9 +783,9 @@ class ModuloCriaFichas(ModuleFrame):
+             )
+             return
+ 
+-        self._conferir_revisao_do_pdm(codigo_gravado, gravado, pmib)
++        self._conferir_revisao_do_pdm(codigo_gravado, gravado, pmib, catalogo)
+ 
+-    def _conferir_revisao_do_pdm(self, codigo, gravado, pmib) -> None:
++    def _conferir_revisao_do_pdm(self, codigo, gravado, pmib, catalogo) -> None:
+         """A ficha saiu com a revisão mais nova do PDM? (É o que a Itaipu cobra.)
+ 
+         - **portal < Master**: a ficha foi criada com uma revisão velha;
+@@ -716,9 +793,9 @@ class ModuloCriaFichas(ModuleFrame):
+           para pedir um novo à Itaipu).
+         """
+         revisao_gravada = cria_fichas_svc.revisao_do_pdm(gravado)
+-        if revisao_gravada is None or self.catalogo is None:
++        if revisao_gravada is None or catalogo is None:
+             return
+-        pdm = self.catalogo.por_codigo(codigo)
++        pdm = catalogo.por_codigo(codigo)
+         if pdm is None or pdm.revisao is None:
+             return
+ 
+@@ -754,7 +831,11 @@ class ModuloCriaFichas(ModuleFrame):
+             return
+         if aberta:
+             janela.close()
+-        self.janela_resumo = JanelaResumo(self, self.df_resumo_final)
++        janela = JanelaResumo(self, self.df_resumo_final)
++        # Fechada, a janela (com a tabela inteira) é apagada, como o destroy()
++        # do CTk; sem isto, cada "Ver Resumo" deixava uma escondida na tela.
++        janela.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
++        self.janela_resumo = janela
+         self._df_da_janela_resumo = self.df_resumo_final
+ 
+     def salvar_excel(self) -> None:
+@@ -890,6 +971,8 @@ class ModuloCriaFichas(ModuleFrame):
+         self.btn_run_edicao.setEnabled(qtd > 0)
+ 
+     def run_edicao_thread(self) -> None:
++        if self._robo_ocupado():
++            return
+         novo_projeto = self.entry_novo_projeto.text().strip()
+         if not novo_projeto:
+             QMessageBox.warning(self, "Aviso", "Preencha o Novo Código do Projeto.")
+@@ -908,14 +991,15 @@ class ModuloCriaFichas(ModuleFrame):
+         automacao = self.backend("AutomacaoPMIB")
+         if automacao is None:
+             return
+-        self.iniciar_tarefa(self._edicao_worker, lista_pmibs, novo_projeto, automacao,
+-                            botao=self.btn_run_edicao)
++        self._iniciar_robo(self._edicao_worker, lista_pmibs, novo_projeto, automacao,
++                           botao=self.btn_run_edicao)
+ 
+     def _edicao_worker(self, lista_pmibs, novo_projeto, automacao) -> None:
+-        self.bot = automacao()
++        bot = automacao()
++        self.bot = bot  # o "Limpar" fecha o navegador por aqui
+         try:
+-            self.bot.iniciar_driver()
+-            self.bot.abrir_portal(URL_LISTA)
++            bot.iniciar_driver()
++            bot.abrir_portal(URL_LISTA)
+             # A instrução da página PRINCIPAL; o worker espera o "Continuar".
+             self.pausar_e_esperar(MSG_LOGIN_PAGINA_PRINCIPAL)
+ 
+@@ -926,7 +1010,7 @@ class ModuloCriaFichas(ModuleFrame):
+                                        (idx + 1) / len(lista_pmibs))
+                 self.log(f"Editando PMIB [{idx + 1}/{len(lista_pmibs)}]: {pmib}...")
+ 
+-                status, msg = self.bot.atualizar_projeto_em_massa(pmib, novo_projeto)
++                status, msg = bot.atualizar_projeto_em_massa(pmib, novo_projeto)
+ 
+                 if status == "SUCESSO":
+                     self.log(f" -> ✅ SUCESSO: Projeto do {pmib} atualizado.")
+@@ -935,12 +1019,14 @@ class ModuloCriaFichas(ModuleFrame):
+                     self.log(f" -> ❌ ERRO no {pmib}: {msg}")
+ 
+             self.log("Edição em massa concluída!")
+-            self.avisar("Concluído", "Processo de edição em massa finalizado. Verifique o log.")
++            # Espera o OK, como o showinfo de lá: o navegador fecha e o botão
++            # volta depois que a pessoa leu.
++            self.avisar("Concluído", "Processo de edição em massa finalizado. Verifique o log.", esperar=True)
+ 
+         except Exception as e:  # noqa: BLE001 -- vira log, como lá
+             self.log(f"Erro Fatal na Edição: {e}")
+         finally:
+             try:
+-                self.bot.driver.quit()
++                bot.driver.quit()
+             except Exception:  # noqa: BLE001 -- navegador já fechado
+                 pass
+diff --git a/tests/test_qt_tela_cria_fichas.py b/tests/test_qt_tela_cria_fichas.py
+index 76c0070..c1722cd 100644
+--- a/tests/test_qt_tela_cria_fichas.py
++++ b/tests/test_qt_tela_cria_fichas.py
+@@ -18,6 +18,7 @@ from sigft.app import backends, theme
+ from sigft.app.textos_dialogos import MSG_LOGIN_NOVA_FICHA, MSG_LOGIN_PAGINA_PRINCIPAL
+ from sigft.app_qt import estilo
+ from sigft.app_qt.views import cria_fichas as tela_mod
++from sigft.app_qt.widgets import controles
+ from sigft.app_qt.views.janelas import DecisaoRobo
+ 
+ COLORS = theme.COLORS
+@@ -76,6 +77,10 @@ class JanelaFalsa:
+     def activateWindow(self):  # noqa: N802 -- API Qt
+         pass
+ 
++    def setAttribute(self, atributo, ligado=True):  # noqa: N802 -- API Qt
++        self.atributos = getattr(self, "atributos", {})
++        self.atributos[atributo] = ligado
++
+     def close(self):
+         self.visivel = False
+         self.fechada = True
+@@ -236,6 +241,10 @@ def test_cores_dos_botoes_e_rotulos(tela):
+     for r in (tela.rotulo_etapa1, tela.rotulo_etapa2, tela.rotulo_etapa1_edicao, tela.rotulo_etapa2_edicao):
+         assert COLORS["accent"] in _folha(r) and "16px" in _folha(r)
+     assert "#808080" in _folha(tela.lbl_status) and "#808080" in _folha(tela.lbl_status_edicao)
++    # CTkLabel sem text_color: o gray84 do tema (#D6D6D6), não o text_light do app.
++    for r in (tela.rotulo_projeto, tela.rotulo_pmib, tela.rotulo_novo_projeto, tela.rotulo_excel_edicao):
++        assert f"color: {controles.COR_TEXTO_CTK}" in _folha(r), r.text()
++    assert controles.COR_TEXTO_CTK == "#D6D6D6"
+     assert COLORS["accent"] in tela.progress.styleSheet()
+     assert COLORS["accent"] in tela.progress_edicao.styleSheet()
+     # O "▶" sai da fonte de símbolos (só o triângulo, como no Tk), não do Noto
+@@ -481,7 +490,8 @@ def test_ia_com_catalogo(tela, qtbot, pd, monkeypatch):
+     assert carregados == ["/d/PDM_MASTER.xlsx"]
+     assert lotes == [("chave-GEMINI", 3, catalogo, False)]
+     df = tela.revisoes[0].df
+-    assert tela.revisoes[0].catalogo is catalogo and tela.catalogo is catalogo
++    # A revisão abre com o catálogo novo; o da tela (o do robô) só muda no CONFIRMAR.
++    assert tela.revisoes[0].catalogo is catalogo and tela.catalogo is None
+     assert list(df["pdm_escolhido"]) == ["PDM.1111.001 - VALVULA", "NENHUM", "NENHUM"]
+     assert list(df["codigo_projeto"]) == ["PROJ-1"] * 3
+     assert list(df["descricao_original"]) == ["VALVULA", "PARAFUSO SEXTAVADO M8", "CABO"]
+@@ -494,6 +504,85 @@ def test_ia_com_catalogo(tela, qtbot, pd, monkeypatch):
+             "PARAFUSO SEXTAVADO M8") in texto
+     assert ">  -> ⚠️ Item 3: PDM fora do catalogo: 'PDM.9999.999 - INVENTADO'. Marcado 'NENHUM'." in texto
+     assert "> IA Finalizada. 3 itens | sem resposta: 1 | PDM fora do catálogo: 1" in texto
++    tela.revisoes[0].confirmar()
++    assert tela.catalogo is catalogo and tela.df_processed is df
++
++
++def test_ia_usa_a_selecao_e_a_planilha_do_clique(tela, qtbot, pd, monkeypatch):
++    # Correção 1 (revisão E4.9): a IA leva minutos e "Selecionar Excel" continua
++    # ligado. Trocar as linhas (ou a planilha de PDMs) no meio não pode pôr as
++    # descrições novas sob as respostas que a IA deu para as antigas.
++    segurar, entrou, lotes, carregados = threading.Event(), threading.Event(), [], []
++
++    class Categorizador:
++        modelo_em_uso = "modelo"
++
++        def __init__(self, chave):
++            self.chave = chave
++            entrou.set()
++            segurar.wait(3)          # a pessoa mexe na tela enquanto isto espera
++
++        def processar_lote(self, df, catalogo, callback_log=None):
++            lotes.append((self.chave, list(df["DESCRIÇÃO"])))
++            return [{"pdm_escolhido": "PDM.1111.001 - A"}, {"pdm_escolhido": "PDM.1111.002 - B"}]
++
++    monkeypatch.setattr(backends, "GeminiCategorizer", Categorizador)
++    monkeypatch.setattr(tela_mod.pdm_catalogo, "carregar", lambda p: carregados.append(p) or CatalogoFalso())
++    monkeypatch.setattr(tela_mod.file_dialogs, "ask_open_file", lambda *a, **k: "/d/OUTRO_MASTER.xlsx")
++    tela.controller = type("C", (), {"get_key": lambda self, k: "chave-do-clique"})()
++    tela.df_data_completo = pd.DataFrame({"DESCRIÇÃO": ["A", "B", "C", "D"], "CÓDIGO PMIB": [""] * 4})
++    tela.pos_selecao([0, 1])
++    tela.entry_projeto.setText("PROJ")
++    tela.file_path_pdm = "/d/PDM_MASTER.xlsx"
++    tela.btn_run_ai.setEnabled(True)
++    tela.btn_run_ai.click()
++    assert entrou.wait(3)
++    tela.pos_selecao([2, 3])                 # outras linhas, com a IA rodando
++    tela.selecionar_excel_pdm()              # e outra planilha de PDMs
++    tela.controller = type("C", (), {"get_key": lambda self, k: "outra-chave"})()
++    segurar.set()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    assert carregados == ["/d/PDM_MASTER.xlsx"]
++    assert lotes == [("chave-do-clique", ["A", "B"])]
++    df = tela.revisoes[0].df
++    assert list(zip(df["descricao_original"], df["pdm_escolhido"])) == [
++        ("A", "PDM.1111.001 - A"), ("B", "PDM.1111.002 - B")]
++
++
++def test_falha_ao_abrir_a_revisao_devolve_o_botao(tela, qtbot, pd, monkeypatch, capsys):
++    # Correção 2: a continuação na thread da interface não pode morrer calada
++    # (a ponte engole a exceção) e deixar "3. Analisar" desligado para sempre.
++    def quebrada(*a, **k):
++        raise RuntimeError("janela quebrada")
++
++    monkeypatch.setattr(tela_mod, "JanelaRevisaoPDM", quebrada)
++    _selecionar_pular_ia(tela, pd)
++    tela.btn_run_ai.click()
++    _esperar_log(qtbot, tela, "> Erro ao abrir a revisão: RuntimeError: janela quebrada")
++    assert tela.btn_run_ai.isEnabled() and not tela._ia_em_andamento
++    assert tela.progress.maximum() == 1000
++    assert "janela quebrada" in capsys.readouterr().err       # o traceback vai para o log de erros
++    # E o "Pular IA" volta a mandar no botão, como antes da cadeia.
++    tela.chk_pular.click()
++    tela.chk_pular.click()
++    assert tela.btn_run_ai.isEnabled()
++
++
++def test_robo_so_aponta_para_dados_revisados(tela, qtbot, pd):
++    # Herdado do CTk (achado 6a): o resultado da IA ia para `df_processed` antes
++    # da revisão; com "4. Robô Web" ligado de um lote anterior, fechar a revisão
++    # nova no "X" deixava o robô apontado para dados que ninguém conferiu.
++    _selecionar_pular_ia(tela, pd)
++    revisado = pd.DataFrame({"descricao_original": ["LOTE ANTERIOR"]})
++    tela._pos_revisao_concluida(revisado)
++    assert tela.btn_run_auto.isEnabled()
++    tela.chk_pular.click()
++    tela.chk_pular.click()                     # religa o "3. Processar", como lá
++    tela.btn_run_ai.click()
++    qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++    assert tela.df_processed is revisado       # a revisão nova ainda está aberta
++    tela.revisoes[0].fechar_no_x()
++    assert tela.df_processed is revisado       # e foi recusada
+ 
+ 
+ def test_ia_sem_o_backend_nao_comeca(tela, monkeypatch):
+@@ -508,8 +597,7 @@ def test_ia_sem_o_backend_nao_comeca(tela, monkeypatch):
+ 
+ 
+ def test_revisao_sem_dados_avisa_e_devolve_o_botao(tela, pd):
+-    tela.df_processed = pd.DataFrame([])
+-    tela.abrir_revisao_pdm()
++    tela.abrir_revisao_pdm(pd.DataFrame([]), None)
+     assert tela.avisos == [("critical", "Erro", "Nenhum dado processado.")]
+     assert tela.btn_run_ai.isEnabled() and tela.revisoes == []
+ 
+@@ -682,8 +770,7 @@ def test_robo_sem_o_backend_nao_comeca(tela, robo, monkeypatch):
+     ("NENHUM", "PDM.1111.001 - VALVULA, R1", {}, None),
+ ])
+ def test_conferencia_do_pdm_gravado(tela, qtbot, pedido, gravado, revisoes, esperado):
+-    tela.catalogo = CatalogoFalso(revisoes)
+-    tela._conferir_pdm_do_portal(pedido=pedido, gravado=gravado, pmib="45.1")
++    tela._conferir_pdm_do_portal(pedido=pedido, gravado=gravado, pmib="45.1", catalogo=CatalogoFalso(revisoes))
+     tela.log("fim")
+     _esperar_log(qtbot, tela, "> fim")
+     if esperado is None:
+@@ -716,6 +803,28 @@ def _resumo(pd):
+                          "PDM_COM_REVISAO": ["PDM.1, R1", "VERIFICAR (PULADO)"]})
+ 
+ 
++def test_resumos_fechados_nao_se_acumulam(tela, qtbot, pd, monkeypatch):
++    # Correção 3: cada "Ver Resumo" depois de fechar cria uma janela nova; a
++    # fechada (com a tabela inteira) não pode ficar escondida como filha da tela.
++    # O `destroy()` do CTk a liberava.
++    from PySide6.QtCore import QCoreApplication, QEvent
++
++    from sigft.app_qt.views import janelas
++
++    monkeypatch.setattr(tela_mod, "JanelaResumo", janelas.JanelaResumo)
++    tela.df_resumo_final = _resumo(pd)
++    for _ in range(3):
++        tela.abrir_resumo_manual()
++        janela = tela.janela_resumo
++        assert janela.isVisible() and janela.tree.topLevelItemCount() == 2
++        janela.botao_fechar.click()
++        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
++    assert tela.findChildren(janelas.JanelaResumo) == []
++    tela.abrir_resumo_manual()                 # a referência velha (apagada) não atrapalha
++    assert len(tela.findChildren(janelas.JanelaResumo)) == 1
++    tela.janela_resumo.close()
++
++
+ def test_salvar_sem_dados_avisa(tela):
+     tela.salvar_excel()
+     assert tela.avisos == [("warning", "Aviso", "Não há dados processados para salvar.")]
+@@ -868,8 +977,11 @@ def test_edicao_valida_antes_de_comecar(tela, pd):
+ 
+ def test_robo_de_edicao(tela, robo, qtbot, pd, monkeypatch):
+     avisos = []
++    # O aviso chega ANTES de o navegador fechar: lá o showinfo segurava o worker
++    # antes do `finally` (que fecha o navegador e devolve o botão).
+     monkeypatch.setattr(tela, "avisar", lambda *a, **k: avisos.append((a, k, threading.current_thread()
+-                                                                        is threading.main_thread())))
++                                                                        is threading.main_thread(),
++                                                                        RoboFalso.instancias[0].saiu)))
+     tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A", "B", "C"],
+                                             "CÓDIGO PMIB": [" 4500.1 ", "4500.2", "nan"]})
+     tela.pos_selecao_edicao([0, 1, 2])
+@@ -888,7 +1000,8 @@ def test_robo_de_edicao(tela, robo, qtbot, pd, monkeypatch):
+     assert "> Editando PMIB [1/2]: 4500.1..." in texto
+     assert ">  -> ✅ SUCESSO: Projeto do 4500.1 atualizado." in texto
+     assert ">  -> ❌ ERRO no 4500.2: ficha travada" in texto
+-    assert avisos == [(("Concluído", "Processo de edição em massa finalizado. Verifique o log."), {}, False)]
++    assert avisos == [(("Concluído", "Processo de edição em massa finalizado. Verifique o log."),
++                       {"esperar": True}, False, False)]
+     qtbot.waitUntil(lambda: tela.progress_edicao.fracao == 1.0, timeout=2000)
+ 
+ 
+@@ -906,6 +1019,47 @@ def test_robo_de_edicao_erro_fatal(tela, robo, qtbot, pd, monkeypatch):
+     assert RoboFalso.instancias[0].saiu
+ 
+ 
++def _robos_vivos():
++    return [t for t in threading.enumerate() if t.name.startswith("tarefa:ModuloCriaFichas")]
++
++
++def test_um_robo_por_vez(tela, robo, qtbot, pd, monkeypatch):
++    # Herdado do CTk (achado 6b): uma revisão confirmada no meio religava o
++    # "4. Robô Web" (segundo robô), e o resumo do primeiro saía do lote NOVO.
++    liberar = threading.Event()
++    lote_a = list(tela.df_processed["descricao_original"])
++    RoboFalso.roteiro = {d: [("SUCESSO", (f"PMIB-{i}", "PDM.1111.001 - VALVULA, R1"))]
++                         for i, d in enumerate(lote_a)}
++    monkeypatch.setattr(RoboFalso, "iniciar_driver", lambda self: liberar.wait(3))
++    try:
++        tela.btn_run_auto.click()
++        assert not tela.btn_run_auto.isEnabled()
++
++        lote_b = pd.DataFrame([{"descricao_original": "LOTE NOVO", "pdm_escolhido": "NENHUM"}])
++        tela._pos_revisao_concluida(lote_b)           # revisão nova confirmada com o robô rodando
++        assert tela.df_processed is lote_b
++        assert not tela.btn_run_auto.isEnabled()      # o segundo robô não fica à mão
++        tela.run_automation_thread()                  # nem à força
++        tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A"], "CÓDIGO PMIB": ["4500.1"]})
++        tela.pos_selecao_edicao([0])
++        tela.entry_novo_projeto.setText("NOVO")
++        tela.btn_run_edicao.click()                   # nem o da aba de edição
++        qtbot.waitUntil(lambda: _texto(tela).count(tela_mod.MSG_ROBO_OCUPADO) == 2, timeout=2000)
++        assert len(RoboFalso.instancias) == 1
++
++        liberar.set()
++        qtbot.waitUntil(lambda: bool(tela.resumos), timeout=3000)
++        # O resumo é do lote que ESTE robô levou ao portal.
++        assert list(tela.df_resumo_final["descricao_original"]) == lote_a
++        qtbot.waitUntil(tela.btn_run_auto.isEnabled, timeout=2000)
++        assert not tela._robo_ativo
++        assert tela.btn_run_edicao.isEnabled()        # o botão da edição nunca foi desligado
++    finally:
++        # Falhando no meio, nenhum robô pode sobrar esperando (o processo não sairia).
++        liberar.set()
++        qtbot.waitUntil(lambda: not _robos_vivos(), timeout=5000)
++
++
+ def test_tarefas_em_thread_comum(tela, robo, qtbot):
+     # Thread comum (não daemon): é tarefa da pessoa, o "X" pergunta antes de fechar.
+     liberar = threading.Event()
+-- 
+2.43.0
+

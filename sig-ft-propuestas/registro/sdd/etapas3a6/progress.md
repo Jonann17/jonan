@@ -41,3 +41,29 @@ E5.1: notas p/ LOG: "Aplicar mesmo assim?" com padrao Nao (Tk: Sim); MenuDeOpcoe
 E5.1: minor (deferred): _ler_mural, _caminho_do_mapeamento e tabelas do mural copiados do CTk (testes travam os dois lados) -> unificar no corte
 E5.1: review ad54afb despachada (pacote review-e5.1.diff)
 E4.10: review a47b7fe despachada (pacote review-e4.10.diff)
+E5.1: integrado 748d3a4: check.sh TUDO OK (6250 passed, 28 skipped; warnings so as pre-existentes), ruff limpo
+E4.10: review a47b7fe (achados em review-e4.10-achados.md): Important #1 titulo de link com "&" vira mnemonico (some o "&" e pega atalho Alt); #2 PROCESSAR religa no meio da 2a passada (IMPORTAR) -> duas passadas concorrentes
+E4.10: minor (deferred): #3 bloco de folha da barra sempre visivel copiado em autospec/copia_fichas/cria_fichas (polimento); #4 herdado: fim de lote substitui conferencia importada com marcas nao salvas (Nota p/ Rafael / PENDENCIAS); #7 Espaco aperta botao com foco (polimento); nits: alias FAMILIAS_COM_SIMBOLO em cria_fichas:79 e font-family repetido (polimento)
+E4.10: fix round 1 -> implementador ab9f897 (base 748d3a4): #1, #2 + minors #1 (ERRO FATAL no fim do lote), #2 (corrigir descricao da fila no relatorio/teste), #5 (waitUntil), #6 (teste do X no lote), nit controles:178
+(2026-10-10 ~06h UTC) limite de sessao cortou ab9f897 (fix E4.10), ad54afb (review E5.1), a0472fd (fix E4.9), a11a7fe (E6.1) -> retomados 11:51 UTC; E4.9 e E6.1 instruidos a rebasear em 748d3a4
+E4.9: fix round 1 implementado: 4530a3a (rebaseado em 748d3a4; ff em local/jonan-cambios); check.sh do agente no mesmo commit: TUDO OK (6255 passed, 28 skipped), ruff limpo; re-review pendente (review-e4.9-fix1.diff)
+E4.9: notas p/ LOG: self.catalogo muda so quando a revisao e confirmada (junto com df_processed); robos de criacao e de edicao nao rodam juntos (motivo no console)
+E4.9: p/ Luan (herdado do CTk, PENDENCIAS): "4. Robo Web" continua ligado com o mesmo lote no fim -> segundo clique cria as mesmas fichas de novo; "Limpar" durante o robo religa "4. Robo Web" sem dados (abre navegador e falha)
+E5.1: review ad54afb (achados em review-e5.1-achados.md): spec ok (cards compactos mantidos, 12 cards sem rolar: 815 <= 850); Important #1 _ler_mural/_caminho_do_mapeamento copiados linha a linha na view Qt sem teste de sincronia (regra de negocio na UI)
+E5.1: minor (deferred): #4 home.py com 1162 linhas e _rotulo quase duplicado (home.py:126 x mural.py:84) -> polimento
+E5.1: fix round 1 -> implementador a14a189 (base 4530a3a): Important #1 (extrair p/ modulo sem tkinter, CTk delega) + minors #1 mural com PlainText (dado do usuario), #2 lacunas de teste, #3 restaurar sem desmaximizar
+E4.10: fix round 1 implementado: 2b562ad -> ab74059 em local/jonan-cambios (check.sh do agente em 748d3a4+fix: TUDO OK 6256/28); extra 1b: rotulos com dado do usuario em PlainText; re-review pendente (review-e4.10-fix1.diff)
+E6.1: implementador a11a7fe DONE_WITH_CONCERNS: 7febd4e (rebaseado em 748d3a4); check.sh do agente TUDO OK (6293/28); aberturas reais: frontend.py=Qt (sem Tk), --ctk=CTk (sem Qt), --smoke grava relatorio (12 telas); relatorio e6.1-report.md (copiado)
+E6.1: notas p/ LOG: nao lancar Release antes da E6.2 (spec ainda exclui PySide6 -> conferir-pacote reprova); lancador macOS nao rodou num Mac; SIG-FT.bat nao repassa argumentos (--ctk so via python frontend.py --ctk); tela nova em TELAS exige o modulo em MODULOS_ESSENCIAIS (teste avisa)
+E6.1: review despachada (pacote review-e6.1.diff; cherry-pick depois da suite de ab74059)
+E4.9+E4.10 fixes: integrado ab74059: check.sh TUDO OK (6261 passed, 28 skipped), ruff limpo
+E6.1: integrado 7febd4e -> 61bf09f em local/jonan-cambios (suite rodando); review a376e8c em andamento
+E6.2: implementador ac41efc despachado (base 61bf09f, brief-e6.2.md)
+E4.9: fix round 1/5 (7 addressed, 1 open: NOVO Important -- "4. Robo Web" fica desligado para sempre se a revisao e confirmada com o robo de EDICAO rodando; commits 748d3a4..4530a3a; re-review af1a448 em rereview-e4.9-r1.md)
+E4.9: fix round 2 -> implementador a0472fd (base 61bf09f): _robo_terminou devolve btn_run_auto se df_processed existe + teste; opcional no mesmo commit: Limpar zera catalogo (observacao fora do escopo), nit teste :565-568
+E4.10: fix round 1/5 (8 addressed, 0 open; commits 4530a3a..ab74059) -- re-review ac9cfa1
+E4.10: complete (commits 354543f + fix ab74059; review clean)
+E4.10: minor (deferred): linha velha no e4.10-report.md:257 (fim de lote "religa PROCESSAR") ficou falsa -> corrigir no relatorio; herdado do CTk: lote x 2a passada gravam o mesmo {ficha}_completed (services/autospec.py:3487-3493, :3781) -> PENDENCIAS / Nota p/ Rafael
+E6.1: integrado 61bf09f: check.sh TUDO OK (6304 passed, 28 skipped), ruff limpo
+E6.1: smoke real no ramo integrado (61bf09f, frontend.py --smoke offscreen): exit 0, 12 telas OK, CorrecaoPDM bloqueada nao visitada; relatorio gravado
+(2026-10-10 ~13h UTC) limite de sessao cortou a0472fd (fix2 E4.9, inicio), a376e8c (review E6.1, meio), a14a189 (fix1 E5.1, quase no fim: relatorio), ac41efc (E6.2, meio: licencas) -> reset 16:50 UTC
