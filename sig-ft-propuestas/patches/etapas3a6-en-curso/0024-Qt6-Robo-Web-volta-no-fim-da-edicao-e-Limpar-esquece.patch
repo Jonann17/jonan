@@ -1,0 +1,153 @@
+From 11ed015e7089c1fa032726acac3858d996d553de Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 17:44:43 +0000
+Subject: [PATCH] Qt6: Robo Web volta no fim da edicao e Limpar esquece o
+ catalogo
+
+Rodada de correcao 2 da revisao da E4.9:
+- revisao confirmada com o robo de EDICAO rodando deixava o "4. Robo Web"
+  desligado para sempre (o iniciar_tarefa da edicao so devolve o botao
+  dela): _robo_terminou o religa quando ha lote confirmado
+- Limpar zera o catalogo junto com o df_processed (os dois andam juntos
+  desde a rodada 1)
+- teste sem as assercoes redundantes depois dos dois toggles
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app_qt/views/cria_fichas.py | 18 +++++++++--
+ tests/test_qt_tela_cria_fichas.py | 53 ++++++++++++++++++++++++++++---
+ 2 files changed, 64 insertions(+), 7 deletions(-)
+
+diff --git a/sigft/app_qt/views/cria_fichas.py b/sigft/app_qt/views/cria_fichas.py
+index cd3d4f2..b25f96c 100644
+--- a/sigft/app_qt/views/cria_fichas.py
++++ b/sigft/app_qt/views/cria_fichas.py
+@@ -606,8 +606,9 @@ class ModuloCriaFichas(ModuleFrame):
+         self.df_processed = df_atualizado
+         self.catalogo = catalogo
+         self.log(f"Revisão OK. {len(self.df_processed)} itens prontos.")
+-        # Com um robô rodando, o "4. Robô Web" volta sozinho no fim dele (e
+-        # então leva ESTE lote); ligá-lo agora subiria um segundo robô.
++        # Com um robô rodando (criação ou edição), o "4. Robô Web" volta no fim
++        # dele (`_robo_terminou`) e então leva ESTE lote; ligá-lo agora subiria
++        # um segundo robô.
+         if not self._robo_ativo:
+             self.btn_run_auto.setEnabled(True)
+         _pintar(self.btn_run_auto, COLORS["accent"], COLORS["primary_hover"])
+@@ -646,7 +647,17 @@ class ModuloCriaFichas(ModuleFrame):
+             interface.na_interface(self._robo_terminou)
+ 
+     def _robo_terminou(self) -> None:
++        """Na thread da interface, no fim de qualquer robô (bem ou mal)."""
+         self._robo_ativo = False
++        # Revisão confirmada com o robô de EDIÇÃO rodando: `_pos_revisao_concluida`
++        # não ligou o "4. Robô Web", e o `iniciar_tarefa` da edição só devolve o
++        # botão dela. Com lote confirmado, ele volta aqui. (No fim do robô de
++        # criação o `iniciar_tarefa` também o devolve: ligar duas vezes dá no mesmo.)
++        if self.df_processed is not None:
++            try:
++                self.btn_run_auto.setEnabled(True)
++            except RuntimeError:
++                pass  # tela já destruída
+ 
+     def _definir_progresso(self, barra, fracao) -> None:
+         try:
+@@ -881,6 +892,9 @@ class ModuloCriaFichas(ModuleFrame):
+         self.df_data_completo = None
+         self.df_data_selecionado = None
+         self.df_processed = None
++        # O catálogo anda com o lote (os dois mudam no CONFIRMAR da revisão):
++        # sem o lote, e com a planilha de PDMs esquecida, ele também sai.
++        self.catalogo = None
+         self.df_resumo_final = None
+         if self.bot:
+             try:
+diff --git a/tests/test_qt_tela_cria_fichas.py b/tests/test_qt_tela_cria_fichas.py
+index c1722cd..52d111d 100644
+--- a/tests/test_qt_tela_cria_fichas.py
++++ b/tests/test_qt_tela_cria_fichas.py
+@@ -562,10 +562,6 @@ def test_falha_ao_abrir_a_revisao_devolve_o_botao(tela, qtbot, pd, monkeypatch,
+     assert tela.btn_run_ai.isEnabled() and not tela._ia_em_andamento
+     assert tela.progress.maximum() == 1000
+     assert "janela quebrada" in capsys.readouterr().err       # o traceback vai para o log de erros
+-    # E o "Pular IA" volta a mandar no botão, como antes da cadeia.
+-    tela.chk_pular.click()
+-    tela.chk_pular.click()
+-    assert tela.btn_run_ai.isEnabled()
+ 
+ 
+ def test_robo_so_aponta_para_dados_revisados(tela, qtbot, pd):
+@@ -894,7 +890,7 @@ def test_limpar_volta_tudo_ao_comeco(tela, qtbot, pd):
+     for b in (tela.btn_run_ai, tela.btn_run_auto, tela.btn_resumo, tela.btn_save, tela.btn_run_edicao):
+         b.setEnabled(True)
+     tela.btn_run_ai.setText("3. Analisar (OK)")
+-    tela._pos_revisao_concluida(_resumo(pd))
++    tela._pos_revisao_concluida(_resumo(pd), catalogo=CatalogoFalso())
+     tela.progress.definir(0.5)
+     tela.progress_edicao.definir(0.5)
+     tela.entry_novo_projeto.setText("NOVO")
+@@ -905,6 +901,9 @@ def test_limpar_volta_tudo_ao_comeco(tela, qtbot, pd):
+     assert bot.saiu and tela.bot is None
+     assert tela.file_path_excel is None and tela.file_path_pdm is None
+     assert tela.df_processed is None and tela.df_resumo_final is None
++    # O catálogo anda com o lote (os dois mudam no CONFIRMAR da revisão): sem o
++    # lote e com a planilha de PDMs esquecida, ele também sai.
++    assert tela.catalogo is None
+     assert tela.df_edicao_completo is None and tela.df_edicao_selecionado is None
+     assert tela.entry_projeto.text() == "" and tela.entry_novo_projeto.text() == ""
+     assert tela.lbl_status.text() == "Aguardando..." and "#808080" in _folha(tela.lbl_status)
+@@ -1060,6 +1059,50 @@ def test_um_robo_por_vez(tela, robo, qtbot, pd, monkeypatch):
+         qtbot.waitUntil(lambda: not _robos_vivos(), timeout=5000)
+ 
+ 
++def test_revisao_confirmada_com_a_edicao_rodando_devolve_o_robo_web(tela, robo, qtbot, pd, monkeypatch):
++    # Rodada 2 (re-revisão E4.9): confirmada a revisão com o robô de EDIÇÃO
++    # rodando, o "4. Robô Web" não liga na hora (um robô por vez) -- e tem de
++    # voltar no fim dele: o `iniciar_tarefa` da edição só devolve o botão dela.
++    liberar = threading.Event()
++    monkeypatch.setattr(RoboFalso, "iniciar_driver", lambda self: liberar.wait(5))
++    tela.resetar_processo()                       # tela limpa: sem lote, "4. Robô Web" desligado
++    try:
++        tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A"], "CÓDIGO PMIB": ["4500.1"]})
++        tela.pos_selecao_edicao([0])
++        tela.entry_novo_projeto.setText("NOVO")
++        tela.btn_run_edicao.click()               # o robô de edição fica preso no navegador
++        assert tela._robo_ativo
++
++        _selecionar_pular_ia(tela, pd)            # a aba 1 está livre: IA + revisão
++        tela.btn_run_ai.click()
++        qtbot.waitUntil(lambda: bool(tela.revisoes), timeout=3000)
++        tela.revisoes[0].confirmar()
++        assert tela.df_processed is not None
++        assert not tela.btn_run_auto.isEnabled()  # com a edição rodando, não liga
++
++        liberar.set()
++        qtbot.waitUntil(tela.btn_run_edicao.isEnabled, timeout=3000)
++        qtbot.waitUntil(tela.btn_run_auto.isEnabled, timeout=2000)  # e volta no fim dela
++        assert not tela._robo_ativo
++    finally:
++        liberar.set()
++        qtbot.waitUntil(lambda: not _robos_vivos(), timeout=5000)
++
++
++def test_fim_da_edicao_sem_lote_nao_liga_o_robo_web(tela, robo, qtbot, pd):
++    # Sem lote confirmado (tela limpa), o fim do robô de edição não inventa um
++    # "4. Robô Web" ligado apontando para nada.
++    tela.resetar_processo()
++    tela.df_edicao_completo = pd.DataFrame({"DESCRIÇÃO": ["A"], "CÓDIGO PMIB": ["4500.1"]})
++    tela.pos_selecao_edicao([0])
++    tela.entry_novo_projeto.setText("NOVO")
++    tela.run_edicao_thread()
++    _esperar_log(qtbot, tela, "> Edição em massa concluída!")
++    qtbot.waitUntil(tela.btn_run_edicao.isEnabled, timeout=3000)
++    qtbot.waitUntil(lambda: not tela._robo_ativo, timeout=2000)
++    assert tela.df_processed is None and not tela.btn_run_auto.isEnabled()
++
++
+ def test_tarefas_em_thread_comum(tela, robo, qtbot):
+     # Thread comum (não daemon): é tarefa da pessoa, o "X" pergunta antes de fechar.
+     liberar = threading.Event()
+-- 
+2.43.0
+

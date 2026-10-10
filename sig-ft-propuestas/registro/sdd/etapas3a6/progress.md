@@ -67,3 +67,18 @@ E4.10: minor (deferred): linha velha no e4.10-report.md:257 (fim de lote "religa
 E6.1: integrado 61bf09f: check.sh TUDO OK (6304 passed, 28 skipped), ruff limpo
 E6.1: smoke real no ramo integrado (61bf09f, frontend.py --smoke offscreen): exit 0, 12 telas OK, CorrecaoPDM bloqueada nao visitada; relatorio gravado
 (2026-10-10 ~13h UTC) limite de sessao cortou a0472fd (fix2 E4.9, inicio), a376e8c (review E6.1, meio), a14a189 (fix1 E5.1, quase no fim: relatorio), ac41efc (E6.2, meio: licencas) -> reset 16:50 UTC
+E5.1: fix round 1 implementado: c0cdc5c -> 4069f7c em local/jonan-cambios (check.sh do agente em 4530a3a+fix: TUDO OK 6264/28); servico novo sigft/services/mural_atividades.py (atividades.py e travado contra openpyxl); re-review pendente (review-e5.1-fix1.diff)
+E6.1: review a376e8c: Approved (spec ok, sem Critical/Important; achados em review-e6.1-achados.md)
+E6.1: complete (commits 7febd4e -> 61bf09f; review clean)
+E6.1: minor (deferred -> rodada de melhorias com a11a7fe): #1 PySide6 ausente/quebrado nao leva ao --ctk; #2 falha no import da Qt com --smoke nao grava relatorio (Release pendura); #3 iCloud: tratar Desktop/Documents como sincronizados; #4 .gitattributes eol=lf p/ *.sh e *.command; #5 nits de teste; #6 nao gerar .exe antes da E6.2; #7 ruido pre-existente
+E6.1: rodada de melhorias (minors 1-5) -> a11a7fe (base 4069f7c); decisao do controlador p/ #1: sem --smoke, falha da Qt mostra mensagem e cai na CTk no mesmo processo; com --smoke grava relatorio e sai 1; E6.2 (ac41efc) avisado p/ conferencia carregar a Qt de verdade
+E5.1 fix: integrado 4069f7c: check.sh TUDO OK (6313 passed, 28 skipped), ruff limpo
+E4.9: fix round 2 implementado: 664e40e -> 11ed015 (check.sh do agente em 61bf09f+fix: TUDO OK 6306/28); desvio novo: depois do Limpar, revisao do Pular IA abre com editor livre; re-review pendente (review-e4.9-fix2.diff)
+E5.1: fix round 1/5 (4 addressed, 0 open; commits 61bf09f..4069f7c) -- re-review ac8cf12
+E5.1: complete (commits 748d3a4 + fix 4069f7c; review clean)
+E5.1: minor (deferred -> polimento): test_as_homes_nao_leem_a_planilha contornavel (from openpyxl import ...); docstring de views/home.py sem mural_atividades; mural_atividades fora do test_qt_sem_tkinter; test_le_as_colunas_e_classifica preenche 5 de 10 colunas; os.listdir fora do try em mural_atividades (herdado, PermissionError escapa do botao)
+E4.9 fix2: integrado 11ed015: check.sh TUDO OK (6315 passed, 28 skipped), ruff limpo
+E4.9: fix round 2/5 (1 addressed + 2 opcionais, 0 open; commits 4069f7c..11ed015) -- re-review ae9d9d5
+E4.9: complete (commits 9838d2f + fixes 4530a3a, 11ed015; review clean)
+E4.9: p/ Luan (herdado do CTk, PENDENCIAS): no fim do robo de CRIACAO, iniciar_tarefa religa "4. Robo Web" mesmo sem lote (Limpar com o robo rodando)
+POLIMENTO: implementador despachado (base 11ed015, brief-polimento.md)

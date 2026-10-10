@@ -63,3 +63,17 @@ Completo em /home/user/sig-ft/.superpowers/sdd/etapas3a6/polimento-report.md (se
 não puder gravar lá: /tmp/claude-0/-home-user/111ccf73-6723-5e3b-a4c3-03916583ae47/scratchpad/capturas/polimento/polimento-report.md),
 com a tabela de medidas antes/depois. Responda só com o contrato curto: Status, commits SHA +
 assunto, uma linha de testes, preocupações, caminho do relatório.
+
+## C. Achados das últimas revisões (pequenos)
+1. `tests/test_mural_atividades.py::test_as_homes_nao_leem_a_planilha` é contornável
+   (`from openpyxl import load_workbook` chamado como nome solto passa): conferir
+   `no.module.split(".")[0]` e chamadas `ast.Name`, como `tests/test_atividades.py:226-238`.
+2. `test_le_as_colunas_e_classifica` preenche só 5 das 10 colunas mapeadas: preencher todas,
+   para que trocar uma coluna por outra deixe o teste vermelho.
+3. `sigft.services.mural_atividades` entra na lista de `tests/test_qt_sem_tkinter.py`.
+4. Docstring de `sigft/app_qt/views/home.py` (linhas 5-9) cita os serviços usados: falta
+   `services.mural_atividades`.
+5. `sigft/services/mural_atividades.py:43`: `os.listdir` fora de qualquer `try` — uma
+   `PermissionError` na pasta lembrada escapa do botão em vez de virar o texto de erro
+   amigável (herdado da CTk, que agora delega ao mesmo serviço). Trate dentro do serviço,
+   com teste; vale para as duas interfaces, diga no relatório.

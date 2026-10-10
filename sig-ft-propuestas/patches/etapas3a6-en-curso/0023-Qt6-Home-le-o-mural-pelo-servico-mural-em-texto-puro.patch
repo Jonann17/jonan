@@ -1,0 +1,954 @@
+From 4069f7caa9b78496f4a407881dcce20423722e41 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 12:12:30 +0000
+Subject: [PATCH] Qt6: Home le o mural pelo servico, mural em texto puro e
+ restaurar sem desmaximizar
+
+Rodada de correcao 1 da E5.1 (revisao independente do 748d3a4):
+
+- `_ler_mural` e `_caminho_do_mapeamento` eram regra de negocio copiada
+  linha a linha nas duas Homes. Agora moram em
+  sigft/services/mural_atividades.py (`ler_mural_do_mapeamento(caminho,
+  hoje)` e `caminho_do_mapeamento()`), e as Homes CustomTkinter e Qt so
+  delegam. Fica fora de services/atividades.py porque aquele modulo e a
+  regra pura e nao pode ler planilha (test_o_modulo_nao_depende_de_excel).
+  As travas do mural (iter_rows, gavetas de FAIXAS, nomes do servico)
+  olham o modulo novo.
+- Mural Qt: rotulos em PlainText, como o CTkLabel ("Trocar <a> por <b> no
+  PDM" aparecia sem as "tags"); o rotulo da Home tambem.
+- Testes que faltavam: o padrao "Nao" do "Aplicar mesmo assim?", a guarda
+  do catalogo que chega com o painel destruido (com espiao) e a janela
+  minimizada restaurada.
+- `_trazer_para_frente` tira so o minimizado: `showNormal()` desmaximizava.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
+---
+ sigft/app/views/home.py              | 102 ++-------------
+ sigft/app_qt/views/home.py           |  96 +++-----------
+ sigft/app_qt/widgets/mural.py        |   3 +
+ sigft/services/mural_atividades.py   | 116 +++++++++++++++++
+ tests/test_mural_atividades.py       | 181 +++++++++++++++++++++++++++
+ tests/test_mural_nomes_do_servico.py |  68 +++++-----
+ tests/test_qt_home_paineis.py        | 171 ++++++++++---------------
+ 7 files changed, 424 insertions(+), 313 deletions(-)
+ create mode 100644 sigft/services/mural_atividades.py
+ create mode 100644 tests/test_mural_atividades.py
+
+diff --git a/sigft/app/views/home.py b/sigft/app/views/home.py
+index 45c73e0..5e178e6 100644
+--- a/sigft/app/views/home.py
++++ b/sigft/app/views/home.py
+@@ -216,104 +216,24 @@ class HomeView(ctk.CTkScrollableFrame):
+     def _ler_mural(self):
+         """`(gavetas, erro)` -- le a aba Atividades do mapeamento.
+ 
+-        Devolve o erro como TEXTO em vez de levantar: o mural e informativo, e
+-        uma planilha ausente nao pode virar traceback na cara do usuario.
++        [2026-10-10] A leitura mora em `services/mural_atividades.py`
++        (`ler_mural_do_mapeamento`): era o mesmo bloco copiado linha a linha
++        aqui e na Home Qt (`sigft/app_qt/views/home.py`), que tambem delega
++        para la. Devolve o erro como TEXTO em vez de levantar -- o mural e
++        informativo, e uma planilha ausente nao pode virar traceback.
+         """
+         from datetime import date
+ 
+-        from sigft.services import atividades as at
+-
+-        # As gavetas saem de `at.FAIXAS`, NUNCA de uma lista escrita aqui.
+-        # A primeira versao listava as faixas a mao; quando o mural passou a
+-        # ser por PRAZO os nomes mudaram no servico e esta linha ficou para
+-        # tras, com `at.PARA_COMECAR` e `at.TRAVADA` inexistentes. O
+-        # AttributeError subia antes do try e o botao simplesmente nao abria
+-        # janela nenhuma. Derivando de `FAIXAS` os dois lados nao tem como
+-        # divergir de novo.
+-        vazio = {faixa: [] for faixa in at.FAIXAS}
+-
+-        caminho = self._caminho_do_mapeamento()
+-        if not caminho:
+-            return vazio, (
+-                "Nao encontrei o arquivo de mapeamento.\n\n"
+-                "Rode o PMIB Manager uma vez apontando a planilha gerenciadora -- "
+-                "o mural passa a ler dela."
+-            )
++        from sigft.services import mural_atividades
+ 
+-        try:
+-            import openpyxl
+-
+-            # `data_only=True` e obrigatorio: as celulas de agregacao da aba
+-            # sao formulas, e sem isto `.value` devolveria a string "=FALSE()"
+-            # em vez do valor. Foi um defeito real nesta mesma frente.
+-            wb = openpyxl.load_workbook(caminho, data_only=True, read_only=True)
+-            if "Atividades" not in wb.sheetnames:
+-                wb.close()
+-                return vazio, "A planilha nao tem a aba 'Atividades'.\n\n" + str(caminho)
+-
+-            ws = wb["Atividades"]
+-
+-            # ⚠️ `iter_rows`, NUNCA `ws.cell(...)` numa planilha `read_only`.
+-            #
+-            # Em modo read-only a aba e um FLUXO so-para-frente: cada
+-            # `ws.cell(linha, coluna)` re-percorre o XML desde o comeco. Eram
+-            # 84 linhas x 10 colunas = 840 varreduras, e o mural levava
+-            # 3,9 s para abrir num arquivo de 40 KB. `iter_rows` passa uma
+-            # vez so: caiu para centesimos de segundo.
+-            def _celula(valores, coluna):
+-                indice = coluna - 1
+-                return valores[indice] if indice < len(valores) else None
+-
+-            linhas = []
+-            for valores in ws.iter_rows(min_row=at.LINHA_CABECALHO + 1, values_only=True):
+-                linhas.append({
+-                    "nv": _celula(valores, at.COL_NV),
+-                    "descricao": _celula(valores, at.COL_DESCRICAO),
+-                    "concluida": _celula(valores, at.COL_CONCLUIDA),
+-                    "status": _celula(valores, at.COL_STATUS),
+-                    "com_quem": _celula(valores, at.COL_COM_QUEM),
+-                    "criticidade": _celula(valores, at.COL_CRITICIDADE),
+-                    "data_prevista_inicio": _celula(valores, at.COL_DATA_PREVISTA_INICIO) or "",
+-                    "previsao_termino": _celula(valores, at.COL_PREVISAO_TERMINO) or "",
+-                    # As datas REAIS. Antes iam como "" fixo, e a regra que
+-                    # decide "ja comecou" ficava cega: atividade com DATA DE
+-                    # INICIO preenchida aparecia como "era para comecar ha N
+-                    # dias".
+-                    "data_inicio": _celula(valores, at.COL_DATA_INICIO) or "",
+-                    "data_termino": _celula(valores, at.COL_DATA_TERMINO) or "",
+-                })
+-            wb.close()
+-            return at.mural(linhas, date.today()), None
+-        except Exception as e:
+-            return vazio, "Nao consegui ler as atividades:\n{}: {}\n\n{}".format(
+-                type(e).__name__, e, caminho)
++        return mural_atividades.ler_mural_do_mapeamento(self._caminho_do_mapeamento(), date.today())
+ 
+     def _caminho_do_mapeamento(self):
+-        """O ultimo arquivo gerenciadora que o usuario escolheu, se existir."""
+-        import os
++        """O ultimo arquivo gerenciadora que o usuario escolheu, se existir
++        (`services/mural_atividades.caminho_do_mapeamento`)."""
++        from sigft.services import mural_atividades
+ 
+-        from sigft.core import prefs
+-
+-        # 1. O arquivo que o PMIB Manager registrou ao ser usado.
+-        try:
+-            salvo = prefs.get_last_file(prefs.CHAVE_MAPEAMENTO)
+-        except Exception:
+-            salvo = None
+-        if salvo:
+-            return salvo
+-
+-        # 2. Reserva: a PASTA lembrada do seletor, procurando o arquivo nela.
+-        #    Cobre quem já usou o PMIB Manager ANTES desta versão, quando só a
+-        #    pasta era guardada.
+-        try:
+-            pasta = prefs.get_initial_dir("pmib_manager.master", "excel")
+-        except Exception:
+-            pasta = None
+-        if pasta and os.path.isdir(pasta):
+-            for nome in sorted(os.listdir(pasta)):
+-                if "mapeamento" in nome.lower() and nome.lower().endswith((".xlsx", ".xlsm")):
+-                    return os.path.join(pasta, nome)
+-        return None
++        return mural_atividades.caminho_do_mapeamento()
+ 
+     # =====================================================================
+     # CARDS DOS MODULOS  [2026-09-03] -- clicaveis
+diff --git a/sigft/app_qt/views/home.py b/sigft/app_qt/views/home.py
+index 9098798..7e70ebc 100644
+--- a/sigft/app_qt/views/home.py
++++ b/sigft/app_qt/views/home.py
+@@ -128,6 +128,8 @@ def _rotulo(texto: str, fonte: tuple = FONTE_CTK, *, cor: str = COR_TEXTO_CTK,
+     """CTkLabel de uma linha, `anchor="w"`: 28 px de altura no mínimo, texto
+     centrado na vertical; `largura_minima` é o `width=` (o texto maior alarga)."""
+     r = QLabel(texto)
++    # Texto cru, como o CTkLabel: em AutoText um "<" viraria HTML.
++    r.setTextFormat(Qt.TextFormat.PlainText)
+     r.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+     r.setMinimumHeight(blocos.ALTURA_MINIMA_ROTULO)
+     if largura_minima:
+@@ -438,7 +440,9 @@ class HomeView(QScrollArea):
+         if not _vivo(janela) or not janela.isVisible():
+             return None
+         if janela.isMinimized():
+-            janela.showNormal()
++            # Só tira o "minimizado": `showNormal()` também desmaximizaria a
++            # janela que a pessoa tinha maximizado antes de minimizar.
++            janela.setWindowState(janela.windowState() & ~Qt.WindowState.WindowMinimized)
+         janela.raise_()
+         janela.activateWindow()
+         return janela
+@@ -494,91 +498,19 @@ class HomeView(QScrollArea):
+             geometria="820x640")
+ 
+     def _ler_mural(self):
+-        """`(gavetas, erro)` -- le a aba Atividades do mapeamento.
++        """`(gavetas, erro)` -- a aba Atividades do mapeamento, lida pelo
++        serviço (`services/mural_atividades.ler_mural_do_mapeamento`), o mesmo da
++        Home CustomTkinter. O erro vem como TEXTO: o mural é informativo."""
++        from sigft.services import mural_atividades
+ 
+-        Devolve o erro como TEXTO em vez de levantar: o mural e informativo, e
+-        uma planilha ausente nao pode virar traceback na cara do usuario.
+-        """
+-        from sigft.services import atividades as at
+-
+-        # As gavetas saem de `at.FAIXAS`, NUNCA de uma lista escrita aqui (ver
+-        # tests/test_mural_nomes_do_servico.py).
+-        vazio = {faixa: [] for faixa in at.FAIXAS}
+-
+-        caminho = self._caminho_do_mapeamento()
+-        if not caminho:
+-            return vazio, (
+-                "Nao encontrei o arquivo de mapeamento.\n\n"
+-                "Rode o PMIB Manager uma vez apontando a planilha gerenciadora -- "
+-                "o mural passa a ler dela."
+-            )
+-
+-        try:
+-            import openpyxl
+-
+-            # `data_only=True` e obrigatorio: as celulas de agregacao da aba
+-            # sao formulas, e sem isto `.value` devolveria a string "=FALSE()".
+-            wb = openpyxl.load_workbook(caminho, data_only=True, read_only=True)
+-            if "Atividades" not in wb.sheetnames:
+-                wb.close()
+-                return vazio, "A planilha nao tem a aba 'Atividades'.\n\n" + str(caminho)
+-
+-            ws = wb["Atividades"]
+-
+-            # ⚠️ `iter_rows`, NUNCA `ws.cell(...)` numa planilha `read_only`:
+-            # cada `ws.cell` re-percorre o XML desde o comeco (o mural levava
+-            # 3,9 s para abrir num arquivo de 40 KB).
+-            def _celula(valores, coluna):
+-                indice = coluna - 1
+-                return valores[indice] if indice < len(valores) else None
+-
+-            linhas = []
+-            for valores in ws.iter_rows(min_row=at.LINHA_CABECALHO + 1, values_only=True):
+-                linhas.append({
+-                    "nv": _celula(valores, at.COL_NV),
+-                    "descricao": _celula(valores, at.COL_DESCRICAO),
+-                    "concluida": _celula(valores, at.COL_CONCLUIDA),
+-                    "status": _celula(valores, at.COL_STATUS),
+-                    "com_quem": _celula(valores, at.COL_COM_QUEM),
+-                    "criticidade": _celula(valores, at.COL_CRITICIDADE),
+-                    "data_prevista_inicio": _celula(valores, at.COL_DATA_PREVISTA_INICIO) or "",
+-                    "previsao_termino": _celula(valores, at.COL_PREVISAO_TERMINO) or "",
+-                    # As datas REAIS: sem elas a regra que decide "ja comecou"
+-                    # ficava cega.
+-                    "data_inicio": _celula(valores, at.COL_DATA_INICIO) or "",
+-                    "data_termino": _celula(valores, at.COL_DATA_TERMINO) or "",
+-                })
+-            wb.close()
+-            return at.mural(linhas, date.today()), None
+-        except Exception as e:
+-            return vazio, "Nao consegui ler as atividades:\n{}: {}\n\n{}".format(
+-                type(e).__name__, e, caminho)
++        return mural_atividades.ler_mural_do_mapeamento(self._caminho_do_mapeamento(), date.today())
+ 
+     def _caminho_do_mapeamento(self):
+-        """O ultimo arquivo gerenciadora que o usuario escolheu, se existir."""
+-        import os
+-
+-        from sigft.core import prefs
++        """O último arquivo gerenciadora que o usuário escolheu, se existir
++        (`services/mural_atividades.caminho_do_mapeamento`)."""
++        from sigft.services import mural_atividades
+ 
+-        # 1. O arquivo que o PMIB Manager registrou ao ser usado.
+-        try:
+-            salvo = prefs.get_last_file(prefs.CHAVE_MAPEAMENTO)
+-        except Exception:
+-            salvo = None
+-        if salvo:
+-            return salvo
+-
+-        # 2. Reserva: a PASTA lembrada do seletor, procurando o arquivo nela.
+-        #    Cobre quem já usou o PMIB Manager ANTES de o arquivo ser guardado.
+-        try:
+-            pasta = prefs.get_initial_dir("pmib_manager.master", "excel")
+-        except Exception:
+-            pasta = None
+-        if pasta and os.path.isdir(pasta):
+-            for nome in sorted(os.listdir(pasta)):
+-                if "mapeamento" in nome.lower() and nome.lower().endswith((".xlsx", ".xlsm")):
+-                    return os.path.join(pasta, nome)
+-        return None
++        return mural_atividades.caminho_do_mapeamento()
+ 
+     # =====================================================================
+     # CARDS DOS MÓDULOS  [2026-09-03] -- clicáveis
+diff --git a/sigft/app_qt/widgets/mural.py b/sigft/app_qt/widgets/mural.py
+index 5877b8a..5f283b2 100644
+--- a/sigft/app_qt/widgets/mural.py
++++ b/sigft/app_qt/widgets/mural.py
+@@ -89,6 +89,9 @@ def _rotulo(texto, fonte: tuple, cor: str, *, largura: int | None = None,
+     largura; o que cabe fica numa linha só, com a largura dele (o `anchor` de lá).
+     """
+     r = QLabel(texto)
++    # Texto da planilha, CRU como no CTkLabel: em AutoText o QLabel tomaria um
++    # "Trocar <a> por <b> no PDM" por HTML e engoliria as "tags".
++    r.setTextFormat(Qt.TextFormat.PlainText)
+     horizontal = Qt.AlignmentFlag.AlignRight if direita else Qt.AlignmentFlag.AlignLeft
+     r.setAlignment(horizontal | Qt.AlignmentFlag.AlignVCenter)
+     r.setMinimumHeight(blocos.ALTURA_MINIMA_ROTULO)
+diff --git a/sigft/services/mural_atividades.py b/sigft/services/mural_atividades.py
+new file mode 100644
+index 0000000..7c39f21
+--- /dev/null
++++ b/sigft/services/mural_atividades.py
+@@ -0,0 +1,116 @@
++"""A leitura do mural de atividades: a aba "Atividades" do mapeamento.
++
++[2026-10-10] Morava nas duas Homes (`sigft/app/views/home.py`, CustomTkinter,
++e `sigft/app_qt/views/home.py`, Qt), copiada linha a linha. É regra de dados --
++achar o arquivo, abrir a planilha, mapear as colunas -- e não desenho: as duas
++interfaces DELEGAM para cá (`HomeView._ler_mural` e
++`HomeView._caminho_do_mapeamento`), e a regra se prova sem janela
++(`tests/test_mural_atividades.py`).
++
++Fica fora de `services/atividades.py` de propósito: aquele módulo é a regra
++pura (faixas, prazos, totais) e não lê planilha nenhuma
++(`test_o_modulo_nao_depende_de_excel`). Este o usa para classificar.
++`openpyxl` e `prefs` entram dentro das funções: importar este módulo não custa
++nada a quem só abre o app.
++"""
++from __future__ import annotations
++
++from sigft.services import atividades as at
++
++
++def caminho_do_mapeamento():
++    """O último arquivo gerenciadora que o usuário escolheu, se existir."""
++    import os
++
++    from sigft.core import prefs
++
++    # 1. O arquivo que o PMIB Manager registrou ao ser usado.
++    try:
++        salvo = prefs.get_last_file(prefs.CHAVE_MAPEAMENTO)
++    except Exception:
++        salvo = None
++    if salvo:
++        return salvo
++
++    # 2. Reserva: a PASTA lembrada do seletor, procurando o arquivo nela.
++    #    Cobre quem já usou o PMIB Manager ANTES de o arquivo ser guardado,
++    #    quando só a pasta era.
++    try:
++        pasta = prefs.get_initial_dir("pmib_manager.master", "excel")
++    except Exception:
++        pasta = None
++    if pasta and os.path.isdir(pasta):
++        for nome in sorted(os.listdir(pasta)):
++            if "mapeamento" in nome.lower() and nome.lower().endswith((".xlsx", ".xlsm")):
++                return os.path.join(pasta, nome)
++    return None
++
++
++def ler_mural_do_mapeamento(caminho, hoje):
++    """`(gavetas, erro)` -- lê a aba Atividades do mapeamento em `caminho` e
++    classifica as atividades para o dia `hoje` (`atividades.mural`).
++
++    Devolve o erro como TEXTO em vez de levantar: o mural é informativo, e
++    uma planilha ausente não pode virar traceback na cara do usuário.
++    """
++    # As gavetas saem de `at.FAIXAS`, NUNCA de uma lista escrita aqui. A
++    # primeira versão listava as faixas à mão; quando o mural passou a ser por
++    # PRAZO os nomes mudaram no serviço e a lista ficou para trás, com
++    # `at.PARA_COMECAR` e `at.TRAVADA` inexistentes. O AttributeError subia
++    # antes do try e o botão simplesmente não abria janela nenhuma. Derivando
++    # de `FAIXAS` os dois lados não têm como divergir de novo.
++    vazio = {faixa: [] for faixa in at.FAIXAS}
++
++    if not caminho:
++        return vazio, (
++            "Nao encontrei o arquivo de mapeamento.\n\n"
++            "Rode o PMIB Manager uma vez apontando a planilha gerenciadora -- "
++            "o mural passa a ler dela."
++        )
++
++    try:
++        import openpyxl
++
++        # `data_only=True` é obrigatório: as células de agregação da aba são
++        # fórmulas, e sem isto `.value` devolveria a string "=FALSE()" em vez
++        # do valor. Foi um defeito real nesta mesma frente.
++        wb = openpyxl.load_workbook(caminho, data_only=True, read_only=True)
++        if "Atividades" not in wb.sheetnames:
++            wb.close()
++            return vazio, "A planilha nao tem a aba 'Atividades'.\n\n" + str(caminho)
++
++        ws = wb["Atividades"]
++
++        # ⚠️ `iter_rows`, NUNCA `ws.cell(...)` numa planilha `read_only`.
++        #
++        # Em modo read-only a aba é um FLUXO só-para-frente: cada
++        # `ws.cell(linha, coluna)` re-percorre o XML desde o começo. Eram 84
++        # linhas x 10 colunas = 840 varreduras, e o mural levava 3,9 s para
++        # abrir num arquivo de 40 KB. `iter_rows` passa uma vez só: caiu para
++        # centésimos de segundo.
++        def _celula(valores, coluna):
++            indice = coluna - 1
++            return valores[indice] if indice < len(valores) else None
++
++        linhas = []
++        for valores in ws.iter_rows(min_row=at.LINHA_CABECALHO + 1, values_only=True):
++            linhas.append({
++                "nv": _celula(valores, at.COL_NV),
++                "descricao": _celula(valores, at.COL_DESCRICAO),
++                "concluida": _celula(valores, at.COL_CONCLUIDA),
++                "status": _celula(valores, at.COL_STATUS),
++                "com_quem": _celula(valores, at.COL_COM_QUEM),
++                "criticidade": _celula(valores, at.COL_CRITICIDADE),
++                "data_prevista_inicio": _celula(valores, at.COL_DATA_PREVISTA_INICIO) or "",
++                "previsao_termino": _celula(valores, at.COL_PREVISAO_TERMINO) or "",
++                # As datas REAIS. Antes iam como "" fixo, e a regra que decide
++                # "já começou" ficava cega: atividade com DATA DE INÍCIO
++                # preenchida aparecia como "era para começar há N dias".
++                "data_inicio": _celula(valores, at.COL_DATA_INICIO) or "",
++                "data_termino": _celula(valores, at.COL_DATA_TERMINO) or "",
++            })
++        wb.close()
++        return at.mural(linhas, hoje), None
++    except Exception as e:
++        return vazio, "Nao consegui ler as atividades:\n{}: {}\n\n{}".format(
++            type(e).__name__, e, caminho)
+diff --git a/tests/test_mural_atividades.py b/tests/test_mural_atividades.py
+new file mode 100644
+index 0000000..1795e35
+--- /dev/null
++++ b/tests/test_mural_atividades.py
+@@ -0,0 +1,181 @@
++"""A leitura do mural no mapeamento -- `services/mural_atividades.py`.
++
++Até a E5.1 morava nas duas Homes (CustomTkinter e Qt), linha a linha: o mesmo
++bloco que já teve três defeitos reais (`ws.cell` levando 3,9 s, `data_inicio`
++lida em branco, as faixas listadas a mão). Agora as duas Homes DELEGAM para o
++serviço (`HomeView._ler_mural` / `_caminho_do_mapeamento`), e a regra se prova
++aqui, sem janela nenhuma. (Não em `services/atividades.py`: aquele módulo é a
++regra pura, e `test_o_modulo_nao_depende_de_excel` o proíbe de ler planilha.)
++"""
++import ast
++import inspect
++import sys
++import types
++from datetime import date
++
++import pytest
++
++from sigft.services import atividades as at
++from sigft.services import mural_atividades as ma
++
++HOJE = date(2026, 10, 9)
++
++
++class _AbaFalsa:
++    def __init__(self, linhas):
++        self.linhas = linhas
++        self.pedidos = []
++
++    def iter_rows(self, min_row=1, values_only=False):
++        self.pedidos.append((min_row, values_only))
++        return iter(self.linhas)
++
++
++class _PastaFalsa:
++    def __init__(self, abas):
++        self.abas = abas
++        self.sheetnames = list(abas)
++        self.fechada = False
++
++    def __getitem__(self, nome):
++        return self.abas[nome]
++
++    def close(self):
++        self.fechada = True
++
++
++def _openpyxl_falso(monkeypatch, pasta):
++    modulo = types.ModuleType("openpyxl")
++    modulo.abertos = []
++
++    def load_workbook(caminho, **kw):
++        modulo.abertos.append((caminho, kw))
++        if isinstance(pasta, Exception):
++            raise pasta
++        return pasta
++
++    modulo.load_workbook = load_workbook
++    monkeypatch.setitem(sys.modules, "openpyxl", modulo)
++    return modulo
++
++
++def test_sem_mapeamento_explica_o_que_fazer():
++    gavetas, erro = ma.ler_mural_do_mapeamento(None, HOJE)
++    assert gavetas == {f: [] for f in at.FAIXAS}
++    assert erro == ("Nao encontrei o arquivo de mapeamento.\n\n"
++                    "Rode o PMIB Manager uma vez apontando a planilha gerenciadora -- "
++                    "o mural passa a ler dela.")
++
++
++def test_planilha_sem_a_aba(monkeypatch):
++    pasta = _PastaFalsa({"Outra": _AbaFalsa([])})
++    _openpyxl_falso(monkeypatch, pasta)
++    gavetas, erro = ma.ler_mural_do_mapeamento("/x/mapeamento.xlsx", HOJE)
++    assert gavetas == {f: [] for f in at.FAIXAS}
++    assert erro == "A planilha nao tem a aba 'Atividades'.\n\n/x/mapeamento.xlsx"
++    assert pasta.fechada
++
++
++def test_le_as_colunas_e_classifica(monkeypatch):
++    linha = [None] * 16
++    linha[at.COL_NV - 1] = 2
++    linha[at.COL_DESCRICAO - 1] = "Revisar"
++    linha[at.COL_STATUS - 1] = "Em andamento"
++    linha[at.COL_PREVISAO_TERMINO - 1] = "2026-10-01"
++    linha[at.COL_DATA_INICIO - 1] = "2026-09-30"
++    aba = _AbaFalsa([tuple(linha), (1,)])
++    pasta = _PastaFalsa({"Atividades": aba})
++    modulo = _openpyxl_falso(monkeypatch, pasta)
++    recebidas = []
++    monkeypatch.setattr(at, "mural", lambda linhas, hoje: recebidas.append((linhas, hoje)) or "GAVETAS")
++
++    gavetas, erro = ma.ler_mural_do_mapeamento("/x/mapeamento.xlsx", HOJE)
++
++    assert (gavetas, erro) == ("GAVETAS", None)
++    # `data_only`: as células de agregação são fórmulas; sem ele viria "=FALSE()".
++    assert modulo.abertos == [("/x/mapeamento.xlsx", {"data_only": True, "read_only": True})]
++    assert aba.pedidos == [(at.LINHA_CABECALHO + 1, True)]
++    assert pasta.fechada
++    [(linhas, hoje)] = recebidas
++    assert hoje == HOJE
++    assert linhas[0]["descricao"] == "Revisar" and linhas[0]["status"] == "Em andamento"
++    assert linhas[0]["previsao_termino"] == "2026-10-01"
++    assert linhas[0]["data_inicio"] == "2026-09-30", "a data REAL de início não pode vir em branco"
++    assert linhas[0]["data_termino"] == "" and linhas[0]["data_prevista_inicio"] == ""
++    assert linhas[1]["nv"] == 1 and linhas[1]["descricao"] is None  # linha curta não quebra
++
++
++def test_falha_na_leitura_vira_texto(monkeypatch):
++    _openpyxl_falso(monkeypatch, PermissionError("travado"))
++    gavetas, erro = ma.ler_mural_do_mapeamento("/x/m.xlsx", HOJE)
++    assert gavetas == {f: [] for f in at.FAIXAS}
++    assert erro == "Nao consegui ler as atividades:\nPermissionError: travado\n\n/x/m.xlsx"
++
++
++def test_caminho_do_mapeamento(monkeypatch, tmp_path):
++    from sigft.core import prefs
++
++    monkeypatch.setattr(prefs, "get_last_file", lambda chave: "/salvo/Mapeamento.xlsx"
++                        if chave == prefs.CHAVE_MAPEAMENTO else None)
++    assert ma.caminho_do_mapeamento() == "/salvo/Mapeamento.xlsx"
++
++    # Reserva: a pasta lembrada do seletor do PMIB Manager, procurando o arquivo nela.
++    monkeypatch.setattr(prefs, "get_last_file", lambda chave: None)
++    (tmp_path / "leia-me.txt").write_text("x")
++    (tmp_path / "PMIB - Mapeamento geral.xlsm").write_text("x")
++    monkeypatch.setattr(prefs, "get_initial_dir", lambda chave, categoria: str(tmp_path)
++                        if (chave, categoria) == ("pmib_manager.master", "excel") else None)
++    assert ma.caminho_do_mapeamento() == str(tmp_path / "PMIB - Mapeamento geral.xlsm")
++
++    monkeypatch.setattr(prefs, "get_initial_dir", lambda *a: str(tmp_path / "nao-existe"))
++    assert ma.caminho_do_mapeamento() is None
++
++
++def test_preferencia_ilegivel_nao_derruba_o_caminho(monkeypatch):
++    from sigft.core import prefs
++
++    def quebra(*_a, **_k):
++        raise OSError("user_prefs.json ilegível")
++
++    monkeypatch.setattr(prefs, "get_last_file", quebra)
++    monkeypatch.setattr(prefs, "get_initial_dir", quebra)
++    assert ma.caminho_do_mapeamento() is None
++
++
++# =============================================================================
++# As duas Homes só DELEGAM (nenhuma lê a planilha)
++# =============================================================================
++
++def _home_falsa(caminho):
++    return types.SimpleNamespace(_caminho_do_mapeamento=lambda: caminho)
++
++
++@pytest.mark.parametrize("modulo", ["sigft.app.views.home", "sigft.app_qt.views.home"])
++def test_as_homes_delegam_a_leitura_ao_servico(modulo, monkeypatch):
++    import importlib
++
++    home = importlib.import_module(modulo)
++    pedidos = []
++    monkeypatch.setattr(ma, "ler_mural_do_mapeamento",
++                        lambda caminho, hoje: pedidos.append((caminho, hoje)) or ("G", "E"))
++    monkeypatch.setattr(ma, "caminho_do_mapeamento", lambda: "/do/servico.xlsx")
++
++    assert home.HomeView._ler_mural(_home_falsa("/da/tela.xlsx")) == ("G", "E")
++    assert pedidos == [("/da/tela.xlsx", date.today())]
++    assert home.HomeView._caminho_do_mapeamento(object()) == "/do/servico.xlsx"
++
++
++@pytest.mark.parametrize("modulo", ["sigft.app.views.home", "sigft.app_qt.views.home"])
++def test_as_homes_nao_leem_a_planilha(modulo):
++    """Regra de negócio fora da interface (CLAUDE.md, princípio 2): nenhuma das
++    duas Homes abre planilha nem procura arquivo -- é tudo do serviço."""
++    import importlib
++
++    fonte = inspect.getsource(importlib.import_module(modulo))
++    arvore = ast.parse(fonte)
++    importados = {alias.name for no in ast.walk(arvore) if isinstance(no, (ast.Import, ast.ImportFrom))
++                  for alias in no.names}
++    chamados = {no.func.attr for no in ast.walk(arvore)
++                if isinstance(no, ast.Call) and isinstance(no.func, ast.Attribute)}
++    assert "openpyxl" not in importados
++    assert not {"iter_rows", "load_workbook", "listdir", "get_last_file"} & chamados
+diff --git a/tests/test_mural_nomes_do_servico.py b/tests/test_mural_nomes_do_servico.py
+index 7206eff..fbdb49a 100644
+--- a/tests/test_mural_nomes_do_servico.py
++++ b/tests/test_mural_nomes_do_servico.py
+@@ -15,8 +15,9 @@ Por que `compileall` e `pyflakes` não pegam: `at.PARA_COMECAR` é sintaxe
+ válida e `at` está definido. Só olhando DENTRO do módulo importado dá para
+ saber que o atributo não existe — que é o que este teste faz.
+ 
+-Vale para qualquer nome (constante ou função), e para os dois arquivos que
+-falam com o serviço: a Home lê a planilha, o widget desenha.
++Vale para qualquer nome (constante ou função), e para os arquivos que falam
++com o serviço: o leitor lê a planilha (`services/mural_atividades.py`, para
++onde as duas Homes delegam desde 2026-10-10), os widgets desenham.
+ """
+ import ast
+ import pathlib
+@@ -27,15 +28,25 @@ from sigft.services import atividades
+ 
+ RAIZ = pathlib.Path(__file__).resolve().parent.parent
+ ARQUIVOS = [
+-    RAIZ / "sigft" / "app" / "views" / "home.py",
++    # [2026-10-10] A LEITURA da aba (o `_ler_mural` que morava nas duas Homes)
++    # agora é do serviço `mural_atividades`; as Homes só delegam
++    # (`tests/test_mural_atividades.py`). Os arquivos que citam o serviço
++    # `atividades` são o leitor e os dois desenhos (CustomTkinter e Qt).
++    RAIZ / "sigft" / "services" / "mural_atividades.py",
+     RAIZ / "sigft" / "app" / "widgets" / "mural.py",
+-    # [2026-10-09] A Home e o mural da interface Qt (E5.1): a mesma leitura e o
+-    # mesmo desenho, então as mesmas travas.
+-    RAIZ / "sigft" / "app_qt" / "views" / "home.py",
+     RAIZ / "sigft" / "app_qt" / "widgets" / "mural.py",
+ ]
+-HOMES = [p for p in ARQUIVOS if p.name == "home.py"]
+ MURAIS = [p for p in ARQUIVOS if p.name == "mural.py"]
++LEITOR = RAIZ / "sigft" / "services" / "mural_atividades.py"
++FUNCAO_DE_LEITURA = "ler_mural_do_mapeamento"
++
++
++def _funcao_de_leitura():
++    arvore = ast.parse(LEITOR.read_text(encoding="utf-8"))
++    for no in ast.walk(arvore):
++        if isinstance(no, ast.FunctionDef) and no.name == FUNCAO_DE_LEITURA:
++            return no
++    pytest.fail(f"{FUNCAO_DE_LEITURA} nao encontrada em services/mural_atividades.py")
+ 
+ 
+ def _apelidos_do_servico(arvore):
+@@ -76,16 +87,15 @@ def test_todo_nome_citado_existe_no_servico(caminho):
+     )
+ 
+ 
+-@pytest.mark.parametrize("caminho", HOMES, ids=lambda p: p.parent.parent.name)
+-def test_gavetas_do_mural_saem_de_faixas(caminho):
+-    """A Home monta as gavetas vazias derivando de `FAIXAS`, não a mão.
++def test_gavetas_do_mural_saem_de_faixas():
++    """A leitura monta as gavetas vazias derivando de `FAIXAS`, não a mão.
+ 
+     Escrever as faixas a mão é exatamente o que apodreceu. Se alguém voltar a
+     listá-las, este teste avisa.
+     """
+-    fonte = caminho.read_text(encoding="utf-8")
+-    assert "vazio = {faixa: [] for faixa in at.FAIXAS}" in fonte, (
+-        "Home._ler_mural deve derivar as gavetas de at.FAIXAS, nunca listar as faixas a mao."
++    trecho = ast.unparse(_funcao_de_leitura())
++    assert "vazio = {faixa: [] for faixa in at.FAIXAS}" in trecho, (
++        f"{FUNCAO_DE_LEITURA} deve derivar as gavetas de at.FAIXAS, nunca listar as faixas a mao."
+     )
+ 
+ 
+@@ -143,8 +153,7 @@ def test_o_mural_desenha_todas_as_faixas(dicionario, caminho):
+ # Planilha em read_only se le com iter_rows, nunca com ws.cell
+ # =============================================================================
+ 
+-@pytest.mark.parametrize("caminho", HOMES, ids=lambda p: p.parent.parent.name)
+-def test_leitura_do_mural_nao_usa_ws_cell(caminho):
++def test_leitura_do_mural_nao_usa_ws_cell():
+     """`ws.cell(l, c)` em `read_only=True` custa O(n²).
+ 
+     Em modo read-only a aba é um FLUXO só-para-frente: cada `ws.cell` volta ao
+@@ -156,22 +165,13 @@ def test_leitura_do_mural_nao_usa_ws_cell(caminho):
+     O defeito não dá erro nenhum: só fica lento. Por isso precisa de trava —
+     nada mais o denunciaria.
+     """
+-    fonte = caminho.read_text(encoding="utf-8")
+-    arvore = ast.parse(fonte)
+-
+-    for no in ast.walk(arvore):
+-        if not (isinstance(no, ast.FunctionDef) and no.name == "_ler_mural"):
+-            continue
+-        chamadas = [
+-            c.func.attr
+-            for c in ast.walk(no)
+-            if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+-        ]
+-        assert "cell" not in chamadas, (
+-            "_ler_mural voltou a usar ws.cell() numa planilha read_only: "
+-            "custo quadratico. Use ws.iter_rows(values_only=True)."
+-        )
+-        assert "iter_rows" in chamadas, "_ler_mural deve ler com iter_rows"
+-        return
+-
+-    pytest.fail("_ler_mural nao encontrado em home.py")
++    chamadas = [
++        c.func.attr
++        for c in ast.walk(_funcao_de_leitura())
++        if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
++    ]
++    assert "cell" not in chamadas, (
++        f"{FUNCAO_DE_LEITURA} voltou a usar ws.cell() numa planilha read_only: "
++        "custo quadratico. Use ws.iter_rows(values_only=True)."
++    )
++    assert "iter_rows" in chamadas, f"{FUNCAO_DE_LEITURA} deve ler com iter_rows"
+diff --git a/tests/test_qt_home_paineis.py b/tests/test_qt_home_paineis.py
+index 5caef26..0691b13 100644
+--- a/tests/test_qt_home_paineis.py
++++ b/tests/test_qt_home_paineis.py
+@@ -12,9 +12,7 @@ janela 1280x850, `winfo_*`), em `capturas/e5.1/ctk_*.txt`.
+ """
+ import ast
+ import pathlib
+-import sys
+ import threading
+-import types
+ from datetime import date
+ 
+ import pytest
+@@ -82,11 +80,13 @@ class Controller:
+ def mensagens(monkeypatch):
+     """Toda caixa de mensagem vira um registro; `respostas` responde as perguntas."""
+     caixas = _Lista()
++    caixas.extras = []  # (botões, padrão...) de cada caixa, na mesma ordem
+     respostas = []
+ 
+     def registrar(tipo):
+         def caixa(parent, titulo, texto, *a, **k):
+             caixas.append((tipo, titulo, texto, parent))
++            caixas.extras.append((a, k))
+             if tipo == "question":
+                 return respostas.pop(0) if respostas else QMessageBox.StandardButton.No
+             return QMessageBox.StandardButton.Ok
+@@ -285,6 +285,26 @@ def test_segundo_clique_traz_a_mesma_janela(home, monkeypatch, abrir):
+     assert _janelas_abertas(home) == [primeira]
+ 
+ 
++def test_segundo_clique_restaura_a_janela_minimizada(home, qtbot):
++    janela = home.abrir_janela_gastos_ia()
++    janela.showMinimized()
++    assert janela.isMinimized()
++    assert home.abrir_janela_gastos_ia() is janela
++    assert not janela.isMinimized() and janela.isVisible()
++
++
++def test_restaurar_nao_desmaximiza(home, qtbot):
++    # Maximizada e depois minimizada: volta MAXIMIZADA (o `showNormal()` a
++    # desmaximizava).
++    janela = home.abrir_janela_modelos_ia()
++    janela.showMaximized()
++    janela.showMinimized()
++    assert janela.isMinimized() and janela.windowState() & Qt.WindowState.WindowMaximized
++    assert home.abrir_janela_modelos_ia() is janela
++    assert not janela.isMinimized()
++    assert janela.isMaximized()
++
++
+ def test_fechado_reabre_com_o_conteudo_de_agora(home, qtbot, rede):
+     primeira = home.abrir_janela_gastos_ia()
+     primeira.close()
+@@ -571,6 +591,19 @@ def test_aplicar_recomendados_sem_a_chave_pergunta_antes(qt_interface, qtbot, re
+     assert bool(estado["por_tarefa"]) is aplicou
+ 
+ 
++def test_aplicar_mesmo_assim_tem_nao_como_padrao(qt_interface, qtbot, rede, mensagens):
++    # Desvio deliberado: o askyesno do Tk tinha "Sim" como padrão; aqui um Enter
++    # na pergunta NÃO aplica os recomendados sem a chave.
++    tela = home_mod.HomeView(controller=Controller({"GEMINI": "g"}))
++    qtbot.addWidget(tela)
++    tela.abrir_janela_modelos_ia()
++    tela.btn_aplicar_recomendados_ia.click()
++    assert mensagens[0][:2] == ("question", "Chave de API faltando")
++    botoes, padrao = mensagens.extras[0][0]
++    assert botoes == QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
++    assert padrao == QMessageBox.StandardButton.No
++
++
+ def test_esc_e_enter_nao_salvam_a_selecao(home, qtbot, mensagens):
+     janela = home.abrir_janela_modelos_ia()
+     qtbot.keyClicks(home.entry_modelo_ia_livre, "meu/modelo")
+@@ -679,19 +712,27 @@ def test_catalogo_que_chega_depois_de_reabrir_vai_para_o_painel_novo(home, qtbot
+ 
+ def test_catalogo_que_chega_depois_do_painel_destruido_e_descartado(home, qtbot, rede, monkeypatch,
+                                                                     capsys):
++    # A resposta chega (na thread da interface) e a GUARDA a descarta: o painel
++    # não é redesenhado sobre widgets destruídos.
+     from PySide6.QtCore import QCoreApplication, QEvent
+ 
+     janela = home.abrir_janela_modelos_ia()
+     liberar, vistos = threading.Event(), []
+     _catalogo_que_espera(monkeypatch, rede, liberar, vistos)
++    chegadas, redesenhos = [], []
++    chegou = home._catalogo_chegou
++    monkeypatch.setattr(home, "_catalogo_chegou", lambda: (
++        chegadas.append(threading.current_thread() is threading.main_thread()), chegou()))
++    monkeypatch.setattr(home, "_recarregar_modelos_do_provider", lambda *a, **k: redesenhos.append(a))
+     home.btn_atualizar_catalogo_ia.click()
+     janela.close()
+     janela.deleteLater()
+     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+     assert not _vivo(janela)
+     liberar.set()
+-    qtbot.waitUntil(lambda: vistos and not vistos[0][0].is_alive(), timeout=3000)
+-    qtbot.wait(50)  # a resposta passa pela fila da interface
++    qtbot.waitUntil(lambda: bool(chegadas), timeout=3000)
++    assert chegadas == [True], "a resposta veio pela thread da interface"
++    assert redesenhos == [], "a guarda descartou a resposta (painel destruído)"
+     assert "Traceback" not in capsys.readouterr().err
+ 
+ 
+@@ -820,108 +861,26 @@ def test_cor_da_barra_de_criticidade():
+     assert mural_qt._cor_da_criticidade(None) == mural_qt.COR_CRITICIDADE_PADRAO
+ 
+ 
+-class _AbaFalsa:
+-    def __init__(self, linhas):
+-        self.linhas = linhas
+-        self.pedidos = []
+-
+-    def iter_rows(self, min_row=1, values_only=False):
+-        self.pedidos.append((min_row, values_only))
+-        return iter(self.linhas)
+-
+-
+-class _PastaFalsa:
+-    def __init__(self, abas):
+-        self.abas = abas
+-        self.sheetnames = list(abas)
+-        self.fechada = False
+-
+-    def __getitem__(self, nome):
+-        return self.abas[nome]
+-
+-    def close(self):
+-        self.fechada = True
+-
+-
+-def _openpyxl_falso(monkeypatch, pasta):
+-    modulo = types.ModuleType("openpyxl")
+-    modulo.abertos = []
+-
+-    def load_workbook(caminho, **kw):
+-        modulo.abertos.append((caminho, kw))
+-        if isinstance(pasta, Exception):
+-            raise pasta
+-        return pasta
+-
+-    modulo.load_workbook = load_workbook
+-    monkeypatch.setitem(sys.modules, "openpyxl", modulo)
+-    return modulo
+-
+-
+-def test_ler_mural_sem_mapeamento(home, monkeypatch):
+-    monkeypatch.setattr(home_mod.HomeView, "_caminho_do_mapeamento", lambda self: None)
+-    gavetas, erro = home._ler_mural()
+-    assert gavetas == {f: [] for f in at.FAIXAS}
+-    assert erro == ("Nao encontrei o arquivo de mapeamento.\n\n"
+-                    "Rode o PMIB Manager uma vez apontando a planilha gerenciadora -- "
+-                    "o mural passa a ler dela.")
+-
+-
+-def test_ler_mural_sem_a_aba(home, monkeypatch):
+-    monkeypatch.setattr(home_mod.HomeView, "_caminho_do_mapeamento", lambda self: "/x/mapeamento.xlsx")
+-    pasta = _PastaFalsa({"Outra": _AbaFalsa([])})
+-    _openpyxl_falso(monkeypatch, pasta)
+-    gavetas, erro = home._ler_mural()
+-    assert erro == "A planilha nao tem a aba 'Atividades'.\n\n/x/mapeamento.xlsx"
+-    assert pasta.fechada
+-
+-
+-def test_ler_mural_le_as_colunas_e_classifica(home, monkeypatch):
+-    monkeypatch.setattr(home_mod.HomeView, "_caminho_do_mapeamento", lambda self: "/x/mapeamento.xlsx")
+-    linha = [None] * 16
+-    linha[at.COL_NV - 1] = 2
+-    linha[at.COL_DESCRICAO - 1] = "Revisar"
+-    linha[at.COL_STATUS - 1] = "Em andamento"
+-    linha[at.COL_PREVISAO_TERMINO - 1] = "2026-10-01"
+-    aba = _AbaFalsa([tuple(linha), (1,)])
+-    modulo = _openpyxl_falso(monkeypatch, _PastaFalsa({"Atividades": aba}))
+-    recebidas = []
+-    monkeypatch.setattr(at, "mural", lambda linhas, hoje: recebidas.append((linhas, hoje)) or "GAVETAS")
+-    gavetas, erro = home._ler_mural()
+-    assert (gavetas, erro) == ("GAVETAS", None)
+-    assert modulo.abertos == [("/x/mapeamento.xlsx", {"data_only": True, "read_only": True})]
+-    assert aba.pedidos == [(at.LINHA_CABECALHO + 1, True)]
+-    [(linhas, hoje)] = recebidas
+-    assert hoje == date.today()
+-    assert linhas[0]["descricao"] == "Revisar" and linhas[0]["status"] == "Em andamento"
+-    assert linhas[0]["previsao_termino"] == "2026-10-01" and linhas[0]["data_inicio"] == ""
+-    assert linhas[1]["nv"] == 1 and linhas[1]["descricao"] is None  # linha curta não quebra
+-
+-
+-def test_ler_mural_que_falha_vira_texto(home, monkeypatch):
+-    monkeypatch.setattr(home_mod.HomeView, "_caminho_do_mapeamento", lambda self: "/x/m.xlsx")
+-    _openpyxl_falso(monkeypatch, PermissionError("travado"))
+-    gavetas, erro = home._ler_mural()
+-    assert gavetas == {f: [] for f in at.FAIXAS}
+-    assert erro == "Nao consegui ler as atividades:\nPermissionError: travado\n\n/x/m.xlsx"
+-
+-
+-def test_caminho_do_mapeamento(home, monkeypatch, tmp_path):
+-    from sigft.core import prefs
+-
+-    monkeypatch.setattr(prefs, "get_last_file", lambda chave: "/salvo/Mapeamento.xlsx"
+-                        if chave == prefs.CHAVE_MAPEAMENTO else None)
+-    assert home._caminho_do_mapeamento() == "/salvo/Mapeamento.xlsx"
+-
+-    monkeypatch.setattr(prefs, "get_last_file", lambda chave: None)
+-    (tmp_path / "leia-me.txt").write_text("x")
+-    (tmp_path / "PMIB - Mapeamento geral.xlsm").write_text("x")
+-    monkeypatch.setattr(prefs, "get_initial_dir", lambda chave, categoria: str(tmp_path)
+-                        if (chave, categoria) == ("pmib_manager.master", "excel") else None)
+-    assert home._caminho_do_mapeamento() == str(tmp_path / "PMIB - Mapeamento geral.xlsm")
+-
+-    monkeypatch.setattr(prefs, "get_initial_dir", lambda *a: str(tmp_path / "nao-existe"))
+-    assert home._caminho_do_mapeamento() is None
++def test_mural_mostra_o_texto_da_planilha_como_veio(qt_interface, qtbot):
++    # O CTkLabel mostra o texto cru. O QLabel, em AutoText, tomaria "<a>"/"<b>"
++    # por HTML e os engoliria (o rótulo saía com 112 px).
++    from PySide6.QtWidgets import QVBoxLayout, QWidget
++
++    from sigft.app_qt import estilo as _estilo
++
++    _estilo.carregar_fontes()
++    pai = QWidget()
++    QVBoxLayout(pai)
++    qtbot.addWidget(pai)
++    gavetas = {f: [] for f in at.FAIXAS}
++    gavetas[at.ATRASADA] = [_item("Trocar <a> por <b> no PDM", -1, _grupo="<i>Grupo</i>",
++                                  com_quem="<b>Luan</b>")]
++    mural_qt.montar(pai, gavetas, "09/10/2026")
++    for texto in ("Trocar <a> por <b> no PDM", "<i>Grupo</i>", "com <b>Luan</b>"):
++        rotulo = _por_texto(pai, texto)
++        assert rotulo.textFormat() == Qt.TextFormat.PlainText, texto
++        rotulo.ensurePolished()
++        assert rotulo.sizeHint().width() >= rotulo.fontMetrics().horizontalAdvance(texto), texto
+ 
+ 
+ # =============================================================================
+-- 
+2.43.0
+

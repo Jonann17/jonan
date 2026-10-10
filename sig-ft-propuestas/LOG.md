@@ -74,10 +74,11 @@ En Linux, el Qt necesita estas bibliotecas del sistema (el CI ya las instala):
   pantalla AutoSpec y la Home completa (`etapas3a6-en-curso/0017` a `0019`), las
   correcciones de Cria Fichas y de AutoSpec (`0020`, `0021`) y el corte: `python
   frontend.py` y `SIG-FT.bat` abren la interfaz Qt, `--ctk` abre la anterior, y hay
-  lanzador para macOS (`0022`). Siguen el `.exe` con Qt, el pulido y la revisión final.
+  lanzador para macOS (`0022`), y las segundas correcciones de la Home y de Cria
+  Fichas (`0023`, `0024`). Siguen el `.exe` con Qt, el pulido y la revisión final.
   Este apartado se actualiza completo al terminar.
 - **Parches:** `patches/etapa2-en-curso/` (14) y después `patches/etapas3a6-en-curso/`
-  (22), en ese orden, encima de `patches/etapa1/`. Lo terminado pero sin integrar y lo
+  (24), en ese orden, encima de `patches/etapa1/`. Lo terminado pero sin integrar y lo
   que quedó a medias está en `patches/pendiente/` (ver su README).
 - **Ya funciona en `python -m sigft.app_qt.main`, desde el menú y sin script:** Home
   (cards), Cria Fichas, Planilhas PMIB (PDM), Analyzer, Upload Condições, Tradutor,
