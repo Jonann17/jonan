@@ -1,7 +1,7 @@
 From 0b8921fd745f8686da1680fc6ca7fe6817cd39a3 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:40:16 +0000
-Subject: [PATCH 09/16] Qt6: tela Copia de Fichas
+Subject: [PATCH 09/18] Qt6: tela Copia de Fichas
 
 Porte de sigft/app/views/copia_fichas.py (layout atual, pos CP 5.5):
 leitura do _STATUS_PMIB por iniciar_tarefa, selecao e revisao pelas janelas

@@ -1,23 +1,95 @@
-From 2c50a79c6c2f7c50c84a02a22ff85b628874eefe Mon Sep 17 00:00:00 2001
+From 354543f6a75fddb772e70a21a94f50bbf2b3210a Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Fri, 9 Oct 2026 16:10:55 +0000
-Subject: [PATCH] WIP tela AutoSpec AI
+Date: Sat, 10 Oct 2026 01:17:01 +0000
+Subject: [PATCH 18/18] Qt6: tela AutoSpec AI
 
+Porte de sigft/app/views/autospec.py (frente do Rafael) para a interface
+Qt: sigft/app_qt/views/autospec.py, registrada em main.TELAS ("AutoSpec",
+fabrica _autospec com import na primeira visita). PENDENTES do teste de
+registro fica vazio: todas as telas do menu estao portadas.
+
+A secao de conferencia de documentos veio inteira (os 6 metodos e os 7
+atributos de TRABALHO_PARALELO.md 3.1) e _novo_core continua sendo a unica
+construcao do AutoSpecCore. Nenhum arquivo do Rafael foi editado.
+
+Bugs de thread da tela CTk corrigidos: o worker so loga; o fim do lote
+(lista nova, .txt automatico) roda na thread da interface, mostrando antes
+de salvar; os avisos saem por avisar; botoes por iniciar_tarefa. A fila, o
+_STATUS_PMIB e a caixa do fornecedor sao lidos no clique: o lote e a fila
+do clique, e o que entra durante ele fica para o proximo.
+
+Compartilhado: controles.CaixaDeMarcar/pintar_caixa ganham `lado` (caixa
+de 18 da conferencia); FAMILIAS_COM_SIMBOLO sai de cria_fichas para estilo
+(o "seta para baixo" do Adicionar, so a seta como no Tk). A tela Qt entra
+em FORA_DO_RECORTE do teste do travessao: leva os textos do Rafael sem
+mudar uma letra.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01RSbK7jX9qvsvyZKqnojmij
 ---
- sigft/app_qt/views/autospec.py    | 726 ++++++++++++++++++++++++++++++
+ sigft/app_qt/estilo.py            |  10 +
+ sigft/app_qt/main.py              |   7 +
+ sigft/app_qt/views/autospec.py    | 739 ++++++++++++++++++++++++++++
+ sigft/app_qt/views/cria_fichas.py |   7 +-
  sigft/app_qt/widgets/controles.py |  34 +-
+ tests/test_qt_main.py             |   5 +-
+ tests/test_qt_registro_telas.py   |   2 +-
  tests/test_qt_sem_tkinter.py      |   1 +
- tests/test_qt_tela_autospec.py    | 717 +++++++++++++++++++++++++++++
- 4 files changed, 1464 insertions(+), 14 deletions(-)
+ tests/test_qt_tela_autospec.py    | 771 ++++++++++++++++++++++++++++++
+ tests/test_texto_da_ui.py         |   4 +
+ 10 files changed, 1560 insertions(+), 20 deletions(-)
  create mode 100644 sigft/app_qt/views/autospec.py
  create mode 100644 tests/test_qt_tela_autospec.py
 
+diff --git a/sigft/app_qt/estilo.py b/sigft/app_qt/estilo.py
+index f98ef1c..86b72ec 100644
+--- a/sigft/app_qt/estilo.py
++++ b/sigft/app_qt/estilo.py
+@@ -387,3 +387,13 @@ QAbstractScrollArea[barra_nativa="true"] QScrollBar::add-line,
+ QAbstractScrollArea[barra_nativa="true"] QScrollBar::sub-line {{
+     width: 0; height: 0; }}
+ """
++
++
++# --- E4.10: símbolos que o Roboto não tem ------------------------------------------
++# O "▶" da Criação de Fichas e o "⬇" do AutoSpec: o Roboto não os tem, e a reserva
++# da folha (Noto Emoji) desenha o EMOJI -- o triângulo/a seta dentro de um quadrado.
++# O Tk caía numa fonte de símbolos e mostrava só o desenho; estas são as de símbolos
++# de cada sistema (Windows, Linux, macOS), antes do Noto Emoji. Uso: na folha do
++# widget, `QPushButton { font-family: <FAMILIAS_COM_SIMBOLO>; }`. (Era local da
++# Criação de Fichas, E4.9.)
++FAMILIAS_COM_SIMBOLO = '"Roboto", "Segoe UI Symbol", "DejaVu Sans", "Apple Symbols", "Noto Emoji"'
+diff --git a/sigft/app_qt/main.py b/sigft/app_qt/main.py
+index 442b323..f8b3ea8 100644
+--- a/sigft/app_qt/main.py
++++ b/sigft/app_qt/main.py
+@@ -87,6 +87,12 @@ def _copia_fichas(parent, controller):
+     return ModuloCopiaFichas(parent, controller)
+ 
+ 
++def _autospec(parent, controller):
++    # Tela da frente do Rafael (TRABALHO_PARALELO.md); a lógica é do serviço.
++    from sigft.app_qt.views.autospec import ModuloAutoSpec
++    return ModuloAutoSpec(parent, controller)
++
++
+ def _pmib_manager(parent, controller):
+     from sigft.app_qt.views.pmib_manager import ModuloPMIBManager
+     return ModuloPMIBManager(parent, controller)
+@@ -112,6 +118,7 @@ TELAS = {
+     "UploadSpecs": _upload_specs,
+     "CorrecaoPDM": _correcao_pdm,
+     "CopiaFichas": _copia_fichas,
++    "AutoSpec": _autospec,
+     "PMIBManager": _pmib_manager,
+     "SearchPMIB": _busca_pmib,
+ }
 diff --git a/sigft/app_qt/views/autospec.py b/sigft/app_qt/views/autospec.py
 new file mode 100644
-index 0000000..3ad5c8f
+index 0000000..52ffe87
 --- /dev/null
 +++ b/sigft/app_qt/views/autospec.py
-@@ -0,0 +1,726 @@
+@@ -0,0 +1,739 @@
 +"""Tela "AutoSpec AI" na interface Qt.
 +
 +Mesma tela de `sigft/app/views/autospec.py`: preenche as especificações
@@ -78,7 +150,6 @@ index 0000000..3ad5c8f
 +# CTkLabel sem `text_color`: gray84 (o do tema); "gray" do Tk = #808080.
 +COR_ROTULO = controles.COR_TEXTO_CTK
 +CINZA = estilo.cinza_tk("gray")
-+# O "#3A3A3A"/"#454545" dos seletores de arquivo = variante "cinza".
 +# Rótulos com `wraplength`: Roboto 11 no Tk tem 14 px por linha (3 linhas =
 +# 42, medido); o Qt usa 13. A altura mínima é a medida lá (3 linhas).
 +ALTURA_LINHA_PEQUENA = 14
@@ -96,9 +167,7 @@ index 0000000..3ad5c8f
 +
 +def _rotulo(texto: str, *, tamanho: int = 13, negrito: bool = False, cor: str = COR_ROTULO,
 +            alinhar: str = "esquerda") -> QLabel:
-+    """CTkLabel de uma linha, 28 px de altura. A largura não manda no layout
-+    (política Ignored): um nome de arquivo comprido não empurra o botão ao lado
-+    para fora do quadro."""
++    """CTkLabel de uma linha, `anchor="w"`, 28 px de altura."""
 +    r = blocos.rotulo(texto, tamanho=tamanho, negrito=negrito, cor=cor, alinhar=alinhar)
 +    r.setWordWrap(False)
 +    r.setFixedHeight(blocos.ALTURA_MINIMA_ROTULO)
@@ -130,14 +199,20 @@ index 0000000..3ad5c8f
 +def _area_como_a_do_ctk(layout_pai, *, cor: str | None = None):
 +    """`blocos.area_rolavel` com a barra SEMPRE à vista, como o CTkScrollableFrame
 +    (mesma conta do `copia_fichas`): faixa de 17 com a alça de 8 a 4 px da
-+    esquerda, 1 px antes da borda direita, e o conteúdo indo até a barra."""
++    esquerda, 1 px antes da borda direita, e o conteúdo indo até a barra.
++
++    E o recorte do CTk: o canvas fica 6 px para dentro do quadro (o canto), e o
++    que rola some ali -- não corre até a borda. Aqui são as margens da vista
++    (a barra continua com a altura toda). Na fila e na conferência isso
++    mantém as linhas dentro do retângulo escuro de cantos redondos."""
 +    area, corpo = blocos.area_rolavel(layout_pai, cor=cor, margem=RECUO_ROLAGEM)
 +    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 +    area.verticalScrollBar().setStyleSheet(
 +        estilo.folha_rolagem_ctk(margem_vertical=RECUO_ROLAGEM + 4)
 +        + f"\nQScrollBar:vertical {{ width: {estilo.LARGURA_ROLAGEM_CTK + 1}px;"
 +        f" margin: {RECUO_ROLAGEM + 4}px 5px {RECUO_ROLAGEM + 4}px 4px; }}")
-+    corpo.setContentsMargins(RECUO_ROLAGEM, RECUO_ROLAGEM, 0, RECUO_ROLAGEM)
++    area.setViewportMargins(0, RECUO_ROLAGEM, 0, RECUO_ROLAGEM)
++    corpo.setContentsMargins(RECUO_ROLAGEM, 0, 0, 0)
 +    return area, corpo
 +
 +
@@ -176,7 +251,6 @@ index 0000000..3ad5c8f
 +    """O widget dentro de um QWidget com margens -- para as listas que se
 +    refazem (o que entra nelas sai inteiro com `_esvaziar`)."""
 +    caixa = QWidget()
-+    caixa.setStyleSheet("background: transparent;")
 +    linha = QHBoxLayout(caixa)
 +    linha.setContentsMargins(esquerda, 0, direita, 0)
 +    linha.setSpacing(0)
@@ -195,6 +269,9 @@ index 0000000..3ad5c8f
 +
 +
 +def _sem_largura_minima(widget) -> None:
++    """A largura do texto não manda no layout: um nome de arquivo (ou material)
++    comprido é cortado no fim, em vez de empurrar o botão ao lado para fora do
++    quadro -- ou alargar a lista além da barra de rolagem."""
 +    widget.setSizePolicy(QSizePolicy.Policy.Ignored, widget.sizePolicy().verticalPolicy())
 +
 +
@@ -219,6 +296,10 @@ index 0000000..3ad5c8f
 +    def sizeHint(self) -> QSize:  # noqa: N802 -- nome do Qt
 +        esquerdo, direito = self.botoes
 +        return QSize(esquerdo.sizeHint().width() + self.VAO + direito.sizeHint().width(), self.height())
++
++    def minimumSizeHint(self) -> QSize:  # noqa: N802 -- nome do Qt
++        # O pedido do Tk: abaixo disso o texto dos botões seria cortado.
++        return self.sizeHint()
 +
 +    def resizeEvent(self, evento) -> None:  # noqa: N802 -- nome do Qt
 +        super().resizeEvent(evento)
@@ -295,6 +376,9 @@ index 0000000..3ad5c8f
 +        self.btn_add = blocos.botao(estilo.mono("⬇ Adicionar à Fila ⬇"), variante="primario",
 +                                    altura=28, tamanho_fonte=13, negrito=True,
 +                                    cor_texto=COLORS["text_white"])
++        # O "⬇" sai da fonte de símbolos (só a seta, como no Tk), não do Noto Emoji.
++        self.btn_add.setStyleSheet(f"{self.btn_add.styleSheet()}"
++                                   f" QPushButton {{ font-family: {estilo.FAMILIAS_COM_SIMBOLO}; }}")
 +        self.btn_add.clicked.connect(self.add_queue)
 +        _recuado(job, self.btn_add, 5, 5)               # padx=20 (15 já são do cartão)
 +
@@ -345,7 +429,8 @@ index 0000000..3ad5c8f
 +        corpo.addSpacing(10)                            # frm_conf: pady=10
 +
 +    def _linha_de_arquivo(self, layout, texto: str, texto_botao: str, acao):
-+        """Rótulo cinza à esquerda (fill/expand) e o botão de 180 à direita."""
++        """Rótulo cinza à esquerda (fill/expand) e o botão de 180 à direita (o
++        #3A3A3A/#454545 escrito à mão lá = a variante "cinza")."""
 +        linha = QHBoxLayout()
 +        linha.setContentsMargins(0, 0, 0, 0)
 +        linha.setSpacing(0)
@@ -744,6 +829,24 @@ index 0000000..3ad5c8f
 +        # Salva sozinho (2026-08-17).
 +        if conferencia:
 +            self._conferencia_salvar(automatico=True)
+diff --git a/sigft/app_qt/views/cria_fichas.py b/sigft/app_qt/views/cria_fichas.py
+index 6f7745b..d4900eb 100644
+--- a/sigft/app_qt/views/cria_fichas.py
++++ b/sigft/app_qt/views/cria_fichas.py
+@@ -74,10 +74,9 @@ def _titulo(texto: str):
+ 
+ 
+ # O "▶" do "Iniciar Robô de Edição": o Roboto não o tem, e a reserva da folha
+-# (Noto Emoji) desenha o emoji "play" -- um quadrado com o triângulo dentro. O
+-# Tk caía numa fonte de símbolos e mostrava só o triângulo; estas são as de
+-# símbolos de cada sistema (Windows, Linux, macOS), antes do Noto Emoji.
+-FAMILIAS_COM_SIMBOLO = '"Roboto", "Segoe UI Symbol", "DejaVu Sans", "Apple Symbols", "Noto Emoji"'
++# (Noto Emoji) desenha o emoji "play" -- um quadrado com o triângulo dentro. A
++# lista de fontes de símbolos mora no `estilo` desde a E4.10 (o "⬇" do AutoSpec).
++FAMILIAS_COM_SIMBOLO = estilo.FAMILIAS_COM_SIMBOLO
+ 
+ 
+ def _botao(texto: str, *, com_simbolo: bool = False, **kw):
 diff --git a/sigft/app_qt/widgets/controles.py b/sigft/app_qt/widgets/controles.py
 index a12e4ff..096dd0a 100644
 --- a/sigft/app_qt/widgets/controles.py
@@ -825,6 +928,36 @@ index a12e4ff..096dd0a 100644
          pintor.drawText(QRectF(x_texto, 0, self.width() - x_texto, self.height()),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.text())
          pintor.end()
+diff --git a/tests/test_qt_main.py b/tests/test_qt_main.py
+index f87063f..6d28e65 100644
+--- a/tests/test_qt_main.py
++++ b/tests/test_qt_main.py
+@@ -20,8 +20,11 @@ def test_abre_na_home_e_cria_telas_so_na_visita(app_qt):
+     assert app_qt.pilha.currentWidget() is app_qt.telas["Analyzer"]
+ 
+ 
+-def test_tela_nao_registrada_mostra_aviso(app_qt):
++def test_tela_nao_registrada_mostra_aviso(app_qt, monkeypatch):
++    # Desde a E4.10 todas as telas do menu estão em `TELAS`; o aviso continua
++    # sendo o caminho de uma chave sem fábrica.
+     from sigft.app_qt.views.nao_migrada import TelaNaoMigrada
++    monkeypatch.delitem(qmain.TELAS, "AutoSpec")
+     app_qt.show_frame("AutoSpec")
+     assert isinstance(app_qt.telas["AutoSpec"], TelaNaoMigrada)
+ 
+diff --git a/tests/test_qt_registro_telas.py b/tests/test_qt_registro_telas.py
+index 3cfb338..fbea476 100644
+--- a/tests/test_qt_registro_telas.py
++++ b/tests/test_qt_registro_telas.py
+@@ -13,7 +13,7 @@ from sigft.app_qt import main as qmain
+ from sigft.app_qt.views.nao_migrada import TelaComErro, TelaNaoMigrada
+ 
+ # Telas ainda em porte. Esvaziar quando a última entrar em `TELAS`.
+-PENDENTES = {"AutoSpec"}
++PENDENTES = set()
+ 
+ CHAVES_DO_MENU = [item[2] for item in catalogo.MENU if item[0] == "botao"]
+ 
 diff --git a/tests/test_qt_sem_tkinter.py b/tests/test_qt_sem_tkinter.py
 index 84557ce..5fd0559 100644
 --- a/tests/test_qt_sem_tkinter.py
@@ -839,10 +972,10 @@ index 84557ce..5fd0559 100644
      "sigft.app_qt.atualizacao",
 diff --git a/tests/test_qt_tela_autospec.py b/tests/test_qt_tela_autospec.py
 new file mode 100644
-index 0000000..f08cd7e
+index 0000000..93949ee
 --- /dev/null
 +++ b/tests/test_qt_tela_autospec.py
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,771 @@
 +"""Tela "AutoSpec AI" na interface Qt: comportamento com o serviço (AutoSpecCore),
 +a IA e a web falsos, a seção de conferência de documentos, e as medidas contra o
 +CustomTkinter.
@@ -1062,6 +1195,35 @@ index 0000000..f08cd7e
 +    assert tela.lbl_status.text() == "Nenhum _STATUS_PMIB selecionado"
 +    assert tela.lbl_sheet.text() == "Ficha: [Nenhuma]"
 +    assert "#808080" in tela.lbl_sheet.styleSheet()
++
++
++def test_a_seta_do_adicionar_sai_da_fonte_de_simbolos(tela):
++    # O Roboto não tem o "⬇", e o Noto Emoji o desenha como emoji (a seta dentro
++    # de um quadrado). O Tk caía numa fonte de símbolos: só a seta. A mesma lista
++    # de famílias do "▶" da Criação de Fichas, agora no `estilo`.
++    from sigft.app_qt import estilo
++    folha = tela.btn_add.styleSheet()
++    assert estilo.FAMILIAS_COM_SIMBOLO in folha
++    assert folha.index("Segoe UI Symbol") < folha.index("DejaVu Sans") < folha.index("Noto Emoji")
++
++
++def test_enter_nao_dispara_nenhum_botao(tela, qtbot, monkeypatch):
++    # Lá o Tk não ligava tecla nenhuma aos botões da tela: Enter num botão com
++    # foco não começa lote, não adiciona, não salva nem processa.
++    from PySide6.QtCore import Qt
++    _backend(monkeypatch)
++    _escolher_status(tela)
++    _montar_fila(tela)
++    tela._conferencia_mostrar(_conferencia(), {(0, 0): True})
++    tela.show()
++    botoes = (tela.btn_run, tela.btn_add, tela.btn_conf, tela.btn_conf_salvar, tela.btn_status)
++    for botao in botoes:
++        botao.setFocus()
++        qtbot.keyClick(botao, Qt.Key.Key_Return)
++        qtbot.keyClick(botao, Qt.Key.Key_Enter)
++    assert CoreFalso.criados == [] and tela.caixas == [] and tela.avisos == []
++    assert len(tela.dialogos) == 4                  # só os do preparo (_escolher_status + fila)
++    assert all(not b.autoDefault() for b in botoes)
 +
 +
 +# -- fila ---------------------------------------------------------------------------------
@@ -1534,7 +1696,32 @@ index 0000000..f08cd7e
 +    assert abs((ws - pedido_s) - (wi - pedido_i)) <= 1
 +    assert _r(t, t.btn_conf) == (66, 1228, 860, 40)
 +    # Rolagem: o conteúdo tem 1208 de altura, como lá (619 para rolar).
-+    assert t.area.verticalScrollBar().maximum() == 1208 + 12 - 601
++    assert t.area.verticalScrollBar().maximum() == 1208 - 589
++
++
++def test_o_que_rola_some_6_px_antes_da_borda_como_no_ctk(tela_medida):
++    # O canvas do CTkScrollableFrame fica 6 px para dentro do quadro: o que rola
++    # é cortado ali (lá o 1º cartão, rolado, não aparece entre y=79 e 85). A
++    # barra continua com a altura toda.
++    t = tela_medida
++    for area, altura in ((t.area, 601), (t.queue_frame, 212), (t.lista_conf, 212)):
++        vista = area.viewport()
++        assert (vista.y(), vista.height()) == (6, altura - 12)
++        barra = area.verticalScrollBar()
++        assert (barra.mapTo(area, barra.rect().topLeft()).y(), barra.height()) == (0, altura)
++
++
++def test_salvar_e_importar_nao_encolhem_abaixo_do_pedido(tela_medida):
++    # Como o `pack` do Tk: cada botão tem ao menos o que pede (texto + folga),
++    # e a linha não deixa o layout espremê-la abaixo disso.
++    linha = tela_medida._linha_botoes_conf
++    pedido = (tela_medida.btn_conf_salvar.sizeHint().width() + linha.VAO
++              + tela_medida.btn_conf_importar.sizeHint().width())
++    assert linha.minimumSizeHint().width() == pedido
++    linha.resize(pedido, linha.height())
++    linha.arrumar()
++    assert tela_medida.btn_conf_salvar.width() == tela_medida.btn_conf_salvar.sizeHint().width()
++    assert tela_medida.btn_conf_importar.width() == tela_medida.btn_conf_importar.sizeHint().width()
 +
 +
 +def test_medidas_das_linhas_da_fila_e_da_conferencia(tela_medida, qtbot):
@@ -1560,6 +1747,21 @@ index 0000000..f08cd7e
 +    assert _r(t, t.marcados_conf[(0, 1)])[1] == base_y + 65
 +    assert _r(t, c2)[1] == base_y + 98
 +    assert _r(t, t.marcados_conf[(1, 0)])[1] == base_y + 129
+diff --git a/tests/test_texto_da_ui.py b/tests/test_texto_da_ui.py
+index 597ac75..30cdc67 100644
+--- a/tests/test_texto_da_ui.py
++++ b/tests/test_texto_da_ui.py
+@@ -51,6 +51,10 @@ FORA_DO_RECORTE = {
+     "sigft/core/web/navegador.py",
+     "sigft/core/web/robots.py",
+     "sigft/app/views/autospec.py",
++    # A mesma tela na interface Qt (E4.10, migração PySide6): leva os textos da
++    # tela CTk acima, que são do Rafael, sem mudar uma letra. Tirar o travessão
++    # delas é decisão dele, nas duas telas juntas.
++    "sigft/app_qt/views/autospec.py",
+     "sigft/core/llm/prompts.py",
+ }
+ 
 -- 
 2.43.0
 

@@ -1,7 +1,7 @@
 From e3fa0f1d2a66e826864ae877a1317b4001748125 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 18:41:19 +0000
-Subject: [PATCH 13/16] Qt6: tela Upload de Tech Specs
+Subject: [PATCH 13/18] Qt6: tela Upload de Tech Specs
 
 Porta de sigft/app/views/upload_tech_specs.py (TELAS "UploadSpecs"),
 sobre a mesma base TelaDeUpload da tela de Condicoes (so os textos, o

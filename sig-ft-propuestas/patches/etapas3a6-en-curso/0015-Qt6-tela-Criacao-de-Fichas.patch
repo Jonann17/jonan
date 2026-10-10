@@ -1,7 +1,7 @@
 From 9838d2fb2ebe4520522b4a766b9e1cdbec99b1a6 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 9 Oct 2026 11:29:32 +0000
-Subject: [PATCH 15/16] Qt6: tela Criacao de Fichas
+Subject: [PATCH 15/18] Qt6: tela Criacao de Fichas
 
 Porte de sigft/app/views/cria_fichas.py (ModuloCriaFichas, chave
 "CriaFichas"): abas Criacao de Fichas / Editar codigo do projeto,

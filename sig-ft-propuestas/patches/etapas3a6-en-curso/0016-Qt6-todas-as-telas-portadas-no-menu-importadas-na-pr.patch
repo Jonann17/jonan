@@ -1,7 +1,7 @@
 From d0590eddda6516b60f54481d237f408d249c89da Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 9 Oct 2026 16:16:06 +0000
-Subject: [PATCH 16/16] Qt6: todas as telas portadas no menu, importadas na
+Subject: [PATCH 16/18] Qt6: todas as telas portadas no menu, importadas na
  primeira visita
 
 CriaFichas, PDM, Analyzer, Upload de Condicoes e de Specs, Copia de Fichas,

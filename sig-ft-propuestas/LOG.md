@@ -69,9 +69,12 @@ En Linux, el Qt necesita estas bibliotecas del sistema (el CI ya las instala):
 - **Nota para Rafael:** esta etapa **no toca** AutoSpec (ni `sigft/services/autospec*`
   ni su pantalla). Su pantalla se migra en la etapa 5, con una nota aparte.
 
-### 2. Qt6 — Etapas 2 a 5 (en curso; pausado el 2026-10-09)
+### 2. Qt6 — Etapas 2 a 5 (en curso; pausado el 2026-10-09, retomado el 2026-10-10)
+- **Retomado el 2026-10-10:** entraron la corrección de los uploads (revisada) y la
+  pantalla AutoSpec (`etapas3a6-en-curso/0017` y `0018`); siguen la Home, el corte y
+  las correcciones de Cria Fichas. Este apartado se actualiza completo al terminar.
 - **Parches:** `patches/etapa2-en-curso/` (14) y después `patches/etapas3a6-en-curso/`
-  (16), en ese orden, encima de `patches/etapa1/`. Lo terminado pero sin integrar y lo
+  (18), en ese orden, encima de `patches/etapa1/`. Lo terminado pero sin integrar y lo
   que quedó a medias está en `patches/pendiente/` (ver su README).
 - **Ya funciona en `python -m sigft.app_qt.main`, desde el menú y sin script:** Home
   (cards), Cria Fichas, Planilhas PMIB (PDM), Analyzer, Upload Condições, Tradutor,
