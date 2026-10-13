@@ -8,12 +8,17 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
 **baterías 18650**.
 
 > 🚶 **¿Quieres la versión grande?** Ver [PASARELA.md](PASARELA.md): pasarela de
-> **9 baldosas** con mapa en vivo, dirección y velocidad de cruce. Esta placa
-> sirve como prototipo: es la baldosa que vas a repetir 9 veces.
+> **9 baldosas** con mapa en vivo, dirección y velocidad de cruce. Esta maqueta
+> sirve para probar los piezos y la estructura de una baldosa.
 
-> ℹ️ No pude abrir el video desde este entorno, así que el circuito y el código
-> están armados a partir de la lista de componentes. Si en el video algo está
-> conectado distinto, avísame y lo ajusto.
+> ℹ️ El circuito sigue el proyecto de referencia con los mismos componentes del
+> video ([Footstep-Energy-Generator](https://github.com/IamHV856156/Footstep-Energy-Generator)),
+> con dos errores corregidos: su código no compilaba (`ledPin` sin declarar) y
+> en su protoboard el colector del BC547 quedaba unido a GND.
+
+![Esquema de la maqueta](esquema_maqueta.png)
+
+(versión para imprimir: [esquema_maqueta.svg](esquema_maqueta.svg))
 
 ---
 
@@ -24,24 +29,21 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
     │
     ▼
  ┌──────────────┐   CA    ┌──────────────┐   CC    ┌───────────┐
- │ Piezos bajo  │ ──────▶ │ Puente de    │ ──────▶ │ Capacitor │──┬──▶ A0 (divisor 100k/10k) → mide voltios
- │ el acrílico  │         │ 4 × 1N4007   │         │ 10 µF     │  │
- └──────────────┘         └──────────────┘         └───────────┘  └──▶ BC547 → D2 → cuenta pasos
-                                                                        │
-                                       Arduino UNO ◀────────────────────┘
-                                            │
-                                            ▼
-                                     LCD 16x2 I2C:  "Pasos: 37"
-                                                    "12.4V 2680uJ"
+ │ 6 piezos en  │ ──────▶ │ Puente de    │ ──────▶ │ Capacitor │──▶ divisor 100k/10k ──▶ A0
+ │ serie        │         │ 4 × 1N4007   │         │ 10 µF     │
+ └──────────────┘         └──────────────┘         └───────────┘
+                                                        Arduino UNO ──▶ LCD I2C "Pasos: 37"
+                                                             │                 "Voltaje: 12.4V"
+                                                             └─ D8 ─▶ 10k ─▶ BC547 ─▶ LED
 ```
 
 1. Al pisar, los piezos se doblan y producen **corriente alterna** (pulsos + y −).
 2. El **puente rectificador** (4 diodos 1N4007) la convierte en **continua**.
 3. El **capacitor de 10 µF** guarda ese pulso.
-4. El **BC547** se activa con cada pulso → el Arduino **cuenta una pisada**.
-5. El **divisor de tensión** (100k + 10k) baja el voltaje para que el Arduino
-   lo pueda **medir** sin dañarse (aguanta hasta ~55 V).
-6. El Arduino calcula la energía de cada pisada (`E = ½·C·V²`) y la muestra.
+4. El **divisor de tensión** (100k + 10k) baja el voltaje para que el Arduino
+   lo pueda **medir** por A0 sin dañarse (aguanta hasta ~55 V).
+5. Cuando el voltaje **sube de golpe**, el Arduino cuenta una pisada, la muestra
+   en el LCD y enciende el **LED** a través del **BC547** (pin D8).
 
 ---
 
@@ -50,18 +52,18 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
 | Cant. | Componente | Para qué |
 |---|---|---|
 | 2 | Lámina de acrílico transparente (ej. 30×30 cm) | Base y tapa de la placa |
-| 8–12 | Discos piezo de 35 mm | Generan la electricidad |
+| 6 | Discos piezo de 35 mm | Generan la electricidad |
 | 1 | Arduino UNO | Cerebro |
 | 1 | LCD 16x2 con módulo I2C | Pantalla |
 | 1 | Mini protoboard | Montar el circuito |
 | — | Cables de conexión + jumpers | Conexiones |
 | 1 | Capacitor electrolítico 10 µF (≥ 50 V) | Guarda la energía de la pisada |
-| 4 (+1) | Diodos 1N4007 | Puente rectificador (+1 opcional para cargar batería) |
-| 1 | Transistor BC547 | Detector de pisadas |
+| 4 | Diodos 1N4007 | Puente rectificador |
+| 1 | Transistor BC547 | Enciende el LED |
 | 1 | Resistencia 100 kΩ | Divisor (arriba) |
-| 1 | Resistencia 10 kΩ | Divisor (abajo) |
-| 1 | Resistencia 22 kΩ | Base del BC547 |
-| 1 | Resistencia 100 kΩ | Base del BC547 → GND |
+| 2 | Resistencias 10 kΩ | Divisor (abajo) y base del BC547 |
+| 1 | Resistencia 220–330 Ω | LED |
+| 1 | LED | Se enciende con cada pisada |
 | 1 | Porta-pilas 2 × 18650 | Alimentación |
 | 2 | Celdas 18650 | Alimentación (7,4 V) |
 | — | Pistola de silicona, kit de soldadura | Armado |
@@ -70,20 +72,18 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
 
 ## 🔌 Conexiones
 
-### 1) Los piezos (en paralelo)
+### 1) Los piezos (en serie)
 
-Suelda todos los discos **en paralelo**: todos los cables **rojos** juntos
-(centro blanco/cerámica) y todos los **negros** juntos (borde de bronce).
+Conecta los 6 discos **en serie**: el cable **negro** de uno con el **rojo**
+del siguiente. Quedan libres el rojo del primero (**PZ+**) y el negro del
+último (**PZ−**).
 
 ```
- rojo ──●──────●──────●──────●───── PZ+
-        │      │      │      │
-       [P1]   [P2]   [P3]   [P4] ...
-        │      │      │      │
- negro ─●──────●──────●──────●───── PZ−
+ PZ+ ──[P1]──[P2]──[P3]──[P4]──[P5]──[P6]── PZ−
+       rojo→negro  rojo→negro  ...
 ```
 
-> Respeta la misma polaridad en todos; si uno queda invertido, resta energía a los demás.
+> En serie se suman los voltajes: con 6 piezos se ve bien en el LCD.
 
 ### 2) Puente rectificador (4 × 1N4007)
 
@@ -98,26 +98,30 @@ Conecta cada diodo así (ánodo → cátodo):
 | D3 | **GND** | PZ+ |
 | D4 | **GND** | PZ− |
 
-### 3) Capacitor, medición y detector de pisadas
+### 3) Capacitor y medición
 
 ```
- V+ ──┬──────────────┬───────────────┬──────────
-      │              │               │
-    (+)            [100k]          [22k]
-   10µF              │               │
-    (−)              ├──── A0        ├──── Base BC547
-      │              │               │
-      │            [10k]          [100k]
-      │              │               │
- GND ─┴──────────────┴───────────────┴──── Emisor BC547
+ V+ ──┬──────────────┐
+      │              │
+    (+)            [100k]
+   10µF              ├──── A0
+    (−)            [10k]
+      │              │
+ GND ─┴──────────────┘
+```
 
-                                     Colector BC547 ──── D2 (Arduino)
+### 3b) LED con el BC547
+
+```
+ + batería ──[330Ω]──▶|── Colector BC547      (LED: pata larga hacia la resistencia)
+                  LED
+ D8 ──[10k]── Base BC547
+              Emisor BC547 ── GND
 ```
 
 **BC547** (cara plana hacia ti, patas abajo): **C – B – E** (izquierda a derecha).
 
-> Las resistencias también **descargan** el capacitor entre pisada y pisada,
-> para que cada pisada se mida desde cero.
+> ⚠️ El colector va **solo** al LED. No lo unas a GND ni al divisor.
 
 ### 4) LCD I2C
 
@@ -136,12 +140,6 @@ Conecta cada diodo así (ánodo → cátodo):
 | − | GND |
 
 ⚠️ **Todas las GND deben estar unidas** (Arduino, puente, capacitor, BC547, LCD, baterías).
-
-### 6) (Opcional) Cargar la batería con los piezos
-
-Un diodo 1N4007 extra desde **V+** (ánodo) hacia el **+ de la batería**
-(cátodo) deja pasar la energía hacia la batería y evita que vuelva.
-Ver la sección de *expectativas* abajo: es una demostración, no un cargador real.
 
 ---
 
@@ -175,13 +173,13 @@ Ver la sección de *expectativas* abajo: es una demostración, no un cargador re
 En la pantalla verás:
 
 ```
-Pasos:37
-12.4V 2680uJ
+Pasos: 37
+Voltaje: 12.4V
 ```
 
 - **Pasos**: pisadas contadas.
-- **V**: tensión pico de la última pisada.
-- **uJ / mJ**: energía total estimada que generó la placa.
+- **Voltaje**: tensión pico de la última pisada.
+- El **LED** destella con cada pisada.
 
 En el Monitor Serie (9600) también se imprime cada pisada.
 
@@ -193,8 +191,11 @@ En el Monitor Serie (9600) también se imprime cada pisada.
 |---|---|
 | LCD encendida pero sin letras | Gira el potenciómetro azul de atrás del módulo I2C (contraste) |
 | LCD sin nada | Revisa SDA/SCL, usa el escáner I2C y cambia la dirección |
-| No cuenta pasos | Revisa la orientación del BC547 (C-B-E) y que el colector vaya a D2 |
-| Cuenta 2 pasos por pisada | Sube `ANTIRREBOTE_MS` en el código (ej. 400) |
+| No cuenta pasos | Baja `UMBRAL_SUBIDA_V` en el código (ej. 0.4) y revisa el puente |
+| Cuenta pasos solo | Sube `UMBRAL_SUBIDA_V` (ej. 1.5) |
+| Cuenta 2 pasos por pisada | Sube `ANTIRREBOTE_MS` en el código (ej. 900) |
+| El LED no enciende | Revisa el BC547 (C-B-E), la pata larga del LED y que D8 vaya a la base por la 10k |
+| El LED queda siempre encendido | El colector está unido a GND: sepáralo |
 | Voltaje siempre 0 | Revisa el puente de diodos (orientación) y la polaridad del capacitor |
 | Voltaje muy bajo | Agrega topes en el centro de los piezos, más piezos, o pisa más fuerte |
 | Arduino se reinicia | Batería baja: carga las 18650 (con cargador) |

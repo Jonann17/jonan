@@ -1,0 +1,243 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1290" viewBox="0 0 1440 1290" font-family="Arial, Helvetica, sans-serif">
+<rect width="1440" height="1290" fill="white"/>
+<text x="720.0" y="40" font-size="26" text-anchor="middle" fill="#222" font-weight="bold">Esquema eléctrico — Maqueta de una baldosa (circuito del video)</text>
+<rect x="20" y="65" width="1400" height="500" rx="8" fill="#fbfbfb" stroke="#888" stroke-width="2"/>
+<text x="40" y="95" font-size="18" text-anchor="start" fill="#222" font-weight="bold">① CIRCUITO DE LA PLACA (en la mini protoboard)</text>
+<polyline points="90,140 90,151.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,183.5 90,195" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,151.5 106,151.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,183.5 106,183.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="157.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<polyline points="90,195 90,206.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,238.5 90,250" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,206.5 106,206.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,238.5 106,238.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="212.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<circle cx="90" cy="195" r="4.5" fill="#222"/>
+<polyline points="90,250 90,261.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,293.5 90,305" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,261.5 106,261.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,293.5 106,293.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="267.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<circle cx="90" cy="250" r="4.5" fill="#222"/>
+<polyline points="90,305 90,316.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,348.5 90,360" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,316.5 106,316.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,348.5 106,348.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="322.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<circle cx="90" cy="305" r="4.5" fill="#222"/>
+<polyline points="90,360 90,371.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,403.5 90,415" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,371.5 106,371.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,403.5 106,403.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="377.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<circle cx="90" cy="360" r="4.5" fill="#222"/>
+<polyline points="90,415 90,426.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,458.5 90,470" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="74,426.5 106,426.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="74,458.5 106,458.5" fill="none" stroke="#222" stroke-width="3" stroke-linejoin="round"/>
+<rect x="79" y="432.5" width="22" height="20" fill="#f3e3b0" stroke="#222" stroke-width="2"/>
+<circle cx="90" cy="415" r="4.5" fill="#222"/>
+<circle cx="90" cy="140" r="4.5" fill="#222"/>
+<circle cx="90" cy="470" r="4.5" fill="#222"/>
+<polyline points="90,140 240,140 240,265 300,265" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="90,470 510,470 510,265 460,265" fill="none" stroke="#1f77b4" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="100" y="130" font-size="14" text-anchor="start" fill="#d62728">PZ+</text>
+<text x="300" y="462" font-size="14" text-anchor="start" fill="#1f77b4">PZ−</text>
+<text x="125" y="300" font-size="14" text-anchor="start" fill="#222" font-weight="bold">6 piezos</text>
+<text x="125" y="318" font-size="14" text-anchor="start" fill="#222" font-weight="bold">EN SERIE</text>
+<text x="125" y="338" font-size="12" text-anchor="start" fill="#888">(negro de uno →</text>
+<text x="125" y="353" font-size="12" text-anchor="start" fill="#888">rojo del siguiente)</text>
+<g transform="translate(300,265) rotate(-45.0)">
+<line x1="0" y1="0" x2="46.568542494923804" y2="0" stroke="#222" stroke-width="2.2"/>
+<line x1="66.5685424949238" y1="0" x2="113.13708498984761" y2="0" stroke="#222" stroke-width="2.2"/>
+<polygon points="46.568542494923804,-11 46.568542494923804,11 66.5685424949238,0" fill="#222"/>
+<line x1="66.5685424949238" y1="-12" x2="66.5685424949238" y2="12" stroke="#222" stroke-width="3"/>
+</g>
+<text x="302.0" y="219.0" font-size="14" text-anchor="start" fill="#222">D1</text>
+<g transform="translate(460,265) rotate(-135.0)">
+<line x1="0" y1="0" x2="46.568542494923804" y2="0" stroke="#222" stroke-width="2.2"/>
+<line x1="66.5685424949238" y1="0" x2="113.13708498984761" y2="0" stroke="#222" stroke-width="2.2"/>
+<polygon points="46.568542494923804,-11 46.568542494923804,11 66.5685424949238,0" fill="#222"/>
+<line x1="66.5685424949238" y1="-12" x2="66.5685424949238" y2="12" stroke="#222" stroke-width="3"/>
+</g>
+<text x="434.0" y="219.0" font-size="14" text-anchor="start" fill="#222">D2</text>
+<g transform="translate(380,345) rotate(-135.0)">
+<line x1="0" y1="0" x2="46.568542494923804" y2="0" stroke="#222" stroke-width="2.2"/>
+<line x1="66.5685424949238" y1="0" x2="113.13708498984761" y2="0" stroke="#222" stroke-width="2.2"/>
+<polygon points="46.568542494923804,-11 46.568542494923804,11 66.5685424949238,0" fill="#222"/>
+<line x1="66.5685424949238" y1="-12" x2="66.5685424949238" y2="12" stroke="#222" stroke-width="3"/>
+</g>
+<text x="302.0" y="327.0" font-size="14" text-anchor="start" fill="#222">D3</text>
+<g transform="translate(380,345) rotate(-45.0)">
+<line x1="0" y1="0" x2="46.568542494923804" y2="0" stroke="#222" stroke-width="2.2"/>
+<line x1="66.5685424949238" y1="0" x2="113.13708498984761" y2="0" stroke="#222" stroke-width="2.2"/>
+<polygon points="46.568542494923804,-11 46.568542494923804,11 66.5685424949238,0" fill="#222"/>
+<line x1="66.5685424949238" y1="-12" x2="66.5685424949238" y2="12" stroke="#222" stroke-width="3"/>
+</g>
+<text x="434.0" y="327.0" font-size="14" text-anchor="start" fill="#222">D4</text>
+<circle cx="300" cy="265" r="4.5" fill="#222"/>
+<circle cx="380" cy="185" r="4.5" fill="#222"/>
+<circle cx="460" cy="265" r="4.5" fill="#222"/>
+<circle cx="380" cy="345" r="4.5" fill="#222"/>
+<polyline points="380,345 380,357" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="362,357 398,357" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="368,362 392,362" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="374,367 386,367" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="380" y="508" font-size="14" text-anchor="middle" fill="#222">Puente rectificador: 4 × 1N4007</text>
+<text x="380" y="524" font-size="13" text-anchor="middle" fill="#888">(franja del diodo = cátodo = barra del dibujo)</text>
+<polyline points="380,185 380,125 860,125" fill="none" stroke="#d62728" stroke-width="2.6" stroke-linejoin="round"/>
+<text x="395" y="117" font-size="15" text-anchor="start" fill="#d62728" font-weight="bold">V+ de los piezos</text>
+<circle cx="620" cy="125" r="4.5" fill="#222"/>
+<polyline points="620,125 620,245" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="595,245 645,245" fill="none" stroke="#222" stroke-width="3.5" stroke-linejoin="round"/>
+<path d="M595,262 Q620,252 645,262" fill="none" stroke="#222" stroke-width="3.5"/>
+<text x="605" y="238" font-size="16" text-anchor="start" fill="#222" font-weight="bold">+</text>
+<polyline points="620,258 620,370" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="620,370 620,382" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="602,382 638,382" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="608,387 632,387" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="614,392 626,392" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="655" y="255" font-size="15" text-anchor="start" fill="#222" font-weight="bold">10 µF</text>
+<text x="655" y="273" font-size="14" text-anchor="start" fill="#222">≥ 50 V</text>
+<polyline points="800,125 860,125" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="860,125 860,155.0" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="860,205.0 860,235" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="852" y="155.0" width="16" height="50" fill="white" stroke="#222" stroke-width="2.2"/>
+<text x="876" y="185.0" font-size="15" text-anchor="start" fill="#222">100 kΩ</text>
+<circle cx="860" cy="255" r="4.5" fill="#222"/>
+<polyline points="860,235 860,255" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="860,255 860,287.5" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="860,337.5 860,370" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="852" y="287.5" width="16" height="50" fill="white" stroke="#222" stroke-width="2.2"/>
+<text x="876" y="317.5" font-size="15" text-anchor="start" fill="#222">10 kΩ</text>
+<polyline points="860,370 860,382" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="842,382 878,382" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="848,387 872,387" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="854,392 866,392" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="860,255 925,255" fill="none" stroke="#1f77b4" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="925,247 941,255 925,263" fill="#1f77b4"/>
+<text x="947" y="261" font-size="16" text-anchor="start" fill="#1f77b4" font-weight="bold">A0</text>
+<text x="860" y="420" font-size="13" text-anchor="middle" fill="#888">Divisor ÷11: A0 mide</text>
+<text x="860" y="436" font-size="13" text-anchor="middle" fill="#888">hasta 55 V</text>
+<polyline points="1040,82 1040,548" fill="none" stroke="#888" stroke-width="1.2" stroke-linejoin="round" stroke-dasharray="5 5"/>
+<text x="1215" y="95" font-size="14" text-anchor="middle" fill="#222" font-weight="bold">Indicador LED (lo enciende el Arduino)</text>
+<polyline points="1250,125 1250,140" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="1250" cy="125" r="5" fill="white" stroke="#d62728" stroke-width="2.2"/>
+<text x="1262" y="122" font-size="14" text-anchor="start" fill="#d62728" font-weight="bold">+ batería (riel +)</text>
+<polyline points="1250,140 1250,170.0" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1250,220.0 1250,250" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="1242" y="170.0" width="16" height="50" fill="white" stroke="#222" stroke-width="2.2"/>
+<text x="1266" y="200.0" font-size="15" text-anchor="start" fill="#222">330 Ω</text>
+<g transform="translate(1250,250) rotate(90.0)">
+<line x1="0" y1="0" x2="25.0" y2="0" stroke="#222" stroke-width="2.2"/>
+<line x1="45.0" y1="0" x2="70.0" y2="0" stroke="#222" stroke-width="2.2"/>
+<polygon points="25.0,-11 25.0,11 45.0,0" fill="#222"/>
+<line x1="45.0" y1="-12" x2="45.0" y2="12" stroke="#222" stroke-width="3"/>
+</g>
+<polyline points="1270,276 1286,264" fill="none" stroke="#e67e22" stroke-width="2.4" stroke-linejoin="round"/>
+<polyline points="1272,294 1288,282" fill="none" stroke="#e67e22" stroke-width="2.4" stroke-linejoin="round"/>
+<text x="1295" y="300" font-size="14" text-anchor="start" fill="#222" font-weight="bold">LED</text>
+<text x="1295" y="316" font-size="12" text-anchor="start" fill="#888">(pata larga arriba)</text>
+<polyline points="1250,320 1250,330" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="1238" cy="395" r="32" fill="white" stroke="#222" stroke-width="2"/>
+<polyline points="1224,372 1224,418" fill="none" stroke="#222" stroke-width="3.5" stroke-linejoin="round"/>
+<polyline points="1224,384 1250,364 1250,330" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1224,406 1250,426 1250,510" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="1250,426 1237,424 1245,414" fill="#222"/>
+<polyline points="1250,510 1250,522" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1232,522 1268,522" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1238,527 1262,527" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1244,532 1256,532" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="1278" y="390" font-size="15" text-anchor="start" fill="#222" font-weight="bold">BC547</text>
+<text x="1278" y="408" font-size="13" text-anchor="start" fill="#888">patas C-B-E</text>
+<text x="1278" y="424" font-size="12" text-anchor="start" fill="#888">(cara plana al frente)</text>
+<text x="1260" y="345" font-size="13" text-anchor="start" fill="#222">C</text>
+<text x="1198" y="387" font-size="13" text-anchor="start" fill="#222">B</text>
+<text x="1260" y="440" font-size="13" text-anchor="start" fill="#222">E</text>
+<polyline points="1095,395 1134.5,395" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="1184.5,395 1224,395" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<rect x="1134.5" y="387" width="50" height="16" fill="white" stroke="#222" stroke-width="2.2"/>
+<text x="1159.5" y="381" font-size="15" text-anchor="middle" fill="#222">10 kΩ</text>
+<polyline points="1060,395 1095,395" fill="none" stroke="#1f77b4" stroke-width="2.2" stroke-linejoin="round"/>
+<polygon points="1080,387 1096,395 1080,403" fill="#1f77b4"/>
+<text x="1058" y="380" font-size="16" text-anchor="start" fill="#1f77b4" font-weight="bold">D8</text>
+<text x="40" y="555" font-size="14" text-anchor="start" fill="#888">El capacitor se descarga por el divisor; el programa cuenta la SUBIDA de tensión de cada pisada. El LED se alimenta de la batería, no de los piezos.</text>
+<rect x="20" y="585" width="1400" height="690" rx="8" fill="#fbfbfb" stroke="#888" stroke-width="2"/>
+<text x="40" y="615" font-size="18" text-anchor="start" fill="#222" font-weight="bold">② CONEXIONES AL ARDUINO</text>
+<rect x="560" y="650" width="260" height="400" rx="8" fill="#e8f1f8" stroke="#1f77b4" stroke-width="2"/>
+<text x="690.0" y="674" font-size="17" text-anchor="middle" fill="#222" font-weight="bold">ARDUINO UNO</text>
+<rect x="60" y="720" width="320" height="40" rx="8" fill="white" stroke="#222" stroke-width="2"/>
+<text x="72" y="745" font-size="14" text-anchor="start" fill="#222">Punto medio del divisor  ①</text>
+<polyline points="380,740 560,740" fill="none" stroke="#1f77b4" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="560" cy="740" r="4.5" fill="#1f77b4"/>
+<text x="572" y="745" font-size="15" text-anchor="start" fill="#222" font-weight="bold">A0</text>
+<rect x="60" y="800" width="320" height="40" rx="8" fill="white" stroke="#222" stroke-width="2"/>
+<text x="72" y="825" font-size="14" text-anchor="start" fill="#222">Resistencia 10 kΩ → base BC547  ①</text>
+<polyline points="380,820 560,820" fill="none" stroke="#1f77b4" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="560" cy="820" r="4.5" fill="#1f77b4"/>
+<text x="572" y="825" font-size="15" text-anchor="start" fill="#222" font-weight="bold">D8</text>
+<rect x="60" y="880" width="320" height="40" rx="8" fill="white" stroke="#222" stroke-width="2"/>
+<text x="72" y="905" font-size="14" text-anchor="start" fill="#222">GND / riel −  ①</text>
+<polyline points="380,900 560,900" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="560" cy="900" r="4.5" fill="#222"/>
+<text x="572" y="905" font-size="15" text-anchor="start" fill="#222" font-weight="bold">GND</text>
+<text x="808" y="735" font-size="15" text-anchor="end" fill="#222" font-weight="bold">5V</text>
+<circle cx="820" cy="730" r="4.5" fill="#222"/>
+<text x="808" y="785" font-size="15" text-anchor="end" fill="#222" font-weight="bold">GND</text>
+<circle cx="820" cy="780" r="4.5" fill="#222"/>
+<text x="808" y="835" font-size="15" text-anchor="end" fill="#222" font-weight="bold">A4 (SDA)</text>
+<circle cx="820" cy="830" r="4.5" fill="#222"/>
+<text x="808" y="885" font-size="15" text-anchor="end" fill="#222" font-weight="bold">A5 (SCL)</text>
+<circle cx="820" cy="880" r="4.5" fill="#222"/>
+<text x="808" y="955" font-size="15" text-anchor="end" fill="#222" font-weight="bold">VIN</text>
+<circle cx="820" cy="950" r="4.5" fill="#222"/>
+<text x="808" y="1005" font-size="15" text-anchor="end" fill="#222" font-weight="bold">GND</text>
+<circle cx="820" cy="1000" r="4.5" fill="#222"/>
+<rect x="1080" y="660" width="300" height="230" rx="8" fill="#eaf6ea" stroke="#2e7d32" stroke-width="2"/>
+<text x="1230.0" y="684" font-size="17" text-anchor="middle" fill="#222" font-weight="bold">LCD 16x2 I2C</text>
+<polyline points="820,780 1080,780" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="1092" y="785" font-size="15" text-anchor="start" fill="#222" font-weight="bold">GND</text>
+<polyline points="820,730 1080,730" fill="none" stroke="#e67e22" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="1092" y="735" font-size="15" text-anchor="start" fill="#222" font-weight="bold">VCC</text>
+<polyline points="820,830 1080,830" fill="none" stroke="#8e44ad" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="1092" y="835" font-size="15" text-anchor="start" fill="#222" font-weight="bold">SDA</text>
+<polyline points="820,880 1080,880" fill="none" stroke="#8e44ad" stroke-width="2.2" stroke-linejoin="round"/>
+<text x="1092" y="885" font-size="15" text-anchor="start" fill="#222" font-weight="bold">SCL</text>
+<rect x="1230" y="730" width="130" height="50" fill="#1b5e20" rx="3"/>
+<text x="1295" y="752" font-size="13" text-anchor="middle" fill="#cfe8cf">Pasos: 37</text>
+<text x="1295" y="770" font-size="13" text-anchor="middle" fill="#cfe8cf">Voltaje: 12.4V</text>
+<text x="1295" y="800" font-size="13" text-anchor="middle" fill="#888">Dirección 0x27 (o 0x3F)</text>
+<rect x="1080" y="920" width="300" height="140" rx="8" fill="#fff4e5" stroke="#e67e22" stroke-width="2"/>
+<text x="1230.0" y="944" font-size="17" text-anchor="middle" fill="#222" font-weight="bold">Porta-pilas 2 × 18650</text>
+<rect x="1120" y="962" width="100" height="32" rx="6" fill="#ffd8a8" stroke="#222" stroke-width="1.8"/>
+<text x="1170" y="984" font-size="14" text-anchor="middle" fill="#222">18650</text>
+<rect x="1240" y="962" width="100" height="32" rx="6" fill="#ffd8a8" stroke="#222" stroke-width="1.8"/>
+<text x="1290" y="984" font-size="14" text-anchor="middle" fill="#222">18650</text>
+<text x="1250" y="1020" font-size="14" text-anchor="middle" fill="#222">7,4 V  → riel + / riel −</text>
+<text x="1100" y="1030" font-size="22" text-anchor="start" fill="#d62728" font-weight="bold">+</text>
+<text x="1100" y="1052" font-size="22" text-anchor="start" fill="#222" font-weight="bold">−</text>
+<polyline points="820,950 960,950" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="960" cy="950" r="4.5" fill="#d62728"/>
+<polyline points="960,950 1000,932" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<circle cx="1005" cy="950" r="4.5" fill="#d62728"/>
+<text x="982" y="924" font-size="13" text-anchor="middle" fill="#222">interruptor</text>
+<polyline points="1005,950 1040,950 1040,1025 1080,1025" fill="none" stroke="#d62728" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="820,1000 1010,1000 1010,1047 1080,1047" fill="none" stroke="#222" stroke-width="2.2" stroke-linejoin="round"/>
+<polyline points="80,1080 115,1080" fill="none" stroke="#d62728" stroke-width="4" stroke-linejoin="round"/>
+<text x="125" y="1085" font-size="14" text-anchor="start" fill="#222">Energía de los piezos / +bat</text>
+<polyline points="380,1080 415,1080" fill="none" stroke="#1f77b4" stroke-width="4" stroke-linejoin="round"/>
+<text x="425" y="1085" font-size="14" text-anchor="start" fill="#222">Señales al Arduino</text>
+<polyline points="600,1080 635,1080" fill="none" stroke="#8e44ad" stroke-width="4" stroke-linejoin="round"/>
+<text x="645" y="1085" font-size="14" text-anchor="start" fill="#222">I2C (LCD)</text>
+<polyline points="800,1080 835,1080" fill="none" stroke="#e67e22" stroke-width="4" stroke-linejoin="round"/>
+<text x="845" y="1085" font-size="14" text-anchor="start" fill="#222">5 V</text>
+<polyline points="940,1080 975,1080" fill="none" stroke="#222" stroke-width="4" stroke-linejoin="round"/>
+<text x="985" y="1085" font-size="14" text-anchor="start" fill="#222">GND</text>
+<rect x="60" y="1105" width="1320" height="155" rx="8" fill="white" stroke="#888" stroke-width="2"/>
+<text x="80" y="1135" font-size="17" text-anchor="start" fill="#222" font-weight="bold">Reglas importantes</text>
+<text x="80" y="1168" font-size="15" text-anchor="start" fill="#222">• TODAS las GND unidas (riel −): Arduino, puente (D3/D4), capacitor (−), 10 kΩ del divisor, emisor del BC547, LCD y batería (−).</text>
+<text x="80" y="1196" font-size="15" text-anchor="start" fill="#222">• El colector del BC547 va SOLO al LED (no lo unas a GND).  La batería va a VIN (más de 7 V), no al pin 5V.</text>
+<text x="80" y="1224" font-size="15" text-anchor="start" fill="#222">• Totales: 6 piezos · 4 × 1N4007 · 1 × 10 µF · 1 × 100 kΩ · 2 × 10 kΩ · 1 × BC547 · 1 × 330 Ω · 1 LED.</text>
+<text x="80" y="1252" font-size="15" text-anchor="start" fill="#222">• Programa: generador_piezo/generador_piezo.ino</text>
+</svg>

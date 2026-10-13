@@ -7,8 +7,10 @@ generada.
 
 > 🛒 Lista de compras completa: [LISTA_DE_COMPRAS.md](LISTA_DE_COMPRAS.md)
 
-> 💡 **Primero arma y prueba UNA baldosa** con el sketch `generador_piezo`
-> (ver [README.md](README.md)). Cuando funcione, haz las otras 8 iguales.
+> 💡 **Primero arma y prueba UNA baldosa** con la maqueta del video
+> (ver [README.md](README.md)): sirve para probar los piezos y la estructura.
+> Ojo: en la pasarela los piezos van **en paralelo** y cada baldosa lleva su
+> propio detector BC547, distinto al circuito de la maqueta.
 
 ---
 
