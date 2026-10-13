@@ -100,15 +100,123 @@ sudo bash scripts/instalar_servidor.sh     # la nube (página web)
 sudo bash scripts/instalar_camara.sh       # saca y sube las fotos
 ```
 
-### Pi B — descargador
+### Pi B — descargador + IHM (interfaz gráfica)
 ```bash
 sudo bash scripts/conectar_a_hotspot.sh    # se conecta a la red "FotosPi"
 sudo bash scripts/instalar_descargador.sh  # baja todas las fotos
+bash scripts/instalar_ihm.sh               # interfaz gráfica PyQt6
 ```
 
 Cada script instala las dependencias, activa el arranque automático al prender
 (`systemctl enable`) y deja el programa corriendo. El hotspot y las conexiones
 WiFi también quedan configurados para levantarse solos al prender.
+
+---
+
+## 🖥️ IHM (interfaz gráfica en el Pi B)
+
+El Pi B tiene una **interfaz gráfica hecha en PyQt6** (`ihm/ihm.py`) que se abre
+sola al iniciar el escritorio. Desde ahí podés, sin tocar la terminal:
+
+- Ver el **estado** del sistema con luces 🟢/🔴 (servidor, cámara, descargador)
+  y el total de fotos.
+- Ver la **galería** de fotos descargadas, agrupadas por día; clic en una
+  miniatura para verla en grande.
+- **Ajustar el intervalo entre fotos** de la cámara: elegís los segundos y tocás
+  *Aplicar*. Se lo envía al servidor y la cámara lo toma en el próximo ciclo,
+  **sin reiniciar nada**.
+- **Iniciar / Detener la captura.** El programa de la cámara arranca solo al
+  prender el Pi A, pero **queda en espera**: recién saca fotos cuando tocás
+  *▶ Iniciar captura*. Con *⏹ Detener* vuelve a la espera.
+- **Ajustar la fecha y hora del Pi A** (no tiene internet ni pila de reloj):
+  muestra la hora de los dos Pi y la diferencia; *Enviar hora al Pi de la
+  cámara* la ajusta. Si tocás *Iniciar* sin haberla ajustado, la IHM avisa y
+  ofrece enviarla antes.
+- Ver la **radiación del piranómetro en vivo** (W/m² y tensión de la celda).
+- Pestaña **Gráfico**: la medición del piranómetro de cada foto
+  (`mediciones.csv`), filtrable por día.
+
+Las pestañas son: **Control** (estado, captura, intervalo, hora, piranómetro),
+**Fotos** (galería) y **Gráfico**.
+
+Cómo funciona el cambio de intervalo:
+
+```
+IHM (Pi B)  --POST /config-->  Servidor (Pi A)  --lo guarda-->  .config_runtime.json
+Cámara (Pi A)  --GET /config cada ciclo-->  usa el nuevo intervalo
+```
+
+Para abrir la IHM a mano:  `python3 ihm/ihm.py`
+
+> El nombre de cada foto ya incluye **hora, minuto y segundo**:
+> `padron<PADRON>_DDMMAAAA_HHMMSS.jpg` (los últimos 6 dígitos son HH-MM-SS).
+
+---
+
+## ☀️ Piranómetro casero (Arduino) en el Pi A
+
+Basado en [Measuring Solar Radiation with Arduino](https://www.hackster.io/jeffrey2/measuring-solar-radiation-with-arduino-f741ac)
+(Jeffrey, Hackster.io), **sin el Ethernet Shield**: el Arduino le pasa los datos
+al Pi A por el puerto serie de los GPIO.
+
+- Sketch: `arduino/piranometro/piranometro.ino` (abrir con el IDE de Arduino).
+- Cableado: **`arduino/esquematico_conexion.svg`** (se abre en el navegador).
+
+### Conexión Pi A ↔ Arduino UNO
+
+El Pi trabaja a **3,3 V** y el Arduino a **5 V**: TX/RX **siempre pasan por un
+conversor de nivel bidireccional** (directo puede quemar el GPIO del Pi).
+
+| Pi A (pin físico) | Conversor de nivel | Arduino UNO |
+|---|---|---|
+| pin 1 · 3V3 | LV | — |
+| pin 2 · 5V | HV | 5V |
+| pin 6 · GND | GND (ambos lados) | GND |
+| pin 8 · GPIO14 (TXD) | LV1 → HV1 | D8 (RX) |
+| pin 10 · GPIO15 (RXD) | LV2 ← HV2 | D9 (TX) |
+
+Al programar el Arduino por USB, **desconectá el cable de 5V del Pi**.
+
+### Celda solar (como en el artículo)
+
+```
+Celda (+) ── R 10 kΩ ── A0        (la celda nunca más de 5 V)
+Celda (−) ────────────── GND
+```
+
+`P = V² / R`, `Área = largo × ancho`, `G = P / Área × CAL_K` (W/m²).
+
+El código original del artículo tiene errores que quedaron **corregidos** en
+el sketch (el área daba 0 por división entera y además mm²→m² es /10⁶; usaba
+`analogRead` crudo como si fueran voltios; la resistencia "10" en vez de
+10 000 Ω; `sprintf("%f")` con un puntero sin memoria colgaba el UNO).
+
+> ⚠ Aun corregida, la fórmula **no da la irradiancia real**: con la resistencia
+> en serie hacia A0 casi no circula corriente (se mide la tensión en vacío de
+> la celda) y la celda convierte ~15 % de la luz. Con 5 V, 10 kΩ y 110×60 mm (placa de 11×6 cm) da
+> ≈0,4 W/m². Es un **índice** que sube y baja con el sol; para W/m² reales hay
+> que calibrar `CAL_K` contra una referencia (otro piranómetro o una estación
+> meteorológica cercana). Alternativa más lineal: `#define MODO_SHUNT 1`
+> (resistencia de ~1 Ω en paralelo con la celda, mide la corriente de
+> cortocircuito, proporcional al sol).
+
+Ajustar en la sección 1 del sketch: `RESISTENCIA_OHM` (medida con el
+multímetro), `CELDA_LARGO_MM`, `CELDA_ANCHO_MM` y `CAL_K`.
+
+### Dónde quedan las mediciones
+
+Cada foto genera una fila (mismo `nombre` que la foto) en `mediciones.csv`:
+
+- Pi A: `fotos_camara/mediciones.csv` y `nube_fotos/mediciones.csv`
+  (también en `/mediciones.csv` de la web y dentro del ZIP).
+- Pi B: `fotos_descargadas/mediciones.csv` (lo baja el descargador).
+
+Columnas principales: `g_avg` (radiación media entre una foto y la anterior),
+`g_min`/`g_max`, `g_now` (en el instante de la foto), `v_avg` (tensión de la
+celda), `sat` (> 0 = la celda pasó del rango del ADC), `arduino_ok`.
+
+Sin Arduino conectado, poné `habilitado = false` en `[arduino]` de
+`config.ini`: la cámara sigue sacando fotos igual (con `arduino_ok = 0`).
 
 ---
 
@@ -128,6 +236,10 @@ Además, cada programa **recuerda lo que ya hizo**:
 - El descargador compara por nombre y **no vuelve a bajar** lo que ya tiene.
 
 Así, tras un corte de luz o un reinicio, todo sigue funcionando solo.
+
+> ⚠ **Excepción a propósito:** después de un reinicio la cámara queda **EN
+> ESPERA** (no saca fotos). El Pi no tiene pila de reloj ni internet, así que
+> su hora puede estar mal: hay que **ajustar la hora e iniciar desde la IHM**.
 
 ---
 
@@ -152,6 +264,42 @@ Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
   por esa placa. Si además necesitás internet en el Pi A, conectalo por
   **cable de red (Ethernet)**.
 - Para apagar el hotspot: `sudo nmcli connection down hotspot-fotos`.
+
+### 🩹 Solución de problemas del hotspot (Pi 3 B)
+
+El WiFi del Pi 3 (chip `brcmfmac`) es quisquilloso en modo Access Point. Estos
+son los problemas reales que pueden aparecer y cómo se resuelven (el script
+`configurar_hotspot.sh` ya los contempla):
+
+- **`802.1X supplicant took too long to authenticate`** al crear el hotspot →
+  falta configurar el **país del WiFi**. Solución:
+  ```bash
+  sudo raspi-config nonint do_wifi_country PY   # tu país (PY = Paraguay)
+  sudo iw reg set PY
+  ```
+  Y conviene fijar un **canal** (el script usa el 6).
+
+- **Un cliente (celular/otro Pi) no conecta**: error `4way_handshake` /
+  `no secrets` / `Segredos foram requisitados` → suele ser la **clave que no
+  coincide**. Verificá la clave real que está transmitiendo el hotspot:
+  ```bash
+  sudo nmcli -s -g 802-11-wireless-security.psk connection show hotspot-fotos
+  ```
+  Tras cambiar la clave, reiniciá el hotspot de verdad (`down` + `up`), no solo
+  `up`:
+  ```bash
+  sudo nmcli connection down hotspot-fotos && sudo nmcli connection up hotspot-fotos
+  ```
+  Y en el cliente, borrá el perfil viejo antes de reconectar:
+  `sudo nmcli connection delete FotosPi`.
+
+- **Si aun con la clave correcta NO conecta ningún cliente** → el chip del Pi 3
+  no logra negociar WPA2. La solución práctica es dejar la red **abierta** (sin
+  contraseña), perfecto para un prototipo en una red local:
+  ```bash
+  sudo ABIERTO=1 bash scripts/configurar_hotspot.sh          # en el Pi A
+  sudo ABIERTO=1 bash scripts/conectar_a_hotspot.sh          # en el Pi B
+  ```
 
 ---
 
