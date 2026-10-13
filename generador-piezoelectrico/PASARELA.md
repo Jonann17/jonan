@@ -65,6 +65,10 @@ generada.
 
 ## 🔌 Circuito
 
+![Esquema eléctrico](esquema_pasarela.png)
+
+(versión vectorial para imprimir: [esquema_pasarela.svg](esquema_pasarela.svg))
+
 ### Por cada baldosa (repetir 9 veces)
 
 ```
