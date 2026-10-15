@@ -1,12 +1,10 @@
 # jonan
 
-Repositorio de proyectos de Jonathan. Cada carpeta es un proyecto independiente.
+Repositorio de proyectos de Jonathan.
 
 | Carpeta | Qué es |
 |---|---|
 | [`raspberry-webcam-sync/`](raspberry-webcam-sync/) | Sistema de webcam con dos Raspberry Pi y un piranómetro casero con Arduino. |
-| [`sig-ft-propuestas/`](sig-ft-propuestas/) | Propuestas de cambios para [SIG-FT](https://github.com/luanccozer/SIG-FT) (migración de la interfaz a Qt6), guardadas como parches. |
-| [`Lista 1/`](Lista%201/) | Ejercicios de programación en C (lista 1). |
 
 ---
 
