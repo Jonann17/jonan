@@ -49,7 +49,7 @@ try:
 except ImportError:
     HAY_MATPLOTLIB = False
 
-# Cuántas miniaturas mostrar como máximo (para no saturar el Pi 3).
+# Cuántas miniaturas mostrar como máximo (para que la galería cargue rápido).
 MAX_MINIATURAS = 60
 
 # Opciones de intervalo entre fotos: (texto, segundos)

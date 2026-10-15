@@ -34,7 +34,8 @@ Pi A  =  CÁMARA + SERVIDOR + HOTSPOT WiFi        Pi B  =  DESCARGADOR + IHM
 ```
 - Pi A: usuario `jonan`, repo en `/home/jonan/jonan/raspberry-webcam-sync`.
 - Pi B: usuario `rpi`, repo en `/home/rpi/jonan/raspberry-webcam-sync`.
-- Los dos son Raspberry Pi 3 B, con Raspberry Pi OS (NetworkManager / nmcli).
+- Pi A es un **Raspberry Pi 3 B**; Pi B es un **Raspberry Pi 4**. Los dos con
+  Raspberry Pi OS (NetworkManager / nmcli).
 - País WiFi configurado: **PY (Paraguay)**.
 
 ### Nombre de las fotos
@@ -115,7 +116,7 @@ carpeta de la nube) vía `POST /config`; la cámara lo lee con `GET /config`.
 
 ---
 
-## 5. Red WiFi / hotspot — lecciones aprendidas (Pi 3)
+## 5. Red WiFi / hotspot — lecciones aprendidas (Pi A, Pi 3 B)
 
 El WiFi del Pi 3 (chip `brcmfmac`) es delicado en modo AP. Problemas y solución
 (ya contemplados en `scripts/configurar_hotspot.sh`):
