@@ -1,6 +1,6 @@
 # 📷 Sistema de webcam para Raspberry Pi 3 B
 
-Sistema para que **un Raspberry Pi con webcam** saque una foto **cada 10 minutos**,
+Sistema para que **un Raspberry Pi con webcam** saque una foto **cada 1-10-60 minutos**,
 la suba a una **página web (nube)**, y que **otro Raspberry Pi** se conecte y
 **descargue todas las fotos** a su propio directorio.
 
@@ -155,8 +155,7 @@ Para abrir la IHM a mano:  `python3 ihm/ihm.py`
 
 ## ☀️ Piranómetro casero (Arduino) en el Pi A
 
-Basado en [Measuring Solar Radiation with Arduino](https://www.hackster.io/jeffrey2/measuring-solar-radiation-with-arduino-f741ac)
-(Jeffrey, Hackster.io), **sin el Ethernet Shield**: el Arduino le pasa los datos
+Arduino le pasa los datos
 al Pi A por el puerto serie de los GPIO.
 
 - Sketch: `arduino/piranometro/piranometro.ino` (abrir con el IDE de Arduino).
