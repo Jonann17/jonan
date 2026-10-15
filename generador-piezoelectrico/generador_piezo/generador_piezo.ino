@@ -32,7 +32,7 @@ const float VREF = 5.0;
 
 // Subida mínima de tensión (voltios) que cuenta como pisada.
 // Súbela si cuenta pasos solo; bájala si no detecta las pisadas.
-const float UMBRAL_SUBIDA_V = 0.8;
+const float UMBRAL_SUBIDA_V = 0.5;  // piezos 3 en serie x 2 en paralelo
 // Al pisar Y al levantar el pie hay un pulso: cubre los dos.
 const unsigned long ANTIRREBOTE_MS = 600;
 const unsigned long MEDIR_PICO_MS = 150;  // tiempo para capturar el pico

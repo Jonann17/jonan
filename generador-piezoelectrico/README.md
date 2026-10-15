@@ -29,8 +29,8 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
     │
     ▼
  ┌──────────────┐   CA    ┌──────────────┐   CC    ┌───────────┐
- │ 6 piezos en  │ ──────▶ │ Puente de    │ ──────▶ │ Capacitor │──▶ divisor 100k/10k ──▶ A0
- │ serie        │         │ 4 × 1N4007   │         │ 10 µF     │
+ │ 6 piezos     │ ──────▶ │ Puente de    │ ──────▶ │ Capacitor │──▶ divisor 100k/10k ──▶ A0
+ │ (3S × 2P)    │         │ 4 × 1N4007   │         │ 10 µF     │
  └──────────────┘         └──────────────┘         └───────────┘
                                                         Arduino UNO ──▶ LCD I2C "Pasos: 37"
                                                              │                 "Voltaje: 12.4V"
@@ -72,18 +72,23 @@ tensión generada y la muestra en una **pantalla LCD I2C**. Todo funciona con
 
 ## 🔌 Conexiones
 
-### 1) Los piezos (en serie)
+### 1) Los piezos (3 en serie × 2 en paralelo)
 
-Conecta los 6 discos **en serie**: el cable **negro** de uno con el **rojo**
-del siguiente. Quedan libres el rojo del primero (**PZ+**) y el negro del
-último (**PZ−**).
+Arma **dos cadenas de 3 piezos en serie** (el cable **negro** de uno con el
+**rojo** del siguiente). Después une los extremos: el **rojo libre** de las dos
+cadenas juntos (**PZ+**) y el **negro libre** de las dos juntos (**PZ−**).
 
 ```
- PZ+ ──[P1]──[P2]──[P3]──[P4]──[P5]──[P6]── PZ−
-       rojo→negro  rojo→negro  ...
+        ┌──[P1]──[P2]──[P3]──┐
+ PZ+ ───┤                    ├─── PZ−
+        └──[P4]──[P5]──[P6]──┘
 ```
 
-> En serie se suman los voltajes: con 6 piezos se ve bien en el LCD.
+> - Las dos cadenas tienen que quedar **en el mismo sentido**; si una está al
+>   revés, se anulan entre ellas.
+> - Prueba con el multímetro (V DC) entre PZ+ y PZ− apretando la placa: tienes
+>   que ver un pico de algunos voltios.
+> - Comparado con 6 en serie: la mitad de voltaje y el doble de corriente.
 
 ### 2) Puente rectificador (4 × 1N4007)
 
