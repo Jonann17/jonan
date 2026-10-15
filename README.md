@@ -10,15 +10,15 @@ Repositorio de proyectos de Jonathan.
 
 ## 📷 Sistema de webcam para Raspberry Pi (`raspberry-webcam-sync/`)
 
-Un **Raspberry Pi con webcam** (Pi A) saca una foto cada 1 a 60 minutos, la
+Un **Raspberry Pi 3 B con webcam** (Pi A) saca una foto cada 1 a 60 minutos, la
 guarda y la sube a su propia **página web**. También crea una **red WiFi**
-(`FotosPi`). Un **segundo Raspberry Pi** (Pi B) se conecta a esa red, **baja
+(`FotosPi`). Un **Raspberry Pi 4** (Pi B) se conecta a esa red, **baja
 todas las fotos** ordenadas por día y tiene una **interfaz gráfica** (PyQt6)
 para controlar todo. Junto con cada foto se guarda la medición de un
 **piranómetro casero con Arduino** (radiación solar).
 
 ```
-Pi A: cámara + servidor web + hotspot WiFi  ── WiFi "FotosPi" ──►  Pi B: descargador + IHM
+Pi A (Pi 3 B): cámara + servidor web + hotspot WiFi  ── WiFi "FotosPi" ──►  Pi B (Pi 4): descargador + IHM
    │
    └── Arduino UNO (por cable USB) + celda solar 11×6 cm
 ```

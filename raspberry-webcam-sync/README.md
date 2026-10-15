@@ -1,4 +1,4 @@
-# 📷 Sistema de webcam para Raspberry Pi 3 B
+# 📷 Sistema de webcam para Raspberry Pi (Pi 3 B + Pi 4)
 
 Sistema para que **un Raspberry Pi con webcam** saque una foto **cada 1 a 60
 minutos** (el intervalo se elige desde la IHM), la suba a una **página web
@@ -14,13 +14,14 @@ sigue trabajando desde donde quedó, sin perder ni repetir fotos.
 
 ## 🧩 Cómo funciona (2 dispositivos)
 
-La cámara y el servidor van en el **mismo Raspberry** (Pi A). Ese Pi también crea
-su propia red WiFi (hotspot) y el **segundo Raspberry** (Pi B) se conecta a esa
-red para descargar las fotos.
+La cámara y el servidor van en el **mismo Raspberry** (Pi A, un **Raspberry
+Pi 3 B**). Ese Pi también crea su propia red WiFi (hotspot) y el **segundo
+Raspberry** (Pi B, un **Raspberry Pi 4** con la IHM) se conecta a esa red para
+descargar las fotos.
 
 ```
    ┌───────────────────────────────────────┐
-   │  Pi A  —  CÁMARA + SERVIDOR + HOTSPOT  │
+   │  Pi A (Pi 3 B) — CÁMARA+SERVIDOR+WiFi  │
    │                                        │
    │  camara.py                             │
    │   • foto cada X min (desde la IHM)     │
@@ -36,7 +37,7 @@ red para descargar las fotos.
                         │  Pi B se conecta a esa red WiFi
                         ▼
    ┌───────────────────────────────────────┐
-   │  Pi B  —  DESCARGADOR + IHM            │
+   │  Pi B (Pi 4) — DESCARGADOR + IHM       │
    │   • baja todas las fotos a su carpeta  │  ← fotos_descargadas
    │   • interfaz gráfica para controlar    │
    └───────────────────────────────────────┘
@@ -326,8 +327,8 @@ sudo SSID="FotosPi" PASSWORD="miclave123" IP_AP="192.168.50.1" \
      bash scripts/configurar_hotspot.sh
 ```
 Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
-(NetworkManager le da DHCP a quien se conecte). En los Pi 3 de este proyecto
-se usa la red **abierta** (`ABIERTO=1`, ver la solución de problemas).
+(NetworkManager le da DHCP a quien se conecte). En el Pi A (Pi 3 B) de este
+proyecto se usa la red **abierta** (`ABIERTO=1`, ver la solución de problemas).
 
 **Notas:**
 - Cualquier celular o PC también puede conectarse a la red `FotosPi` y entrar a
@@ -428,7 +429,9 @@ reiniciá el servicio.
 
 ## ✅ Requisitos
 
-- Dos Raspberry Pi 3 B con Raspberry Pi OS (NetworkManager) y Python 3.
+- **Pi A:** Raspberry Pi 3 B (cámara, servidor y hotspot).
+- **Pi B:** Raspberry Pi 4 (descargador e IHM).
+- Los dos con Raspberry Pi OS (NetworkManager) y Python 3.
 - Webcam USB reconocida en `/dev/video0` (probá con `fswebcam prueba.jpg`).
 - Arduino UNO con `piranometro.ino` y una celda solar chica (opcional: sin
   Arduino, poné `habilitado = false` en `[arduino]`).
