@@ -1,8 +1,10 @@
 # 📷 Sistema de webcam para Raspberry Pi 3 B
 
-Sistema para que **un Raspberry Pi con webcam** saque una foto **cada 1-10-60 minutos**,
-la suba a una **página web (nube)**, y que **otro Raspberry Pi** se conecte y
-**descargue todas las fotos** a su propio directorio.
+Sistema para que **un Raspberry Pi con webcam** saque una foto **cada 1 a 60
+minutos** (el intervalo se elige desde la IHM), la suba a una **página web
+(nube)**, y que **otro Raspberry Pi** se conecte y **descargue todas las fotos**
+a su propio directorio. Junto con cada foto se guarda la medición de un
+**piranómetro casero con Arduino** (radiación solar).
 
 Todo arranca **solo al prender** cada Raspberry y tiene **self-check**: si un
 equipo se apaga y se prende, el programa vuelve a lanzarse automáticamente y
@@ -21,7 +23,7 @@ red para descargar las fotos.
    │  Pi A  —  CÁMARA + SERVIDOR + HOTSPOT  │
    │                                        │
    │  camara.py                             │
-   │   • foto cada 10 min                   │
+   │   • foto cada X min (desde la IHM)     │
    │   • la guarda en su directorio         │  ← fotos_camara  (su propio directorio)
    │   • la sube por localhost ─────┐       │
    │                                ▼       │
@@ -34,8 +36,9 @@ red para descargar las fotos.
                         │  Pi B se conecta a esa red WiFi
                         ▼
    ┌───────────────────────────────────────┐
-   │  Pi B  —  DESCARGADOR                  │
+   │  Pi B  —  DESCARGADOR + IHM            │
    │   • baja todas las fotos a su carpeta  │  ← fotos_descargadas
+   │   • interfaz gráfica para controlar    │
    └───────────────────────────────────────┘
 ```
 
@@ -68,8 +71,8 @@ Por ejemplo, con padrón `0001` el 20 de agosto de 2026 a las 14:30:00:
 padron0001_20082026_143000.jpg
 ```
 
-- `DDMMAAAA` es la fecha (día-mes-año), como pediste.
-- Se agrega `HHMMSS` (hora) para que las **144 fotos del día** no se pisen entre sí.
+- `DDMMAAAA` es la fecha (día-mes-año).
+- `HHMMSS` es la hora, para que las fotos del mismo día no se pisen entre sí.
 
 El número de padrón se configura en `config.ini`.
 
@@ -80,6 +83,9 @@ El número de padrón se configura en `config.ini`.
 Editá **`config.ini`** en cada Raspberry. Ya viene listo para esta topología:
 
 - `padron` → tu número de padrón.
+- `[camara] intervalo_segundos` → intervalo inicial (después se cambia desde la IHM).
+- `[arduino] puerto = auto` → usa el Arduino por USB si está enchufado ahí; si
+  no, los pines GPIO 14/15 (ver la sección del piranómetro).
 - **Pi A** (cámara + servidor): `[camara] url_servidor = http://127.0.0.1:8000`
   (localhost, porque la cámara y el servidor están en el mismo Pi).
 - **Pi B** (descargador): `[descargador] url_servidor = http://192.168.50.1:8000`
@@ -90,17 +96,48 @@ Editá **`config.ini`** en cada Raspberry. Ya viene listo para esta topología:
 
 ## 🚀 Instalación
 
-En cada Raspberry, cloná el repo en `/home/pi/raspberry-webcam-sync`. (Si lo
-ponés en otra ruta, ajustá las rutas de los archivos `.service` en `systemd/`.)
+### Forma rápida (recomendada): un solo comando
 
-### Pi A — cámara + servidor + hotspot
+En cada Raspberry, con internet (el Pi B, por cable Ethernet mientras se
+instala) y **sin `sudo`**:
+
+```bash
+curl -sL https://raw.githubusercontent.com/Jonann17/jonan/claude/trusting-lamport-hd05q6/raspberry-webcam-sync/scripts/actualizar.sh | bash
+```
+
+El script `scripts/actualizar.sh`:
+
+- clona o actualiza el repo en `~/jonan`;
+- detecta si es el **Pi A** (tiene el hotspot `hotspot-fotos`) o el **Pi B**;
+- ajusta rutas y usuario en `config.ini` y en los `.service` (los Pi no tienen
+  por qué usar el usuario `pi`) y **conserva el padrón**;
+- repara la lista de paquetes de apt si quedó dañada;
+- reinstala lo que corresponde a ese Pi y lo reinicia.
+
+Además deja instalados tres comandos cortos:
+
+| Comando | Para qué |
+|---|---|
+| `actualizar` | Baja la última versión y reinstala (lo mismo de arriba). |
+| `verificar` | Revisa todo con ✅/❌ y, si algo falla, muestra el comando que lo arregla. |
+| `probar_serie` | Prueba la comunicación con el Arduino por partes (`probar_serie lazo` prueba solo la UART del Pi). |
+
+El hotspot (Pi A) y la conexión al hotspot (Pi B) se configuran una sola vez
+con los scripts de abajo.
+
+### Forma manual
+
+Si lo instalás a mano en otra ruta o con otro usuario, ajustá antes las rutas
+de `config.ini` y de los archivos `.service` en `systemd/`.
+
+#### Pi A — cámara + servidor + hotspot
 ```bash
 sudo bash scripts/configurar_hotspot.sh    # crea la red WiFi "FotosPi"
 sudo bash scripts/instalar_servidor.sh     # la nube (página web)
 sudo bash scripts/instalar_camara.sh       # saca y sube las fotos
 ```
 
-### Pi B — descargador + IHM (interfaz gráfica)
+#### Pi B — descargador + IHM (interfaz gráfica)
 ```bash
 sudo bash scripts/conectar_a_hotspot.sh    # se conecta a la red "FotosPi"
 sudo bash scripts/instalar_descargador.sh  # baja todas las fotos
@@ -122,9 +159,9 @@ sola al iniciar el escritorio. Desde ahí podés, sin tocar la terminal:
   y el total de fotos.
 - Ver la **galería** de fotos descargadas, agrupadas por día; clic en una
   miniatura para verla en grande.
-- **Ajustar el intervalo entre fotos** de la cámara: elegís los segundos y tocás
-  *Aplicar*. Se lo envía al servidor y la cámara lo toma en el próximo ciclo,
-  **sin reiniciar nada**.
+- **Ajustar el intervalo entre fotos** de la cámara: elegís **1, 5, 10, 20 o
+  30 minutos o 1 hora** y tocás *Aplicar*. Se lo envía al servidor y la cámara
+  lo toma en el próximo ciclo, **sin reiniciar nada**.
 - **Iniciar / Detener la captura.** El programa de la cámara arranca solo al
   prender el Pi A, pero **queda en espera**: recién saca fotos cuando tocás
   *▶ Iniciar captura*. Con *⏹ Detener* vuelve a la espera.
@@ -155,16 +192,31 @@ Para abrir la IHM a mano:  `python3 ihm/ihm.py`
 
 ## ☀️ Piranómetro casero (Arduino) en el Pi A
 
-Arduino le pasa los datos
-al Pi A por el puerto serie de los GPIO.
+El Arduino le pasa los datos al Pi A por un puerto serie (cable USB o los
+pines GPIO).
 
 - Sketch: `arduino/piranometro/piranometro.ino` (abrir con el IDE de Arduino).
-- Cableado: **`arduino/esquematico_conexion.svg`** (se abre en el navegador).
+  Responde una línea JSON a `NOW` (lectura del momento) y a `GET` (resumen
+  desde la foto anterior). Se puede probar solo con el Monitor Serie a 9600.
+- Cableado por pines: **`arduino/esquematico_conexion.svg`** (se abre en el navegador).
 
-### Conexión Pi A ↔ Arduino UNO
+> En Mac con chip Apple, si el IDE de Arduino da `bad CPU type in executable`
+> al compilar, instalá Rosetta 2: `softwareupdate --install-rosetta --agree-to-license`.
 
-El Pi trabaja a **3,3 V** y el Arduino a **5 V**: TX/RX **siempre pasan por un
-conversor de nivel bidireccional** (directo puede quemar el GPIO del Pi).
+### Opción 1 (recomendada): cable USB
+
+Conectá el Arduino a un puerto USB del Pi A con el mismo cable que se usa para
+programarlo. **No hace falta conversor de nivel** y el USB también alimenta al
+Arduino. Con `puerto = auto` (en `config.ini`) la cámara lo encuentra sola en
+`/dev/ttyACM0` (o `/dev/ttyUSB0` en los clones con chip CH340).
+
+Abrir el puerto USB reinicia el Arduino UNO: la cámara espera 2,5 s antes de
+la primera consulta y descarta el mensaje de bienvenida.
+
+### Opción 2: pines GPIO 14/15 con conversor de nivel
+
+El Pi trabaja a **3,3 V** y el Arduino a **5 V**: TX/RX pasan por un
+**conversor de nivel bidireccional** (directo puede quemar el GPIO del Pi).
 
 | Pi A (pin físico) | Conversor de nivel | Arduino UNO |
 |---|---|---|
@@ -175,6 +227,20 @@ conversor de nivel bidireccional** (directo puede quemar el GPIO del Pi).
 | pin 10 · GPIO15 (RXD) | LV2 ← HV2 | D9 (TX) |
 
 Al programar el Arduino por USB, **desconectá el cable de 5V del Pi**.
+
+Requiere la UART habilitada (`/dev/serial0`): `instalar_camara.sh` la activa
+(o *Configuración de Raspberry Pi → Interfaces → Puerto serie: Activado,
+Consola serie: Desactivado*) y después hay que reiniciar.
+
+**Sin conversor**, también se puede con un divisor de tensión, con más cuidado:
+
+- Arduino D9 (TX) → divisor **1 kΩ + 2 kΩ** → Pi pin 10 (RXD). Baja 5 V a 3,3 V.
+  **Nunca directo.**
+- Pi pin 8 (TXD) → Arduino D8 (RX), directo (el Arduino toma 3,3 V como "1").
+- GND del Pi ↔ GND del Arduino, obligatorio.
+
+Si no anda, `probar_serie` indica en qué parte está la falla: Pi, conversor,
+cables o Arduino.
 
 ### Celda solar (como en el artículo)
 
@@ -200,7 +266,13 @@ el sketch (el área daba 0 por división entera y además mm²→m² es /10⁶; 
 > cortocircuito, proporcional al sol).
 
 Ajustar en la sección 1 del sketch: `RESISTENCIA_OHM` (medida con el
-multímetro), `CELDA_LARGO_MM`, `CELDA_ANCHO_MM` y `CAL_K`.
+multímetro), `CELDA_LARGO_MM`, `CELDA_ANCHO_MM` y `CAL_K`. Hoy está configurado
+para la placa de **11 × 6 cm** con **10 kΩ**. La radiación (`g_*`) sale con 4
+decimales porque con esta celda los valores son chicos.
+
+Antes de dejarla al sol, medí con el multímetro la tensión de la placa a pleno
+sol: si pasa de 5 V, en el JSON `sat` va a ser mayor que 0 y hay que agregar un
+divisor de tensión.
 
 ### Dónde quedan las mediciones
 
@@ -254,7 +326,8 @@ sudo SSID="FotosPi" PASSWORD="miclave123" IP_AP="192.168.50.1" \
      bash scripts/configurar_hotspot.sh
 ```
 Crea una red WiFi WPA2 con IP fija que **se levanta sola al prender el Pi**
-(NetworkManager le da DHCP a quien se conecte).
+(NetworkManager le da DHCP a quien se conecte). En los Pi 3 de este proyecto
+se usa la red **abierta** (`ABIERTO=1`, ver la solución de problemas).
 
 **Notas:**
 - Cualquier celular o PC también puede conectarse a la red `FotosPi` y entrar a
@@ -310,14 +383,27 @@ Conectate a la red WiFi `FotosPi` y, desde cualquier navegador, entrá a:
 http://192.168.50.1:8000
 ```
 
-Vas a ver la lista de fotos, un botón para **descargar todas en un ZIP**, y un
-enlace para bajar cada una.
+Vas a ver:
+
+- un **panel de estado** (servidor, cámara, descargador, piranómetro y hora);
+- la **galería** de fotos agrupada por día, con enlace para bajar cada una;
+- un botón para **descargar todas en un ZIP** (ordenadas por día);
+- **Ver en vivo**: la imagen de la cámara actualizada cada 2 segundos.
 
 ---
 
 ## 🔧 Comandos útiles
 
 ```bash
+# Actualizar este Pi a la última versión (reinstala y reinicia)
+actualizar
+
+# Revisar que todo ande (✅/❌)
+verificar
+
+# Probar la comunicación con el Arduino
+probar_serie
+
 # Ver estado de un servicio
 systemctl status camara.service
 
@@ -333,14 +419,20 @@ sudo systemctl stop camara.service
 
 ## 🧪 Probar sin esperar 10 minutos
 
-Para una prueba rápida, en `config.ini` poné `intervalo_segundos = 20` en la
-sección `[camara]`, reiniciá el servicio y mirá los logs. Después volvé a
-dejarlo en `600` (10 minutos).
+Desde la IHM elegí el intervalo de **1 minuto**, tocá *Iniciar captura* y
+mirá los logs (`journalctl -u camara.service -f`). Para algo todavía más
+rápido, en `config.ini` poné `intervalo_segundos = 20` en `[camara]` y
+reiniciá el servicio.
 
 ---
 
 ## ✅ Requisitos
 
-- Raspberry Pi OS (o Debian) con Python 3.
+- Dos Raspberry Pi 3 B con Raspberry Pi OS (NetworkManager) y Python 3.
 - Webcam USB reconocida en `/dev/video0` (probá con `fswebcam prueba.jpg`).
-- Los tres equipos en la **misma red**.
+- Arduino UNO con `piranometro.ino` y una celda solar chica (opcional: sin
+  Arduino, poné `habilitado = false` en `[arduino]`).
+- Internet solo para instalar y actualizar (el Pi A por Ethernet; el Pi B por
+  Ethernet mientras actualiza). En funcionamiento, todo va por el hotspot.
+
+Para retomar el proyecto en otra sesión o cuenta, ver **`HANDOFF.md`**.
