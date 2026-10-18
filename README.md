@@ -40,16 +40,52 @@ Pi A (Pi 3 B): cámara + servidor web + hotspot WiFi  ── WiFi "FotosPi" ─�
 - **Arranque automático**: todo levanta solo al prender y se reinicia solo si
   se cae.
 
-### Instalar o actualizar un Pi
+### Instalar o actualizar un Pi (copiar y pegar)
 
-Con internet y **sin `sudo`**:
+Se pega en la Terminal de cada Pi, **sin `sudo`**. Es el mismo comando para los
+dos: detecta solo si es el Pi A o el Pi B, instala lo que corresponde y
+reinicia. Te pide la contraseña del Pi.
+
+#### Pi A — Raspberry Pi 3 B (cámara + servidor)
+
+Con internet (cable Ethernet):
 
 ```bash
 curl -sL https://raw.githubusercontent.com/Jonann17/jonan/claude/trusting-lamport-hd05q6/raspberry-webcam-sync/scripts/actualizar.sh | bash
 ```
 
-Detecta si es el Pi A o el Pi B, instala lo que corresponde y reinicia. Deja
-instalados tres comandos:
+Si estaba conectado a otra WiFi, después del reinicio volvé a prender el hotspot:
+
+```bash
+sudo nmcli connection up hotspot-fotos
+```
+
+#### Pi B — Raspberry Pi 4 (descargador + IHM)
+
+Enchufale un **cable Ethernet** mientras actualiza (conectado solo a `FotosPi`
+no tiene internet). Al reiniciar vuelve solo a `FotosPi`.
+
+```bash
+curl -sL https://raw.githubusercontent.com/Jonann17/jonan/claude/trusting-lamport-hd05q6/raspberry-webcam-sync/scripts/actualizar.sh | bash
+```
+
+#### Las veces siguientes (en cualquiera de los dos)
+
+```bash
+actualizar
+```
+
+Y después del reinicio, para revisar que todo ande:
+
+```bash
+verificar
+```
+
+> El link de `curl` solo funciona si el repo es **público**. Con el repo
+> privado, ver "Repo privado" en
+> [`raspberry-webcam-sync/README.md`](raspberry-webcam-sync/README.md).
+
+Comandos que quedan instalados:
 
 | Comando | Para qué |
 |---|---|
