@@ -126,6 +126,28 @@ Además deja instalados tres comandos cortos:
 El hotspot (Pi A) y la conexión al hotspot (Pi B) se configuran una sola vez
 con los scripts de abajo.
 
+### Repo privado: token de GitHub
+
+Si el repo es **privado**, el link de `curl` de arriba no funciona y `git` pide
+usuario y contraseña. GitHub **no acepta la contraseña normal**: hay que usar
+un **token** (una clave larga que se crea en la web).
+
+1. En GitHub (desde la Mac): foto de perfil → **Settings** → **Developer
+   settings** → **Personal access tokens** → **Fine-grained tokens** →
+   **Generate new token**.
+2. *Repository access*: **Only select repositories** → `Jonann17/jonan`.
+   *Permissions* → *Repository permissions* → **Contents: Read-only**.
+   Elegí una fecha de vencimiento (por ejemplo, 1 año) y tocá **Generate token**.
+3. Copiá el token (empieza con `github_pat_…`). Solo se muestra una vez.
+4. En el Pi corré `actualizar` (o, si el comando todavía no existe,
+   `bash ~/jonan/raspberry-webcam-sync/scripts/actualizar.sh`):
+   - *Username*: `Jonann17`
+   - *Password*: pegá el token (no se ve mientras lo pegás).
+
+El token queda guardado en `~/.git-credentials` y no se vuelve a pedir. Como
+solo permite leer este repo, no da acceso a nada más de la cuenta. Conviene
+pegarlo por SSH desde la Mac (`ssh jonan@192.168.50.1`) en vez de tipearlo.
+
 ### Forma manual
 
 Si lo instalás a mano en otra ruta o con otro usuario, ajustá antes las rutas
