@@ -196,8 +196,20 @@ sola al iniciar el escritorio. Desde ahí podés, sin tocar la terminal:
 - Pestaña **Gráfico**: la medición del piranómetro de cada foto
   (`mediciones.csv`), filtrable por día.
 
-Las pestañas son: **Control** (estado, captura, intervalo, hora, piranómetro),
+Las pestañas son: **Control** (estado, captura, piranómetro, intervalo y hora),
 **Fotos** (galería) y **Gráfico**.
+
+La IHM es **responsive**: está pensada para la pantallita táctil de **5"
+(800×480)** y también se ve bien en un monitor grande.
+
+- En pantallas chicas arranca en **pantalla completa**. El botón **⛶** (arriba a
+  la derecha) o la tecla **F11** la alternan; `pantalla_completa` en la sección
+  `[ihm]` de `config.ini` lo cambia (`auto`, `si` o `no`).
+- Si algo no entra, la pestaña se **desplaza con el dedo** en vez de cortarse;
+  en pantallas angostas (o el monitor en vertical) los controles se apilan.
+- Botones y menús altos para tocarlos con el dedo.
+- La galería acomoda la cantidad de columnas al ancho, y la foto en grande
+  ocupa toda la pantalla (se cierra tocándola).
 
 Cómo funciona el cambio de intervalo:
 

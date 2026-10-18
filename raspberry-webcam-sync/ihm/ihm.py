@@ -12,12 +12,18 @@ Permite:
     de cada foto (mediciones.csv).
   * Ver la GALERÍA de fotos descargadas (agrupadas por día).
 
+Es "responsive": se adapta a la pantallita de 5" (800x480) y a pantallas
+grandes. En pantallas chicas arranca en pantalla completa (botón ⛶ o F11
+para salir/volver), el contenido se apila si no entra a lo ancho y los
+botones son grandes para usarla con el dedo. Ver [ihm] en config.ini.
+
 Requisitos en el Pi:
     sudo apt install -y python3-pyqt6 python3-requests python3-matplotlib
     # (si no está el paquete apt:  pip3 install PyQt6 requests matplotlib)
 
 Uso:
     python3 ihm/ihm.py
+    python3 ihm/ihm.py --ventana        # forzar ventana (sin pantalla completa)
 """
 
 import os
@@ -33,11 +39,11 @@ import requests
 from PyQt6.QtCore import (
     Qt, QThread, QObject, QTimer, QDateTime, pyqtSignal, pyqtSlot,
 )
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QPixmap, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QVBoxLayout,
     QHBoxLayout, QGridLayout, QScrollArea, QGroupBox, QDialog,
-    QMessageBox, QTabWidget, QDateTimeEdit,
+    QMessageBox, QTabWidget, QDateTimeEdit, QBoxLayout, QFrame,
 )
 
 # matplotlib es opcional: sin él, la pestaña Gráfico avisa cómo instalarlo.
@@ -52,6 +58,16 @@ except ImportError:
 # Cuántas miniaturas mostrar como máximo (para que la galería cargue rápido).
 MAX_MINIATURAS = 60
 
+# Tamaño de cada miniatura de la galería (las columnas se calculan con el ancho).
+MINI_ANCHO, MINI_ALTO = 168, 126
+
+# Por debajo de este ancho la interfaz "se apila" (modo angosto).
+ANCHO_ANGOSTO = 640
+# Por debajo de este alto se oculta el título para ganar espacio.
+ALTO_BAJO = 560
+# Pantallas de este tamaño o menores arrancan en pantalla completa ("auto").
+PANTALLA_CHICA = (1024, 600)
+
 # Opciones de intervalo entre fotos: (texto, segundos)
 OPCIONES_INTERVALO = [
     ("1 minuto", 60),
@@ -62,12 +78,12 @@ OPCIONES_INTERVALO = [
     ("1 hora", 3600),
 ]
 
-# Variables que se pueden graficar: (texto, columna de mediciones.csv)
+# Variables que se pueden graficar: (texto, columna de mediciones.csv, unidad)
 VARIABLES_GRAFICO = [
-    ("Radiación media entre fotos (W/m²)", "g_avg"),
-    ("Radiación en el momento de la foto (W/m²)", "g_now"),
-    ("Tensión media de la celda (V)", "v_avg"),
-    ("Potencia media P = V²/R (mW)", "p_avg_mw"),
+    ("Radiación media entre fotos", "g_avg", "W/m²"),
+    ("Radiación al sacar la foto", "g_now", "W/m²"),
+    ("Tensión media de la celda", "v_avg", "V"),
+    ("Potencia media P = V²/R", "p_avg_mw", "mW"),
 ]
 
 
@@ -153,9 +169,10 @@ class Miniatura(QLabel):
         self.ruta = ruta
         pix = QPixmap(ruta)
         if not pix.isNull():
-            self.setPixmap(pix.scaled(160, 120, Qt.AspectRatioMode.KeepAspectRatio,
+            self.setPixmap(pix.scaled(MINI_ANCHO - 8, MINI_ALTO - 8,
+                                      Qt.AspectRatioMode.KeepAspectRatio,
                                       Qt.TransformationMode.SmoothTransformation))
-        self.setFixedSize(170, 130)
+        self.setFixedSize(MINI_ANCHO, MINI_ALTO)
         self.setStyleSheet("border:1px solid #2a2f3a; background:#000;")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(os.path.basename(ruta))
@@ -165,16 +182,45 @@ class Miniatura(QLabel):
         self.ver_grande()
 
     def ver_grande(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle(os.path.basename(self.ruta))
-        lay = QVBoxLayout(dlg)
-        lbl = QLabel()
-        pix = QPixmap(self.ruta)
-        if not pix.isNull():
-            lbl.setPixmap(pix.scaled(900, 700, Qt.AspectRatioMode.KeepAspectRatio,
-                                     Qt.TransformationMode.SmoothTransformation))
-        lay.addWidget(lbl)
-        dlg.exec()
+        VisorFoto(self.ruta, self.window()).exec()
+
+
+class VisorFoto(QDialog):
+    """Muestra una foto lo más grande posible. En pantallas chicas ocupa
+    toda la pantalla; se cierra tocando la foto o el botón Cerrar."""
+
+    def __init__(self, ruta, padre):
+        super().__init__(padre)
+        self.setWindowTitle(os.path.basename(ruta))
+        self.pix = QPixmap(ruta)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        self.lbl = QLabel()
+        self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl.setMinimumSize(1, 1)   # deja que la foto se achique
+        self.lbl.mousePressEvent = lambda _ev: self.accept()
+        lay.addWidget(self.lbl, stretch=1)
+        pie = QHBoxLayout()
+        nombre = QLabel(os.path.basename(ruta))
+        nombre.setStyleSheet("color:#9aa4b2;")
+        pie.addWidget(nombre, stretch=1)
+        cerrar = QPushButton("✕  Cerrar")
+        cerrar.clicked.connect(self.accept)
+        pie.addWidget(cerrar)
+        lay.addLayout(pie)
+
+        disp = self.screen().availableGeometry()
+        if disp.width() <= PANTALLA_CHICA[0] or disp.height() <= PANTALLA_CHICA[1]:
+            self.setWindowState(Qt.WindowState.WindowFullScreen)
+        else:
+            self.resize(int(disp.width() * 0.8), int(disp.height() * 0.85))
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if not self.pix.isNull():
+            self.lbl.setPixmap(self.pix.scaled(
+                self.lbl.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
 
 
 # ------------------------------------------------------------------
@@ -195,9 +241,16 @@ class Ventana(QWidget):
         self._estado = None           # último /estado recibido
         self._desfase = None          # hora Pi A − hora de este Pi (segundos)
         self._iniciar_despues_de_hora = False
+        self._angosto = None          # modo actual (se calcula al redimensionar)
+        self._columnas = 0            # columnas de la galería
 
         self.setWindowTitle("IHM Webcam — Raspberry Pi")
-        self.resize(820, 620)
+        self.setMinimumSize(320, 240)
+        # La galería se rearma (con otra cantidad de columnas) un ratito
+        # después de que cambia el tamaño, no en cada píxel.
+        self._timer_galeria = QTimer(self)
+        self._timer_galeria.setSingleShot(True)
+        self._timer_galeria.timeout.connect(self._ajustar_galeria)
         self._construir_ui()
         self._arrancar_red()
 
@@ -214,130 +267,223 @@ class Ventana(QWidget):
         self.timer_reloj.start(1000)
         self.redibujar_grafico()
 
+        # Pantalla completa: F11 alterna, Esc sale.
+        QShortcut(QKeySequence("F11"), self, activated=self.alternar_pantalla_completa)
+        QShortcut(QKeySequence("Esc"), self, activated=self._salir_pantalla_completa)
+        self._acomodar(self.width(), self.height())
+
     # ---------- construcción de la interfaz ----------
     def _construir_ui(self):
+        # Botones, menús y pestañas altos: se usan con el dedo en la pantallita.
         self.setStyleSheet("""
-            QWidget { background:#0f1115; color:#e6e6e6; font-family:sans-serif; }
-            QGroupBox { border:1px solid #2a2f3a; border-radius:10px; margin-top:1ex; padding:8px; }
+            QWidget { background:#0f1115; color:#e6e6e6; font-family:sans-serif; font-size:14px; }
+            QGroupBox { border:1px solid #2a2f3a; border-radius:10px; margin-top:1ex; padding:6px; }
             QGroupBox::title { subcontrol-origin: margin; left:10px; color:#9aa4b2; }
-            QPushButton { background:#2563eb; color:#fff; border:none; padding:6px 12px; border-radius:8px; }
+            QPushButton { background:#2563eb; color:#fff; border:none; padding:6px 12px;
+                          border-radius:8px; min-height:30px; }
             QPushButton:hover { background:#1d4ed8; }
-            QComboBox { background:#161a22; border:1px solid #2a2f3a; padding:4px 8px; border-radius:6px; color:#e6e6e6; min-width:120px; }
-            QComboBox QAbstractItemView { background:#161a22; color:#e6e6e6; selection-background-color:#2563eb; }
+            QComboBox { background:#161a22; border:1px solid #2a2f3a; padding:4px 8px;
+                        border-radius:6px; color:#e6e6e6; min-height:30px; }
+            QComboBox QAbstractItemView { background:#161a22; color:#e6e6e6;
+                                          selection-background-color:#2563eb; }
+            QComboBox QAbstractItemView::item { min-height:34px; }
+            QScrollArea { border:none; }
+            QScrollBar:vertical { background:#161a22; width:16px; border-radius:8px; }
+            QScrollBar::handle:vertical { background:#3b4252; min-height:40px; border-radius:8px; }
+            QScrollBar::add-line, QScrollBar::sub-line { height:0px; }
         """)
         raiz = QVBoxLayout(self)
+        raiz.setContentsMargins(6, 6, 6, 6)
+        raiz.setSpacing(4)
 
-        titulo = QLabel("📷 Panel de control de la webcam")
-        titulo.setStyleSheet("font-size:18px; font-weight:bold;")
-        raiz.addWidget(titulo)
+        self.titulo = QLabel("📷 Panel de control de la webcam")
+        self.titulo.setStyleSheet("font-size:18px; font-weight:bold;")
+        raiz.addWidget(self.titulo)
 
-        pestanas = QTabWidget()
-        pestanas.setStyleSheet("""
-            QTabBar::tab { background:#161a22; color:#9aa4b2; padding:6px 14px;
+        self.pestanas = QTabWidget()
+        self.pestanas.setStyleSheet("""
+            QTabBar::tab { background:#161a22; color:#9aa4b2; padding:8px 16px; min-height:24px;
                            border:1px solid #2a2f3a; border-bottom:none;
                            border-top-left-radius:8px; border-top-right-radius:8px; }
             QTabBar::tab:selected { background:#2563eb; color:#fff; }
             QTabWidget::pane { border:1px solid #2a2f3a; border-radius:8px; }
         """)
-        pestanas.addTab(self._pestana_control(), "Control")
-        pestanas.addTab(self._pestana_fotos(), "Fotos")
-        pestanas.addTab(self._pestana_grafico(), "Gráfico")
-        raiz.addWidget(pestanas, stretch=1)
+        self.pestanas.addTab(self._pestana_control(), "Control")
+        self.pestanas.addTab(self._pestana_fotos(), "Fotos")
+        self.pestanas.addTab(self._pestana_grafico(), "Gráfico")
+        self.pestanas.currentChanged.connect(lambda _i: self._timer_galeria.start(50))
+
+        # Botón de pantalla completa, a la derecha de las pestañas.
+        self.btn_pantalla = QPushButton("⛶")
+        self.btn_pantalla.setToolTip("Pantalla completa (F11)")
+        self.btn_pantalla.setStyleSheet("QPushButton { background:#161a22; border:1px solid #2a2f3a;"
+                                        " min-width:40px; font-size:18px; padding:2px 8px; }")
+        self.btn_pantalla.clicked.connect(self.alternar_pantalla_completa)
+        self.pestanas.setCornerWidget(self.btn_pantalla, Qt.Corner.TopRightCorner)
+        raiz.addWidget(self.pestanas, stretch=1)
+
+    @staticmethod
+    def _con_scroll(contenido):
+        """Pone una pestaña dentro de un área con scroll vertical: si no entra
+        en la pantalla, se desplaza con el dedo en vez de quedar cortada."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(contenido)
+        return scroll
 
     # ---------- pestaña Control ----------
     def _pestana_control(self):
         w = QWidget()
         raiz = QVBoxLayout(w)
+        raiz.setContentsMargins(6, 6, 6, 6)
+        raiz.setSpacing(6)
 
-        # --- Fila de estado (luces) ---
-        caja_estado = QGroupBox("Estado del sistema")
-        fila = QHBoxLayout(caja_estado)
+        # --- Estado (luces) + captura, en una sola caja ---
+        caja_estado = QGroupBox("Estado y captura")
+        ve = QVBoxLayout(caja_estado)
+        self.grid_luces = QGridLayout()
         self.lbl_servidor = self._luz("Servidor")
         self.lbl_camara = self._luz("Cámara")
         self.lbl_desc = self._luz("Descargador")
         self.lbl_total = QLabel("🖼️ 0 fotos")
-        for x in (self.lbl_servidor, self.lbl_camara, self.lbl_desc):
-            fila.addWidget(x)
-        fila.addStretch()
-        fila.addWidget(self.lbl_total)
-        raiz.addWidget(caja_estado)
+        self._luces = (self.lbl_servidor, self.lbl_camara, self.lbl_desc, self.lbl_total)
+        ve.addLayout(self.grid_luces)
 
-        # --- Captura: iniciar / detener ---
-        caja_cap = QGroupBox("Captura de fotos")
-        cap = QHBoxLayout(caja_cap)
+        self.lay_cap = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.lbl_captura = QLabel("⚪ —")
+        self.lbl_captura.setWordWrap(True)
         self.lbl_captura.setStyleSheet("font-size:16px; font-weight:bold;")
-        cap.addWidget(self.lbl_captura)
-        cap.addStretch()
+        self.lay_cap.addWidget(self.lbl_captura, stretch=1)
+        botones = QHBoxLayout()
         self.btn_iniciar = QPushButton("▶  Iniciar captura")
-        self.btn_iniciar.setStyleSheet("QPushButton { background:#16a34a; font-weight:bold; padding:8px 16px; }"
+        self.btn_iniciar.setStyleSheet("QPushButton { background:#16a34a; font-weight:bold; padding:8px 16px; min-height:34px; }"
                                        "QPushButton:disabled { background:#2a2f3a; color:#6b7280; }")
         self.btn_iniciar.clicked.connect(self._al_iniciar)
         self.btn_detener = QPushButton("⏹  Detener")
-        self.btn_detener.setStyleSheet("QPushButton { background:#dc2626; font-weight:bold; padding:8px 16px; }"
+        self.btn_detener.setStyleSheet("QPushButton { background:#dc2626; font-weight:bold; padding:8px 16px; min-height:34px; }"
                                        "QPushButton:disabled { background:#2a2f3a; color:#6b7280; }")
         self.btn_detener.clicked.connect(lambda: self.sig_captura.emit("detener"))
-        cap.addWidget(self.btn_iniciar)
-        cap.addWidget(self.btn_detener)
-        raiz.addWidget(caja_cap)
+        botones.addWidget(self.btn_iniciar)
+        botones.addWidget(self.btn_detener)
+        self.lay_cap.addLayout(botones)
+        ve.addLayout(self.lay_cap)
+        raiz.addWidget(caja_estado)
+
+        # --- Piranómetro en vivo (arriba: es lo que más se mira) ---
+        caja_sol = QGroupBox("Piranómetro (Arduino) — en vivo")
+        hs = QHBoxLayout(caja_sol)
+        self.lbl_sensor = QLabel("—")
+        self.lbl_sensor.setWordWrap(True)
+        self.lbl_sensor.setStyleSheet("font-size:20px; font-weight:bold;")
+        hs.addWidget(self.lbl_sensor)
+        raiz.addWidget(caja_sol)
 
         # --- Configuración del intervalo ---
         caja_cfg = QGroupBox("Intervalo entre fotos")
-        cfg = QHBoxLayout(caja_cfg)
-        cfg.addWidget(QLabel("Sacar una foto cada"))
+        self.lay_cfg = QBoxLayout(QBoxLayout.Direction.LeftToRight, caja_cfg)
+        fila_cfg = QHBoxLayout()
+        fila_cfg.addWidget(QLabel("Una foto cada"))
         self.combo = QComboBox()
         for texto, seg in OPCIONES_INTERVALO:
             self.combo.addItem(texto, seg)
         self.combo.setCurrentIndex(2)  # 10 minutos por defecto
-        cfg.addWidget(self.combo)
+        fila_cfg.addWidget(self.combo, stretch=1)
         self.btn_aplicar = QPushButton("Aplicar")
         self.btn_aplicar.clicked.connect(self._al_aplicar)
-        cfg.addWidget(self.btn_aplicar)
-        cfg.addStretch()
+        fila_cfg.addWidget(self.btn_aplicar)
+        self.lay_cfg.addLayout(fila_cfg, stretch=1)
         self.lbl_actual = QLabel("actual: —")
         self.lbl_actual.setStyleSheet("color:#9aa4b2;")
-        cfg.addWidget(self.lbl_actual)
+        self.lay_cfg.addWidget(self.lbl_actual)
         raiz.addWidget(caja_cfg)
 
         # --- Fecha y hora del Pi de la cámara ---
         caja_hora = QGroupBox("Fecha y hora del Pi de la cámara (no tiene internet)")
-        gh = QGridLayout(caja_hora)
+        self.grid_hora = QGridLayout(caja_hora)
         self.lbl_hora_pi = QLabel("—")
         self.lbl_hora_pi.setStyleSheet("font-size:16px; font-weight:bold;")
         self.lbl_hora_local = QLabel("—")
         self.lbl_hora_local.setStyleSheet("font-size:16px;")
         self.lbl_desfase = QLabel("—")
-        gh.addWidget(QLabel("Pi de la cámara:"), 0, 0)
-        gh.addWidget(self.lbl_hora_pi, 0, 1)
-        gh.addWidget(self.lbl_desfase, 0, 2)
-        gh.addWidget(QLabel("Este Pi:"), 1, 0)
-        gh.addWidget(self.lbl_hora_local, 1, 1)
+        self.lbl_desfase.setWordWrap(True)
+        self._et_hora_pi = QLabel("Pi de la cámara:")
+        self._et_hora_local = QLabel("Este Pi:")
+        self._et_hora_enviar = QLabel("Hora a enviar:")
         self.edit_hora = QDateTimeEdit(QDateTime.currentDateTime())
         self.edit_hora.setDisplayFormat("dd/MM/yyyy  HH:mm:ss")
         self.edit_hora.setCalendarPopup(True)
-        self.edit_hora.setStyleSheet("background:#161a22; border:1px solid #2a2f3a; padding:4px;")
-        gh.addWidget(QLabel("Hora a enviar:"), 2, 0)
-        gh.addWidget(self.edit_hora, 2, 1)
-        btn_ahora = QPushButton("Usar la hora de este Pi")
-        btn_ahora.clicked.connect(
+        self.edit_hora.setStyleSheet("background:#161a22; border:1px solid #2a2f3a; padding:4px; min-height:30px;")
+        self.btn_ahora = QPushButton("Usar la hora de este Pi")
+        self.btn_ahora.clicked.connect(
             lambda: self.edit_hora.setDateTime(QDateTime.currentDateTime()))
-        gh.addWidget(btn_ahora, 2, 2)
-        btn_enviar = QPushButton("⏱  Enviar hora al Pi de la cámara")
-        btn_enviar.clicked.connect(self._al_enviar_hora)
-        gh.addWidget(btn_enviar, 3, 0, 1, 3)
+        self.btn_enviar = QPushButton("⏱  Enviar hora al Pi de la cámara")
+        self.btn_enviar.clicked.connect(self._al_enviar_hora)
         raiz.addWidget(caja_hora)
 
-        # --- Piranómetro en vivo ---
-        caja_sol = QGroupBox("Piranómetro (Arduino) — en vivo")
-        hs = QHBoxLayout(caja_sol)
-        self.lbl_sensor = QLabel("—")
-        self.lbl_sensor.setStyleSheet("font-size:20px; font-weight:bold;")
-        hs.addWidget(self.lbl_sensor)
-        hs.addStretch()
-        raiz.addWidget(caja_sol)
-
         raiz.addStretch()
-        return w
+        return self._con_scroll(w)
+
+    # ---------- modo ancho / angosto ----------
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._acomodar(self.width(), self.height())
+        self._timer_galeria.start(150)
+
+    def _acomodar(self, ancho, alto):
+        """Reacomoda la interfaz según el tamaño de la ventana."""
+        self.titulo.setVisible(alto >= ALTO_BAJO)
+        angosto = ancho < ANCHO_ANGOSTO
+        if angosto == self._angosto:
+            return
+        self._angosto = angosto
+        vertical = QBoxLayout.Direction.TopToBottom
+        horizontal = QBoxLayout.Direction.LeftToRight
+
+        # Luces de estado: en fila (ancho) o de a dos (angosto).
+        for x in self._luces:
+            self.grid_luces.removeWidget(x)
+        por_fila = 2 if angosto else 4
+        for i, x in enumerate(self._luces):
+            self.grid_luces.addWidget(x, i // por_fila, i % por_fila)
+
+        self.lay_cap.setDirection(vertical if angosto else horizontal)
+        self.lay_cfg.setDirection(vertical if angosto else horizontal)
+        if hasattr(self, "lay_barra_graf"):
+            self.lay_barra_graf.setDirection(vertical if angosto else horizontal)
+
+        # Fecha y hora: 3 columnas (ancho) o 2 columnas apiladas (angosto).
+        g = self.grid_hora
+        for x in (self._et_hora_pi, self.lbl_hora_pi, self.lbl_desfase,
+                  self._et_hora_local, self.lbl_hora_local,
+                  self._et_hora_enviar, self.edit_hora, self.btn_ahora, self.btn_enviar):
+            g.removeWidget(x)
+        if angosto:
+            filas = [(self._et_hora_pi, 0, 0, 1, 1), (self.lbl_hora_pi, 0, 1, 1, 1),
+                     (self.lbl_desfase, 1, 0, 1, 2),
+                     (self._et_hora_local, 2, 0, 1, 1), (self.lbl_hora_local, 2, 1, 1, 1),
+                     (self._et_hora_enviar, 3, 0, 1, 1), (self.edit_hora, 3, 1, 1, 1),
+                     (self.btn_ahora, 4, 0, 1, 2), (self.btn_enviar, 5, 0, 1, 2)]
+        else:
+            filas = [(self._et_hora_pi, 0, 0, 1, 1), (self.lbl_hora_pi, 0, 1, 1, 1),
+                     (self.lbl_desfase, 0, 2, 1, 1),
+                     (self._et_hora_local, 1, 0, 1, 1), (self.lbl_hora_local, 1, 1, 1, 1),
+                     (self._et_hora_enviar, 2, 0, 1, 1), (self.edit_hora, 2, 1, 1, 1),
+                     (self.btn_ahora, 2, 2, 1, 1), (self.btn_enviar, 3, 0, 1, 3)]
+        for x, f, c, fs, cs in filas:
+            g.addWidget(x, f, c, fs, cs)
+
+    # ---------- pantalla completa ----------
+    def alternar_pantalla_completa(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _salir_pantalla_completa(self):
+        if self.isFullScreen():
+            self.showNormal()
 
     # ---------- pestaña Fotos ----------
     def _pestana_fotos(self):
@@ -345,13 +491,15 @@ class Ventana(QWidget):
         vg = QVBoxLayout(caja_gal)
         barra = QHBoxLayout()
         btn_ref = QPushButton("↻ Refrescar galería")
-        btn_ref.clicked.connect(self.refrescar_galeria)
+        btn_ref.clicked.connect(lambda: self.refrescar_galeria(forzar=True))
         barra.addWidget(btn_ref)
         barra.addStretch()
         vg.addLayout(barra)
 
+        vg.setContentsMargins(6, 6, 6, 6)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.cont_galeria = QWidget()
         self.grid = QGridLayout(self.cont_galeria)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -368,25 +516,30 @@ class Ventana(QWidget):
                                "    sudo apt install python3-matplotlib"))
             return w
 
-        barra = QHBoxLayout()
-        barra.addWidget(QLabel("Variable:"))
+        v.setContentsMargins(6, 6, 6, 6)
+        # Barra de opciones: en una fila (ancho) o en dos (angosto).
+        self.lay_barra_graf = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        fila_var = QHBoxLayout()
         self.combo_var = QComboBox()
-        for texto, col in VARIABLES_GRAFICO:
-            self.combo_var.addItem(texto, col)
+        for texto, col, unidad in VARIABLES_GRAFICO:
+            self.combo_var.addItem(f"{texto} ({unidad})", (col, unidad))
         self.combo_var.currentIndexChanged.connect(self.redibujar_grafico)
-        barra.addWidget(self.combo_var)
-        barra.addWidget(QLabel("Día:"))
+        fila_var.addWidget(self.combo_var, stretch=1)
+        fila_dia = QHBoxLayout()
+        fila_dia.addWidget(QLabel("Día:"))
         self.combo_dia = QComboBox()
         self.combo_dia.currentIndexChanged.connect(self.redibujar_grafico)
-        barra.addWidget(self.combo_dia)
-        btn = QPushButton("↻ Actualizar datos")
+        fila_dia.addWidget(self.combo_dia, stretch=1)
+        btn = QPushButton("↻ Actualizar")
         btn.clicked.connect(self.sig_mediciones.emit)
-        barra.addWidget(btn)
-        barra.addStretch()
-        v.addLayout(barra)
+        fila_dia.addWidget(btn)
+        self.lay_barra_graf.addLayout(fila_var, stretch=3)
+        self.lay_barra_graf.addLayout(fila_dia, stretch=2)
+        v.addLayout(self.lay_barra_graf)
 
-        self.figura = Figure(figsize=(7, 4), tight_layout=True, facecolor="#0f1115")
+        self.figura = Figure(figsize=(5, 3), tight_layout=True, facecolor="#0f1115")
         self.lienzo = FigureCanvasQTAgg(self.figura)
+        self.lienzo.setMinimumSize(200, 150)
         v.addWidget(self.lienzo, stretch=1)
         self.lbl_grafico = QLabel("")
         self.lbl_grafico.setStyleSheet("color:#9aa4b2;")
@@ -604,7 +757,7 @@ class Ventana(QWidget):
         self.combo_dia.setCurrentIndex(max(0, idx))
         self.combo_dia.blockSignals(False)
 
-        col = self.combo_var.currentData()
+        col, unidad = self.combo_var.currentData()
         dia = self.combo_dia.currentData()
 
         def num(f, c):
@@ -621,7 +774,7 @@ class Ventana(QWidget):
         ax.set_facecolor("#161a22")
         for borde in ax.spines.values():
             borde.set_color("#2a2f3a")
-        ax.tick_params(colors="#9aa4b2")
+        ax.tick_params(colors="#9aa4b2", labelsize=8)
         if puntos:
             xs = [p[0] for p in puntos]
             ys = [p[1] for p in puntos]
@@ -634,9 +787,9 @@ class Ventana(QWidget):
                                     label="mín–máx entre fotos")
             ax.plot(xs, ys, "-o", color="#f59e0b", markersize=3, linewidth=1.2,
                     label="una medición por foto")
-            ax.legend(loc="upper left", fontsize=8, facecolor="#161a22",
+            ax.legend(loc="upper left", fontsize=7, facecolor="#161a22",
                       edgecolor="#2a2f3a", labelcolor="#e6e6e6")
-            loc = mdates.AutoDateLocator()
+            loc = mdates.AutoDateLocator(maxticks=6)
             ax.xaxis.set_major_locator(loc)
             ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(loc))
             self.lbl_grafico.setText(f"{len(puntos)} mediciones  ·  "
@@ -645,7 +798,7 @@ class Ventana(QWidget):
             ax.text(0.5, 0.5, "Sin mediciones todavía", ha="center", va="center",
                     transform=ax.transAxes, color="#6b7280")
             self.lbl_grafico.setText("Apretá “Actualizar datos” (o esperá al descargador).")
-        ax.set_ylabel(self.combo_var.currentText(), color="#9aa4b2")
+        ax.set_ylabel(unidad, color="#9aa4b2", fontsize=9)
         ax.grid(True, color="#2a2f3a")
         self.lienzo.draw_idle()
 
@@ -660,10 +813,20 @@ class Ventana(QWidget):
         fotos.sort(reverse=True)  # más nuevas primero
         return fotos
 
-    def refrescar_galeria(self):
+    def _columnas_galeria(self):
+        """Cuántas miniaturas entran a lo ancho (mínimo 1)."""
+        ancho = self.scroll.viewport().width() - 12
+        return max(1, ancho // (MINI_ANCHO + self.grid.horizontalSpacing() + 2))
+
+    def _ajustar_galeria(self):
+        """Tras un cambio de tamaño, rearma la galería si cambian las columnas."""
+        if self.pestanas.currentIndex() == 1 and self._columnas_galeria() != self._columnas:
+            self.refrescar_galeria(forzar=True)
+
+    def refrescar_galeria(self, forzar=False):
         fotos = self._listar_fotos_local()
         claves = tuple(a for _m, _r, a in fotos[:MAX_MINIATURAS])
-        if claves == self._fotos_mostradas:
+        if claves == self._fotos_mostradas and not forzar:
             return  # nada cambió, evitamos reconstruir
         self._fotos_mostradas = claves
 
@@ -678,7 +841,7 @@ class Ventana(QWidget):
             self.grid.addWidget(QLabel("Todavía no hay fotos descargadas."), 0, 0)
             return
 
-        columnas = 4
+        columnas = self._columnas = self._columnas_galeria()
         fila = col = 0
         dia_actual = None
         for _m, ruta, nombre in fotos[:MAX_MINIATURAS]:
@@ -713,7 +876,17 @@ def main():
     config = cargar_config()
     app = QApplication(sys.argv)
     v = Ventana(config)
-    v.show()
+
+    # Pantalla completa: "si", "no" o "auto" (solo en pantallas chicas,
+    # como la de 5"). Con --ventana se fuerza ventana normal.
+    modo = config.get("ihm", "pantalla_completa", fallback="auto").strip().lower()
+    disp = app.primaryScreen().availableGeometry()
+    chica = disp.width() <= PANTALLA_CHICA[0] or disp.height() <= PANTALLA_CHICA[1]
+    if "--ventana" not in sys.argv and (modo == "si" or (modo == "auto" and chica)):
+        v.showFullScreen()
+    else:
+        v.resize(min(900, disp.width()), min(680, disp.height()))
+        v.show()
     sys.exit(app.exec())
 
 

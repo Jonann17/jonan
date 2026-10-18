@@ -73,6 +73,18 @@ class Arduino:
         self.puerto = puerto
         self.baudios = baudios
         self.serie = None
+        self.problema = None   # último problema anotado en el log
+
+    def _anotar(self, problema):
+        """Escribe en el log solo cuando el estado cambia (falla / vuelve a
+        andar), así el "NOW" cada 5 s no llena el log pero queda rastro."""
+        if problema == self.problema:
+            return
+        if problema:
+            log.warning("Arduino: %s", problema)
+        else:
+            log.info("Arduino: responde de nuevo.")
+        self.problema = problema
 
     def consultar(self, comando="GET", espera=3.0):
         try:
@@ -91,18 +103,22 @@ class Arduino:
             self.serie.write((comando + "\n").encode("ascii"))
             limite = time.monotonic() + espera
             buffer = b""
+            recibido = b""   # última línea que no era JSON (para el log)
             while time.monotonic() < limite:
                 buffer += self.serie.read(self.serie.in_waiting or 1)
                 while b"\n" in buffer:
                     linea, buffer = buffer.split(b"\n", 1)
                     linea = linea.strip()
                     if linea.startswith(b"{") and linea.endswith(b"}"):
-                        return json.loads(linea)
-            if comando == "GET":   # el "NOW" cada 5 s no llena el log
-                log.warning("El Arduino no respondió a %s.", comando)
+                        datos = json.loads(linea)
+                        self._anotar(None)
+                        return datos
+                    if linea:
+                        recibido = linea
+            self._anotar(f"no respondió a {comando}"
+                         + (f" (llegó: {recibido[:60]!r})" if recibido else " (no llegó nada)"))
         except Exception as e:   # puerto ausente, JSON roto, cable suelto...
-            if comando == "GET":
-                log.warning("Error con el Arduino (%s): %s", puerto_arduino(self.puerto), e)
+            self._anotar(f"error en {puerto_arduino(self.puerto)}: {e}")
             try:
                 if self.serie is not None:
                     self.serie.close()
