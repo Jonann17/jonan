@@ -151,12 +151,17 @@ if [ "$ROL" = a ]; then
       bien "El Arduino responde: $SENSOR"
     else
       mal "No llegan datos del Arduino" "$PISTA"
+      ULTIMO="$(journalctl -u camara --no-pager -q -n 200 2>/dev/null | grep 'Arduino' | tail -1 | sed 's/^.*\] //')"
+      [ -n "$ULTIMO" ] && echo "       Último aviso de la cámara: $ULTIMO"
+      echo "       Para más detalle: probar_serie"
     fi
   fi
 
   echo ""
   echo "── Permisos y espacio ──"
-  if [ -f /etc/sudoers.d/webcam-hora ]; then
+  # /etc/sudoers.d no se puede listar sin ser root: se le pregunta a sudo
+  # si este usuario puede usar 'date' sin contraseña (eso da la regla).
+  if sudo -n -l "$(command -v date)" >/dev/null 2>&1; then
     bien "Permiso para ajustar la hora desde la IHM"
   else
     mal "Falta el permiso para ajustar la hora" "actualizar"
