@@ -65,11 +65,21 @@ main() {
   fi
 
   echo ">> Bajando la última versión de GitHub..."
+  # Si el repo es privado, git pide usuario y "contraseña" (un token de
+  # GitHub). Con este ajuste el token se guarda la primera vez y no se
+  # vuelve a pedir.
+  git config --global credential.helper store
   if ! git fetch origin "$RAMA"; then
     echo ""
-    echo "!! No se pudo conectar a GitHub. Este Pi necesita INTERNET."
-    echo "   (El Pi B, conectado solo a FotosPi, no tiene: enchufale un cable"
-    echo "    Ethernet y volvé a correr: actualizar)"
+    if curl -s -o /dev/null --max-time 10 https://github.com; then
+      echo "!! Hay internet, pero GitHub rechazó el acceso: el repo es PRIVADO."
+      echo "   Como contraseña hay que pegar un TOKEN de GitHub (no la clave"
+      echo "   normal). Ver \"Repo privado\" en raspberry-webcam-sync/README.md."
+    else
+      echo "!! No se pudo conectar a GitHub. Este Pi necesita INTERNET."
+      echo "   (El Pi B, conectado solo a FotosPi, no tiene: enchufale un cable"
+      echo "    Ethernet y volvé a correr: actualizar)"
+    fi
     exit 1
   fi
   # Los cambios locales (rutas ajustadas a mano) se descartan y se vuelven
