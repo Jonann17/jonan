@@ -61,7 +61,7 @@
  *
  *  Significado de cada campo:
  *    v_now / v_avg / v_min / v_max / v_std
- *              tensión medida en A0 [V]
+ *              tensión de la celda [V] (ya corregida por el divisor)
  *    adc_now   valor "crudo" del conversor (0 a 1023)
  *    p_avg_mw  potencia promedio P = V²/R [mW]
  *    i_avg_ma  (solo MODO_SHUNT) corriente promedio de la celda [mA]
@@ -75,9 +75,17 @@
  *
  *  CONEXIONES (ver arduino/esquematico_conexion.svg):
  *  ---------------------------------------------------------------
- *  Como en el artículo:
- *    Celda (+) ── R 10 kΩ ── A0      (¡la celda nunca más de 5 V!)
+ *  Como en el artículo, más un DIVISOR para que A0 nunca pase de 5 V
+ *  (a pleno sol la placa de 11×6 cm da más de 5 V y saturaba):
+ *    Celda (+) ── R 10 kΩ ──┬── A0
+ *                           └── R 10 kΩ (divisor) ── GND
  *    Celda (−) ── GND
+ *  Con dos de 10 kΩ, A0 recibe la MITAD de la tensión de la celda y el
+ *  programa la multiplica por 2 (ver R_DIVISOR_OHM). Sin el divisor,
+ *  poné R_DIVISOR_OHM = 0.
+ *
+ *  Conexión al Pi A: lo más simple es el CABLE USB (sin conversor). Por
+ *  los pines, con conversor de nivel:
  *
  *    Pin 8 (RX)  <── conversor de nivel <── GPIO14 / TXD (pin 8)  de la Pi
  *    Pin 9 (TX)  ──> conversor de nivel ──> GPIO15 / RXD (pin 10) de la Pi
@@ -119,6 +127,20 @@ const float RESISTENCIA_OHM = 1.0;
 const float RESISTENCIA_OHM = 10000.0;
 #endif
 
+// ── Resistencia del divisor, de A0 a GND [Ω] (0 = sin divisor) ──
+// A pleno sol la celda puede dar más de 5 V (el máximo que mide el
+// Arduino) y la lectura se "satura" (sat > 0 en el JSON). Con una
+// resistencia de A0 a GND, A0 recibe solo una parte de la tensión:
+//     V_A0 = V_celda × R_DIVISOR / (RESISTENCIA + R_DIVISOR)
+// y el programa la vuelve a llevar a la tensión real de la celda.
+// Con dos de 10 kΩ: A0 recibe la mitad → se pueden medir hasta ~10 V.
+// Medila con el multímetro y escribí el valor REAL.
+#if MODO_SHUNT
+const float R_DIVISOR_OHM = 0.0;     // en modo shunt no se usa
+#else
+const float R_DIVISOR_OHM = 10000.0;
+#endif
+
 // ── Tamaño de la celda [mm] (PANEL_LENGTH y PANEL_WIDTH del artículo) ──
 // Medí con una regla SOLO la parte que capta luz.
 const float CELDA_LARGO_MM = 110.0;   // placa de 11 x 6 cm
@@ -151,6 +173,12 @@ SoftwareSerial piSerial(PIN_PI_RX, PIN_PI_TX);
 
 // Área en m²: mm × mm = mm², y 1 m² = 1 000 000 mm²
 const float AREA_M2 = (CELDA_LARGO_MM * CELDA_ANCHO_MM) / 1000000.0;
+
+// Por cuánto multiplicar la tensión de A0 para obtener la de la celda,
+// y resistencia total por la que circula la corriente de la celda.
+const float FACTOR_DIVISOR = (R_DIVISOR_OHM > 0)
+    ? (RESISTENCIA_OHM + R_DIVISOR_OHM) / R_DIVISOR_OHM : 1.0;
+const float R_TOTAL_OHM = RESISTENCIA_OHM + R_DIVISOR_OHM;
 
 // ════════════════════════════════════════════════════════════════════════
 //  SECCIÓN 2: VARIABLES DE ESTADO — la "memoria" del programa
@@ -201,7 +229,7 @@ float voltsToRadiation(float v) {
   return 1000.0 * (amps / ISC_STC_A) * CAL_K;
 #else
   // Fórmula del artículo, corregida:  P = V² / R ;  G = P / Área
-  float power = (v * v) / RESISTENCIA_OHM;   // [W]
+  float power = (v * v) / R_TOTAL_OHM;       // [W]
   return (power / AREA_M2) * CAL_K;          // [W/m²]
 #endif
 }
@@ -267,7 +295,8 @@ void resetWindow() {
 // Toma UNA muestra y actualiza todos los acumuladores.
 void takeSample() {
   lastAdc = analogRead(PIN_CELDA);               // 0 (=0 V) a 1023 (=VREF)
-  lastV   = lastAdc * (vrefVolts / 1023.0);      // regla de tres → voltios
+  // regla de tres → voltios en A0, y × divisor → voltios de la celda
+  lastV   = lastAdc * (vrefVolts / 1023.0) * FACTOR_DIVISOR;
   lastG   = voltsToRadiation(lastV);
 
   if (lastAdc >= 1023) nSaturated++;             // pasó del tope
