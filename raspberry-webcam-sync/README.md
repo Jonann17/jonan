@@ -202,7 +202,7 @@ Las pestañas son: **Control** (estado, captura, piranómetro, intervalo y hora)
 La IHM es **responsive**: está pensada para la pantallita táctil de **5"
 (800×480)** y también se ve bien en un monitor grande.
 
-- En pantallas chicas arranca en **pantalla completa**. El botón **⛶** (arriba a
+- En pantallas chicas arranca en **pantalla completa**. El botón **▣** (arriba a
   la derecha) o la tecla **F11** la alternan; `pantalla_completa` en la sección
   `[ihm]` de `config.ini` lo cambia (`auto`, `si` o `no`).
 - Si algo no entra, la pestaña se **desplaza con el dedo** en vez de cortarse;
@@ -277,14 +277,23 @@ Consola serie: Desactivado*) y después hay que reiniciar.
 Si no anda, `probar_serie` indica en qué parte está la falla: Pi, conversor,
 cables o Arduino.
 
-### Celda solar (como en el artículo)
+### Celda solar (con divisor de tensión)
+
+A pleno sol la placa de 11×6 cm da **más de 5 V**, lo máximo que mide el
+Arduino: la lectura se quedaba clavada en ~4,5 V y la IHM mostraba
+"⚠ saturó". Por eso lleva una segunda resistencia de 10 kΩ de A0 a GND:
 
 ```
-Celda (+) ── R 10 kΩ ── A0        (la celda nunca más de 5 V)
-Celda (−) ────────────── GND
+Celda (+) ── R 10 kΩ ──┬── A0
+                       └── R 10 kΩ ── GND      (divisor: A0 recibe la mitad)
+Celda (−) ──────────────────────────── GND
 ```
 
-`P = V² / R`, `Área = largo × ancho`, `G = P / Área × CAL_K` (W/m²).
+El sketch multiplica la lectura de A0 por `(10 kΩ + 10 kΩ) / 10 kΩ = 2`, así que
+`v_now` es la tensión real de la celda y se pueden medir hasta ~10 V. Si no
+ponés el divisor, cambiá `R_DIVISOR_OHM` a `0` en la sección 1 del sketch.
+
+`P = V² / (R + R_divisor)`, `Área = largo × ancho`, `G = P / Área × CAL_K` (W/m²).
 
 El código original del artículo tiene errores que quedaron **corregidos** en
 el sketch (el área daba 0 por división entera y además mm²→m² es /10⁶; usaba
@@ -305,9 +314,9 @@ multímetro), `CELDA_LARGO_MM`, `CELDA_ANCHO_MM` y `CAL_K`. Hoy está configurad
 para la placa de **11 × 6 cm** con **10 kΩ**. La radiación (`g_*`) sale con 4
 decimales porque con esta celda los valores son chicos.
 
-Antes de dejarla al sol, medí con el multímetro la tensión de la placa a pleno
-sol: si pasa de 5 V, en el JSON `sat` va a ser mayor que 0 y hay que agregar un
-divisor de tensión.
+Si aun con el divisor la IHM muestra "⚠ saturó" (la celda pasa de ~10 V),
+usá una resistencia de divisor más chica (por ejemplo 4,7 kΩ) y escribí su
+valor en `R_DIVISOR_OHM`.
 
 ### Dónde quedan las mediciones
 

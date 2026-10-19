@@ -13,7 +13,7 @@ Permite:
   * Ver la GALERÍA de fotos descargadas (agrupadas por día).
 
 Es "responsive": se adapta a la pantallita de 5" (800x480) y a pantallas
-grandes. En pantallas chicas arranca en pantalla completa (botón ⛶ o F11
+grandes. En pantallas chicas arranca en pantalla completa (botón ▣ o F11
 para salir/volver), el contenido se apila si no entra a lo ancho y los
 botones son grandes para usarla con el dedo. Ver [ihm] en config.ini.
 
@@ -77,6 +77,16 @@ OPCIONES_INTERVALO = [
     ("30 minutos", 1800),
     ("1 hora", 3600),
 ]
+
+# Colores de las "luces" de estado. Se dibujan con "●" pintado (y no con
+# emojis 🟢/🔴): el Pi no trae fuente de emojis a color y salían como ▯.
+VERDE, AMARILLO, ROJO, GRIS = "#22c55e", "#eab308", "#ef4444", "#6b7280"
+
+
+def luz(color, texto):
+    """Texto con una luz de color adelante (rich text de Qt)."""
+    return f'<span style="color:{color}">●</span> {texto}'
+
 
 # Variables que se pueden graficar: (texto, columna de mediciones.csv, unidad)
 VARIABLES_GRAFICO = [
@@ -296,7 +306,7 @@ class Ventana(QWidget):
         raiz.setContentsMargins(6, 6, 6, 6)
         raiz.setSpacing(4)
 
-        self.titulo = QLabel("📷 Panel de control de la webcam")
+        self.titulo = QLabel("Panel de control de la webcam")
         self.titulo.setStyleSheet("font-size:18px; font-weight:bold;")
         raiz.addWidget(self.titulo)
 
@@ -314,7 +324,7 @@ class Ventana(QWidget):
         self.pestanas.currentChanged.connect(lambda _i: self._timer_galeria.start(50))
 
         # Botón de pantalla completa, a la derecha de las pestañas.
-        self.btn_pantalla = QPushButton("⛶")
+        self.btn_pantalla = QPushButton("▣")
         self.btn_pantalla.setToolTip("Pantalla completa (F11)")
         self.btn_pantalla.setStyleSheet("QPushButton { background:#161a22; border:1px solid #2a2f3a;"
                                         " min-width:40px; font-size:18px; padding:2px 8px; }")
@@ -347,12 +357,12 @@ class Ventana(QWidget):
         self.lbl_servidor = self._luz("Servidor")
         self.lbl_camara = self._luz("Cámara")
         self.lbl_desc = self._luz("Descargador")
-        self.lbl_total = QLabel("🖼️ 0 fotos")
+        self.lbl_total = QLabel("0 fotos")
         self._luces = (self.lbl_servidor, self.lbl_camara, self.lbl_desc, self.lbl_total)
         ve.addLayout(self.grid_luces)
 
         self.lay_cap = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self.lbl_captura = QLabel("⚪ —")
+        self.lbl_captura = QLabel(luz(GRIS, "—"))
         self.lbl_captura.setWordWrap(True)
         self.lbl_captura.setStyleSheet("font-size:16px; font-weight:bold;")
         self.lay_cap.addWidget(self.lbl_captura, stretch=1)
@@ -361,7 +371,7 @@ class Ventana(QWidget):
         self.btn_iniciar.setStyleSheet("QPushButton { background:#16a34a; font-weight:bold; padding:8px 16px; min-height:34px; }"
                                        "QPushButton:disabled { background:#2a2f3a; color:#6b7280; }")
         self.btn_iniciar.clicked.connect(self._al_iniciar)
-        self.btn_detener = QPushButton("⏹  Detener")
+        self.btn_detener = QPushButton("■  Detener")
         self.btn_detener.setStyleSheet("QPushButton { background:#dc2626; font-weight:bold; padding:8px 16px; min-height:34px; }"
                                        "QPushButton:disabled { background:#2a2f3a; color:#6b7280; }")
         self.btn_detener.clicked.connect(lambda: self.sig_captura.emit("detener"))
@@ -418,7 +428,7 @@ class Ventana(QWidget):
         self.btn_ahora = QPushButton("Usar la hora de este Pi")
         self.btn_ahora.clicked.connect(
             lambda: self.edit_hora.setDateTime(QDateTime.currentDateTime()))
-        self.btn_enviar = QPushButton("⏱  Enviar hora al Pi de la cámara")
+        self.btn_enviar = QPushButton("Enviar hora al Pi de la cámara")
         self.btn_enviar.clicked.connect(self._al_enviar_hora)
         raiz.addWidget(caja_hora)
 
@@ -547,13 +557,12 @@ class Ventana(QWidget):
         return w
 
     def _luz(self, texto):
-        lbl = QLabel("⚪ " + texto)
+        lbl = QLabel(luz(GRIS, texto))
         lbl.setStyleSheet("font-size:14px;")
         return lbl
 
     def _pintar_luz(self, lbl, texto, ok):
-        color = "🟢" if ok else "🔴"
-        lbl.setText(f"{color} {texto}")
+        lbl.setText(luz(VERDE if ok else ROJO, texto))
 
     def _texto_intervalo(self, seg):
         """Texto legible de un intervalo en segundos (para el 'actual: ...')."""
@@ -587,8 +596,8 @@ class Ventana(QWidget):
             self._pintar_luz(self.lbl_servidor, "Servidor", False)
             self._pintar_luz(self.lbl_camara, "Cámara", False)
             self._pintar_luz(self.lbl_desc, "Descargador", False)
-            self.lbl_total.setText("🖼️ sin conexión")
-            self.lbl_captura.setText("⚪ Sin conexión con el Pi de la cámara")
+            self.lbl_total.setText("sin conexión")
+            self.lbl_captura.setText(luz(GRIS, "Sin conexión con el Pi de la cámara"))
             self.lbl_sensor.setText("—")
             self._desfase = None
             self.btn_iniciar.setEnabled(False)
@@ -598,11 +607,11 @@ class Ventana(QWidget):
         # Captura
         capt = est.get("capturando", False)
         if capt:
-            self.lbl_captura.setText("🟢 CAPTURANDO")
+            self.lbl_captura.setText(luz(VERDE, "CAPTURANDO"))
         elif est.get("camara_viva"):
-            self.lbl_captura.setText("🟡 En espera (apretá Iniciar)")
+            self.lbl_captura.setText(luz(AMARILLO, "En espera (apretá Iniciar)"))
         else:
-            self.lbl_captura.setText("🔴 El programa de la cámara no responde")
+            self.lbl_captura.setText(luz(ROJO, "El programa de la cámara no responde"))
         self.btn_iniciar.setEnabled(not capt)
         self.btn_detener.setEnabled(capt)
 
@@ -611,15 +620,15 @@ class Ventana(QWidget):
         sensor = est.get("sensor")
         if sensor:
             sat = "  ⚠ saturó" if sensor.get("sat") else ""
-            self.lbl_sensor.setText(f"☀️ {sensor.get('g_now', '?')} W/m²   ·   "
+            self.lbl_sensor.setText(f"☀ {sensor.get('g_now', '?')} W/m²   ·   "
                                     f"{sensor.get('v_now', '?')} V{sat}")
         else:
-            self.lbl_sensor.setText("☁️ Sin datos del Arduino")
+            self.lbl_sensor.setText("☁ Sin datos del Arduino")
         self._pintar_luz(self.lbl_servidor, "Servidor", est.get("servidor_ok"))
         self._pintar_luz(self.lbl_camara,
                          "Cámara " + est.get("camara_txt", ""), est.get("camara_ok"))
         self._pintar_luz(self.lbl_desc, "Descargador", est.get("desc_ok"))
-        self.lbl_total.setText(f"🖼️ {est.get('total_fotos', 0)} fotos")
+        self.lbl_total.setText(f"{est.get('total_fotos', 0)} fotos")
         inter = est.get("intervalo_camara")
         if inter:
             self.lbl_actual.setText(f"actual: {self._texto_intervalo(inter)}")
@@ -851,7 +860,7 @@ class Ventana(QWidget):
                 if col != 0:
                     fila += 1
                     col = 0
-                cab = QLabel(f"📅 {dia}")
+                cab = QLabel(f"Día {dia}")
                 cab.setStyleSheet("font-weight:bold; color:#cbd5e1; margin-top:6px;")
                 self.grid.addWidget(cab, fila, 0, 1, columnas)
                 fila += 1
